@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {% extends "base.html" %}
 {% block content %}
 
@@ -24,3 +25,31 @@
 </div>
 
 {% endblock %}
+=======
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Dashboard</h1>
+
+<div class="card">
+    <div class="kpi">{{ items_count }}</div>
+    <div class="kpi-label">Total Items</div>
+</div>
+
+<div class="card">
+    <div class="kpi">{{ total_stock }}</div>
+    <div class="kpi-label">Total Stock (pcs)</div>
+</div>
+
+<div class="card">
+    <div class="kpi">{{ low_stock_count }}</div>
+    <div class="kpi-label">Low Stock Items</div>
+</div>
+
+<div class="card">
+    <div class="kpi">₦{{ "%.2f"|format(inventory_value) }}</div>
+    <div class="kpi-label">Inventory Value</div>
+</div>
+
+{% endblock %}
+>>>>>>> c9a55714199331d544c6b3f8a0847ddabb00c6af

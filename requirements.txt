@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 fastapi
 uvicorn
 SQLAlchemy
@@ -9,3 +10,14 @@ psycopg[binary]
 psycopg2-binary
 passlib[bcrypt]
 itsdangerous
+=======
+fastapi
+uvicorn
+SQLAlchemy
+Jinja2
+python-multipart
+pandas
+openpyxl
+psycopg[binary]
+psycopg2-binary
+>>>>>>> c9a55714199331d544c6b3f8a0847ddabb00c6af

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {% extends "base.html" %}
 {% block content %}
 <h1>Items</h1>
@@ -31,4 +32,39 @@
         {% endfor %}
     </tbody>
 </table>
+=======
+{% extends "base.html" %}
+{% block content %}
+<h1>Items</h1>
+
+<div class="row">
+    <a class="button primary" href="/items/new">Add Item</a>
+    <a class="button" href="/import">Import Items</a>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Stock</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item, stock in rows %}
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ stock }}</td>
+            <td>
+                <form method="post" action="/items/{{ item.id }}/delete" style="display:inline;">
+                    <button class="danger" type="submit" onclick="return confirm('Delete this item?');">
+                        Delete
+                    </button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+>>>>>>> c9a55714199331d544c6b3f8a0847ddabb00c6af
 {% endblock %}

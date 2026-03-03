@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -61,4 +62,64 @@ if ("serviceWorker" in navigator) {
 </script>
 
 </body>
+=======
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Inventory Keeper{% endblock %}</title>
+
+    <!-- Theme -->
+    <meta name="theme-color" content="#E50914" />
+
+    <!-- PWA -->
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+
+<main class="container">
+    {% block content %}{% endblock %}
+</main>
+
+<nav class="bottom-nav">
+    <a href="/">🏠</a>
+    <a href="/items">📦</a>
+    <a href="/transactions">🔄</a>
+    <a href="/low-stock">⚠️</a>
+</nav>
+
+<style>
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: #141414;
+  display: flex;
+  justify-content: space-around;
+  padding: 14px 0;
+  border-top: 1px solid #222;
+}
+
+.bottom-nav a {
+  color: white;
+  font-size: 22px;
+  text-decoration: none;
+}
+</style>
+
+<script>
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/static/sw.js");
+}
+</script>
+
+</body>
+>>>>>>> c9a55714199331d544c6b3f8a0847ddabb00c6af
 </html>
