@@ -1,16 +1,61 @@
 {% extends "base.html" %}
-{% block content %}
-<h1>My Deliveries</h1>
+{% block title %}My Deliveries{% endblock %}
+{% block page_title %}My Deliveries{% endblock %}
+{% block page_subtitle %}Deliveries assigned to you{% endblock %}
+{% set active = 'deliveries' %}
 
-<table class="table">
-    <tr><th>ID</th><th>Customer</th><th>Status</th><th>Created</th></tr>
-    {% for d in rows %}
-    <tr>
-        <td><a href="/deliveries/{{ d.id }}">#{{ d.id }}</a></td>
-        <td>{{ d.customer_name }}</td>
-        <td><span class="pill">{{ d.status }}</span></td>
-        <td>{{ d.created_at }}</td>
-    </tr>
-    {% endfor %}
-</table>
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div class="badge b-blue">ASSIGNED DELIVERIES</div>
+        <div class="muted small">{{ rows|length }} shown</div>
+    </div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Created</th>
+                    <th>Customer</th>
+                    <th>Status</th>
+                    <th>Delivered</th>
+                    <th>Open</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not rows %}
+                <tr><td colspan="6" class="muted">No deliveries assigned yet.</td></tr>
+                {% endif %}
+
+                {% for d in rows %}
+                <tr>
+                    <td><span class="badge b-blue">#{{ d.id }}</span></td>
+                    <td class="muted">{{ d.created_at }}</td>
+                    <td>
+                        <div><b>{{ d.customer_name }}</b></div>
+                        {% if d.customer_phone %}<div class="muted small">{{ d.customer_phone }}</div>{% endif %}
+                        {% if d.address %}<div class="muted small">{{ d.address }}</div>{% endif %}
+                    </td>
+                    <td>
+                        {% if d.status == "DELIVERED" %}
+                        <span class="badge b-green">DELIVERED</span>
+                        {% elif d.status == "OUT_FOR_DELIVERY" %}
+                        <span class="badge b-blue">OUT FOR DELIVERY</span>
+                        {% elif d.status == "FAILED" %}
+                        <span class="badge b-red">FAILED</span>
+                        {% elif d.status == "RETURNED" %}
+                        <span class="badge b-yellow">RETURNED</span>
+                        {% else %}
+                        <span class="badge">PENDING</span>
+                        {% endif %}
+                    </td>
+                    <td class="muted">{{ d.delivered_at if d.delivered_at else "-" }}</td>
+                    <td><a class="badge b-purple" href="/deliveries/{{ d.id }}">View</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
 {% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Transactions{% endblock %}
+{% block page_title %}Transactions{% endblock %}
+{% block page_subtitle %}Recent stock movements (IN / OUT){% endblock %}
+{% set active = 'transactions' %}
+
+{% block top_right %}
+<a class="btnPrimary" href="/transactions/new">New Transaction</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div class="badge b-purple">RECENT TRANSACTIONS</div>
+        <div class="muted small">{{ txs|length }} shown</div>
+    </div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Item ID</th>
+                    <th>Reference</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not txs %}
+                <tr><td colspan="6" class="muted">No transactions yet.</td></tr>
+                {% endif %}
+
+                {% for t in txs %}
+                <tr>
+                    <td class="muted">{{ t.created_at }}</td>
+                    <td>
+                        {% if t.type == "IN" %}
+                        <span class="badge b-green">IN</span>
+                        {% else %}
+                        <span class="badge b-red">OUT</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge b-blue">{{ t.quantity }}</span></td>
+                    <td class="muted">{{ t.item_id }}</td>
+                    <td>{{ t.reference if t.reference else "-" }}</td>
+                    <td class="muted">{{ t.note if t.note else "-" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
