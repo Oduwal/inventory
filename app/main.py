@@ -1,123 +1,118 @@
-from __future__ import annotations
-
 import os
-from pathlib import Path
 from datetime import datetime
+from typing import Generator
 
-import pandas as pd
-from passlib.context import CryptContext
-from sqlalchemy import select, desc, text
-from sqlalchemy.orm import Session
-
-from fastapi import FastAPI, Request, Depends, Form, UploadFile, File
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+from passlib.context import CryptContext
+import bcrypt as bcrypt_lib
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
-from .database import Base, engine, get_db
-from .models import User, Item, Transaction, Delivery, DeliveryItem
-from .services import (
-    get_items_with_stock,
-    get_item_with_stock,
-    get_low_stock,
-    get_recent_transactions,
-    dashboard_stats,
-    dashboard_kpis,
-    stock_by_category,
-    in_out_last_7_days,
-    top_items_by_stock,
+from database import Base, engine, get_db
+from models import Item, Transaction, User, Delivery
+from services import (
+    record_transaction,
+    get_dashboard_data,
+    add_item,
+    update_item,
+    delete_item,
 )
 
-app = FastAPI(title="Inventory Keeper")
+# ------------------------------------------------------------
+# App + Templates
+# ------------------------------------------------------------
 
-@app.on_event("startup")
-def _startup() -> None:
-    # Ensure DB tables exist and create a default admin user (if missing)
-    ensure_schema()
-    seed_admin_if_missing()
+app = FastAPI()
 
-from starlette.middleware.sessions import SessionMiddleware
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+static_dir = os.path.join(BASE_DIR, "static")
+if os.path.isdir(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Session cookie
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
+HTTPS_ONLY = os.getenv("HTTPS_ONLY", "1") not in {"0", "false", "False", "no", "NO"}
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key="change-this-to-a-long-random-secret"
-)
-
-# Sessions (login)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"),
+    secret_key=SESSION_SECRET,
+    https_only=HTTPS_ONLY,
     same_site="lax",
-    https_only=True,
 )
 
+# Password hashing
+# bcrypt has a 72-byte input limit and can break depending on bcrypt/passlib versions.
+# pbkdf2_sha256 avoids those issues and works well for web apps.
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-# Paths (Windows-safe)
-BASE_DIR = Path(__file__).resolve().parent
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+# ------------------------------------------------------------
+# DB helpers
+# ------------------------------------------------------------
 
-def redirect(url: str):
-    return RedirectResponse(url=url, status_code=303)
-
-
-def ensure_schema():
-    """
-    Creates tables and applies a tiny “safe” migration for delivery_id on transactions.
-
-    A real project should use Alembic migrations.
-    """
+def ensure_schema() -> None:
+    """Create tables and apply small, safe migrations."""
     Base.metadata.create_all(bind=engine)
 
-    # Add delivery_id to transactions if missing (Postgres-friendly)
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS delivery_id INTEGER"))
-    except Exception:
-        # SQLite does not support IF NOT EXISTS in all versions; ignore if already present.
+    # Safe migration: add delivery_id to transactions if missing.
+    with engine.connect() as conn:
         try:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
+            conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
         except Exception:
-            pass
+            try:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
+            except Exception:
+                pass
 
 
-def seed_admin_if_missing():
-    """
-    Creates an ADMIN user one time if none exists.
-    Set env vars on Railway:
-      ADMIN_USERNAME, ADMIN_PASSWORD
-    """
-    admin_user = os.getenv("ADMIN_USERNAME")
-    admin_pass = os.getenv("ADMIN_PASSWORD")
+def seed_admin_if_missing() -> None:
+    """Create an ADMIN user once, using env vars ADMIN_USERNAME / ADMIN_PASSWORD."""
+    admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
+    admin_pass = os.getenv("ADMIN_PASSWORD") or ""
+
     if not admin_user or not admin_pass:
         return
 
-    with next(get_db()) as db:  # uses generator dependency
+    gen = get_db()
+    db = next(gen)
+    try:
         existing_admin = db.scalar(select(User).where(User.role == "ADMIN"))
         if existing_admin:
             return
 
-        if db.scalar(select(User).where(User.username == admin_user.strip())):
+        existing_username = db.scalar(select(User).where(User.username == admin_user))
+        if existing_username:
             return
 
         db.add(
             User(
-                username=admin_user.strip(),
-                password_hash=pwd_context.hash(admin_pass),
+                username=admin_user,
+                password_hash=hash_password(admin_pass),
                 role="ADMIN",
                 full_name="Admin",
             )
         )
         db.commit()
+    finally:
+        gen.close()
 
 
+@app.on_event("startup")
+def _startup() -> None:
+    ensure_schema()
+    seed_admin_if_missing()
 
+
+# ------------------------------------------------------------
+# Auth helpers
+# ------------------------------------------------------------
 
 def get_current_user(db: Session, request: Request) -> User | None:
     user_id = request.session.get("user_id")
@@ -128,6 +123,10 @@ def get_current_user(db: Session, request: Request) -> User | None:
 
 def is_admin(user: User) -> bool:
     return (user.role or "").upper() == "ADMIN"
+
+
+def redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(url=path, status_code=303)
 
 
 def require_login_or_redirect(db: Session, request: Request) -> User | RedirectResponse:
@@ -143,7 +142,90 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
     return None
 
 
-# ---------------- Auth ----------------
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    # Legacy bcrypt hashes start with $2...
+    if (password_hash or "").startswith("$2"):
+        try:
+            return bcrypt_lib.checkpw(
+                plain_password.encode("utf-8"),
+                password_hash.encode("utf-8"),
+            )
+        except Exception:
+            return False
+
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
+def hash_password(plain_password: str) -> str:
+    return pwd_context.hash(plain_password)
+
+@app.get("/create-admin", response_class=HTMLResponse)
+def create_admin_page(request: Request, db: Session = Depends(get_db)):
+    """
+    Admin bootstrap page.
+
+    Access gets allowed without login only if no ADMIN exists yet.
+    After an admin exists, access requires an ADMIN session.
+    """
+    has_admin = db.scalar(select(User).where(User.role == "ADMIN"))
+    current = get_current_user(db, request)
+    if has_admin and (not current or not is_admin(current)):
+        return redirect("/login")
+
+    return HTMLResponse(
+        """<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Create Admin</title></head>
+<body style="font-family: system-ui; max-width: 520px; margin: 40px auto;">
+  <h2>Create Admin</h2>
+  <form method="post">
+    <label>Username</label><br/>
+    <input name="username" required style="width:100%; padding:10px; margin:6px 0 14px;"/>
+    <label>Password</label><br/>
+    <input name="password" type="password" required style="width:100%; padding:10px; margin:6px 0 14px;"/>
+    <button type="submit" style="padding:10px 14px;">Create</button>
+  </form>
+  <p style="margin-top: 16px;"><a href="/login">Login</a></p>
+</body>
+</html>"""
+    )
+
+
+@app.post("/create-admin")
+def create_admin(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    has_admin = db.scalar(select(User).where(User.role == "ADMIN"))
+    current = get_current_user(db, request)
+
+    if has_admin and (not current or not is_admin(current)):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    username = (username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username required")
+
+    existing = db.scalar(select(User).where(User.username == username))
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    db.add(
+        User(
+            username=username,
+            password_hash=hash_password(password),
+            role="ADMIN",
+            full_name="Admin",
+        )
+    )
+    db.commit()
+
+    return redirect("/login")
 
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
@@ -622,7 +704,7 @@ def create_agent(
     db.add(
         User(
             username=username,
-            password_hash=pwd_context.hash(password),
+            password_hash=hash_password(password),
             role="AGENT",
             full_name=full_name.strip() or None,
             phone=phone.strip() or None,
