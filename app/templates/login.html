@@ -1,12 +1,36 @@
 {% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block page_title %}{% endblock %}
+{% block page_subtitle %}{% endblock %}
+
 {% block content %}
-<h1>Login</h1>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form class="form" method="post">
-    <label>Username</label>
-    <input name="username" required />
-    <label>Password</label>
-    <input name="password" type="password" required />
-    <button class="primary" type="submit">Login</button>
-</form>
+<div class="card">
+    <div class="badge b-blue">SIGN IN</div>
+    <h2 style="margin:10px 0 4px;">Login</h2>
+    <div class="muted small">Enter your username and password to continue.</div>
+
+    {% if error %}
+    <div class="card" style="margin-top:12px; border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.10);">
+        <span class="badge b-red">{{ error }}</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" style="margin-top:14px;">
+        <div style="margin-bottom:10px;">
+            <label>Username</label>
+            <input name="username" required />
+        </div>
+
+        <div style="margin-bottom:12px;">
+            <label>Password</label>
+            <input name="password" type="password" required />
+        </div>
+
+        <button class="btnPrimary" type="submit" style="width:100%;">Login</button>
+    </form>
+
+    <div class="muted small" style="margin-top:12px;">
+        Admin can be created from <span class="badge b-purple">/create-admin</span> if no admin exists.
+    </div>
+</div>
 {% endblock %}
