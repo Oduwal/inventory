@@ -8,8 +8,6 @@
   <style>
     :root{
       --bg:#0b1220;
-      --panel:#0f1b33;
-      --card:#0f1b33;
       --text:#e8eefc;
       --muted:#a9b6d6;
       --border: rgba(255,255,255,.09);
@@ -38,9 +36,6 @@
       min-height:100vh;
       display:grid;
       grid-template-columns: 260px 1fr;
-    }
-    @media (max-width: 820px){
-      .app{ grid-template-columns: 1fr; }
     }
 
     .sidebar{
@@ -243,7 +238,7 @@
     .muted{ color:var(--muted); }
     .small{ font-size:12px; }
 
-    /* Login layout */
+    /* Auth layout */
     .center{
       min-height:100vh;
       display:flex;
@@ -253,6 +248,11 @@
     }
     .auth{
       width: min(520px, 100%);
+    }
+
+    @media (max-width: 820px){
+      .app{ grid-template-columns: 1fr; }
+      .sidebar{ border-right:none; border-bottom:1px solid var(--border); }
     }
   </style>
 </head>
@@ -313,17 +313,19 @@
         <div>{% block top_right %}{% endblock %}</div>
       </div>
 
-      {% block content %}{% endblock %}
+      {{ self.content() }}
     </main>
   </div>
 
 {% else %}
   <div class="center">
     <div class="auth">
-      {% block content %}{% endblock %}
+      {{ self.content() }}
     </div>
   </div>
 {% endif %}
+
+{% block content %}{% endblock %}
 
 </body>
 </html>
