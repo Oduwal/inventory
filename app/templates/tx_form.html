@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Stock Movement</h1>
+
+<form method="post">
+    <label>Item</label>
+    <select name="item_id">
+        {% for item in items %}
+        <option value="{{ item.id }}">{{ item.name }}</option>
+        {% endfor %}
+    </select>
+
+    <label>Type</label>
+    <select name="tx_type">
+        <option value="IN">IN</option>
+        <option value="OUT">OUT</option>
+    </select>
+
+    <label>Quantity</label>
+    <input type="number" name="quantity">
+
+    <button type="submit">Save</button>
+</form>
+{% endblock %}

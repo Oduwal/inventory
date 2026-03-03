@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Import Items</h1>
+
+<div class="card">
+    <p class="pill">Supported: CSV and Excel (XLSX)</p>
+    <p>Columns allowed: <span class="pill">name</span> (required), <span class="pill">sku</span>, <span class="pill">category</span>, <span class="pill">reorder_level</span>, <span class="pill">cost_price</span>, <span class="pill">selling_price</span>.</p>
+
+    {% if message %}
+    <div class="error">{{ message }}</div>
+    {% endif %}
+
+    <form class="form" method="post" enctype="multipart/form-data">
+        <label>Upload file</label>
+        <input type="file" name="file" accept=".csv,.xlsx" required />
+        <div class="row">
+            <button class="primary" type="submit">Import</button>
+            <a class="button" href="/items">Back to Items</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

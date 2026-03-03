@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Low Stock</h1>
+
+<table class="table">
+    <tr><th>Item</th><th>Stock</th></tr>
+    {% for item, stock in rows %}
+    <tr>
+        <td>{{ item.name }}</td>
+        <td>{{ stock }}</td>
+    </tr>
+    {% endfor %}
+</table>
+{% endblock %}
