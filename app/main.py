@@ -2,25 +2,33 @@ import os
 from datetime import datetime
 from typing import Generator
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from passlib.context import CryptContext
-import bcrypt as bcrypt_lib
-from sqlalchemy import select, text
+from sqlalchemy import select, text, desc
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from models import Item, Transaction, User, Delivery
-from services import (
+from .models import Item, Transaction, User, Delivery, DeliveryItem
+from .services import (
     record_transaction,
     get_dashboard_data,
     add_item,
     update_item,
     delete_item,
+    get_items_with_stock,
+    get_item_with_stock,
+    get_low_stock,
+    get_recent_transactions,
+    dashboard_stats,
+    dashboard_kpis,
+    stock_by_category,
+    in_out_last_7_days,
+    top_items_by_stock,
 )
 
 # ------------------------------------------------------------
@@ -143,6 +151,10 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
     # Legacy bcrypt hashes start with $2...
     if (password_hash or "").startswith("$2"):
         try:

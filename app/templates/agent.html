@@ -1,25 +1,36 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Agents</h1>
+.agent-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e50914;
+  color: white;
+  font-weight: 800;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 
-<div class="card">
-    <h2>Create Agent</h2>
-    <form class="form" method="post" action="/agents/new">
-        <label>Username</label><input name="username" required />
-        <label>Password</label><input name="password" type="password" required />
-        <label>Full name</label><input name="full_name" />
-        <label>Phone</label><input name="phone" />
-        <button class="primary" type="submit">Create Agent</button>
-    </form>
-</div>
+.agent-info { flex: 1; }
+.agent-name { font-weight: 600; font-size: 14px; }
+.agent-meta { color: #888; font-size: 12px; margin-top: 2px; }
 
-<div class="card">
-    <h2>Existing Agents</h2>
-    <table class="table">
-        <tr><th>Username</th><th>Name</th><th>Phone</th></tr>
-        {% for a in agents %}
-        <tr><td>{{ a.username }}</td><td>{{ a.full_name or "" }}</td><td>{{ a.phone or "" }}</td></tr>
-        {% endfor %}
-    </table>
-</div>
+.agent-badge {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #333;
+  color: #888;
+  letter-spacing: 0.08em;
+}
+
+.empty-state {
+  text-align: center;
+  color: #555;
+  padding: 30px 0;
+  font-size: 14px;
+}
+</style>
+
 {% endblock %}
