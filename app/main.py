@@ -15,6 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
 from .database import Base, engine, get_db
 from .models import User, Item, Transaction, Delivery, DeliveryItem
 from .services import (
@@ -31,6 +33,19 @@ from .services import (
 
 app = FastAPI(title="Inventory Keeper")
 
+@app.on_event("startup")
+def _startup() -> None:
+    # Ensure DB tables exist and create a default admin user (if missing)
+    ensure_schema()
+    seed_admin_if_missing()
+
+from starlette.middleware.sessions import SessionMiddleware
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="change-this-to-a-long-random-secret"
+)
+
 # Sessions (login)
 app.add_middleware(
     SessionMiddleware,
@@ -39,7 +54,7 @@ app.add_middleware(
     https_only=True,
 )
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Paths (Windows-safe)
 BASE_DIR = Path(__file__).resolve().parent
@@ -102,8 +117,6 @@ def seed_admin_if_missing():
         db.commit()
 
 
-ensure_schema()
-seed_admin_if_missing()
 
 
 def get_current_user(db: Session, request: Request) -> User | None:
