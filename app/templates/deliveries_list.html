@@ -1,105 +1,26 @@
-<!doctype html>
-<html>
-<head>
-    <meta charset="utf-8" />
-    <title>Deliveries</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-        body {
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-            margin: 24px;
-        }
+{% extends "base.html" %}
+{% block title %}Deliveries{% endblock %}
+{% block page_title %}Deliveries{% endblock %}
+{% block page_subtitle %}Track delivery status and assign agents{% endblock %}
+{% set active = 'deliveries' %}
 
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
+{% block top_right %}
+<a class="btnPrimary" href="/deliveries/new">Create Delivery</a>
+{% endblock %}
 
-        nav a {
-            margin-right: 10px;
-        }
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div class="badge b-blue">FILTERS</div>
+        <div class="muted small">Use filters to find deliveries quickly.</div>
+    </div>
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 14px;
-        }
-
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
-            vertical-align: top;
-        }
-
-        .muted {
-            color: #666;
-            font-size: 0.92rem;
-        }
-
-        .pill {
-            display: inline-block;
-            padding: 2px 8px;
-            border: 1px solid #bbb;
-            border-radius: 999px;
-            font-size: 0.85rem;
-        }
-
-        form.filters {
-            display: flex;
-            gap: 10px;
-            align-items: end;
-            flex-wrap: wrap;
-            margin-top: 12px;
-        }
-
-        label {
-            display: block;
-            font-size: 0.9rem;
-        }
-
-        input, select {
-            padding: 8px;
-            min-width: 180px;
-        }
-
-        button {
-            padding: 9px 12px;
-            cursor: pointer;
-        }
-    </style>
-</head>
-
-<body>
-    <header>
+    <form class="inputs" method="get" action="/deliveries" style="margin-top:12px;">
         <div>
-            <h2 style="margin:0;">Deliveries</h2>
-            <div class="muted">
-                Signed in as <b>{{ user.username }}</b> ({{ user.role }})
-            </div>
-        </div>
-
-        <nav>
-            <a href="/">Dashboard</a>
-            <a href="/items">Items</a>
-            <a href="/transactions">Transactions</a>
-            <a href="/deliveries">Deliveries</a>
-            <a href="/agents">Agents</a>
-            <form method="post" action="/logout" style="display:inline;">
-                <button type="submit">Logout</button>
-            </form>
-        </nav>
-    </header>
-
-    <form class="filters" method="get" action="/deliveries">
-        <div>
-            <label for="status">Status</label>
-            <select name="status" id="status">
+            <label>Status</label>
+            <select name="status">
                 <option value="" {% if not status %}selected{% endif %}>All</option>
-                <option value="PENDING" {% if status=="PENDING" %}selected{% endif %}>PENDING</option>
+                <option value="PENDING" {% if status= ="PENDING" %}selected{% endif %}>PENDING</option>
                 <option value="OUT_FOR_DELIVERY" {% if status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
                 <option value="DELIVERED" {% if status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
                 <option value="FAILED" {% if status= ="FAILED" %}selected{% endif %}>FAILED</option>
@@ -108,8 +29,8 @@
         </div>
 
         <div>
-            <label for="agent_id">Agent</label>
-            <select name="agent_id" id="agent_id">
+            <label>Agent</label>
+            <select name="agent_id">
                 <option value="" {% if not agent_id %}selected{% endif %}>All</option>
                 {% for a in agents %}
                 <option value="{{ a.id }}" {% if agent_id|string= =a.id|string %}selected{% endif %}>
@@ -120,47 +41,66 @@
         </div>
 
         <div>
-            <button type="submit">Apply</button>
-            <a href="/deliveries/new" style="margin-left:10px;">Create Delivery</a>
+            <button class="btnPrimary" type="submit">Apply</button>
         </div>
     </form>
+</div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Created</th>
-                <th>Agent</th>
-                <th>Customer</th>
-                <th>Status</th>
-                <th>Delivered</th>
-                <th>Open</th>
-            </tr>
-        </thead>
+<div class="card" style="margin-top:14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div class="badge b-purple">RECENT DELIVERIES</div>
+        <div class="muted small">{{ rows|length }} shown</div>
+    </div>
 
-        <tbody>
-            {% if not rows %}
-            <tr><td colspan="7" class="muted">No deliveries found.</td></tr>
-            {% endif %}
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Created</th>
+                    <th>Agent</th>
+                    <th>Customer</th>
+                    <th>Status</th>
+                    <th>Delivered</th>
+                    <th>Open</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not rows %}
+                <tr><td colspan="7" class="muted">No deliveries found.</td></tr>
+                {% endif %}
 
-            {% for d in rows %}
-            <tr>
-                <td>#{{ d.id }}</td>
-                <td>{{ d.created_at }}</td>
-                <td>
-                    {{ d.agent.username if d.agent else d.agent_id }}
-                </td>
-                <td>
-                    <div><b>{{ d.customer_name }}</b></div>
-                    {% if d.customer_phone %}<div class="muted">{{ d.customer_phone }}</div>{% endif %}
-                    {% if d.address %}<div class="muted">{{ d.address }}</div>{% endif %}
-                </td>
-                <td><span class="pill">{{ d.status }}</span></td>
-                <td>{{ d.delivered_at if d.delivered_at else "-" }}</td>
-                <td><a href="/deliveries/{{ d.id }}">View</a></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</body>
-</html>
+                {% for d in rows %}
+                <tr>
+                    <td><span class="badge b-blue">#{{ d.id }}</span></td>
+                    <td class="muted">{{ d.created_at }}</td>
+                    <td>
+                        <span class="badge b-purple">{{ d.agent.username if d.agent else d.agent_id }}</span>
+                    </td>
+                    <td>
+                        <div><b>{{ d.customer_name }}</b></div>
+                        {% if d.customer_phone %}<div class="muted small">{{ d.customer_phone }}</div>{% endif %}
+                        {% if d.address %}<div class="muted small">{{ d.address }}</div>{% endif %}
+                    </td>
+                    <td>
+                        {% if d.status == "DELIVERED" %}
+                        <span class="badge b-green">DELIVERED</span>
+                        {% elif d.status == "OUT_FOR_DELIVERY" %}
+                        <span class="badge b-blue">OUT FOR DELIVERY</span>
+                        {% elif d.status == "FAILED" %}
+                        <span class="badge b-red">FAILED</span>
+                        {% elif d.status == "RETURNED" %}
+                        <span class="badge b-yellow">RETURNED</span>
+                        {% else %}
+                        <span class="badge">PENDING</span>
+                        {% endif %}
+                    </td>
+                    <td class="muted">{{ d.delivered_at if d.delivered_at else "-" }}</td>
+                    <td><a class="badge b-blue" href="/deliveries/{{ d.id }}">View</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

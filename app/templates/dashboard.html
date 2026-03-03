@@ -1,26 +1,128 @@
 {% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_subtitle %}Quick overview of stock and activity{% endblock %}
+{% set active = 'dashboard' %}
+
 {% block content %}
+<div class="grid kpis">
+    <div class="card kpi">
+        <div class="label">Items</div>
+        <div class="value">{{ items_count }}</div>
+        <div class="hint">Products in catalog</div>
+    </div>
 
-<h1>Dashboard</h1>
+    <div class="card kpi">
+        <div class="label">Total stock</div>
+        <div class="value">{{ total_stock }}</div>
+        <div class="hint">Units across all items</div>
+    </div>
 
-<div class="card">
-    <div class="kpi">{{ items_count }}</div>
-    <div class="kpi-label">Total Items</div>
+    <div class="card kpi">
+        <div class="label">Inventory value</div>
+        <div class="value">{{ "%.2f"|format(inventory_value) }}</div>
+        <div class="hint">Cost price estimate</div>
+    </div>
+
+    <div class="card kpi">
+        <div class="label">Low stock</div>
+        <div class="value">{{ low_stock_count }}</div>
+        <div class="hint">At or below reorder level</div>
+    </div>
 </div>
 
-<div class="card">
-    <div class="kpi">{{ total_stock }}</div>
-    <div class="kpi-label">Total Stock (pcs)</div>
+<div class="row2" style="margin-top:14px;">
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div class="badge b-blue">LAST 7 DAYS</div>
+            <div>
+                <span class="badge b-green">IN: {{ in7 }}</span>
+                <span class="badge b-red" style="margin-left:8px;">OUT: {{ out7 }}</span>
+            </div>
+        </div>
+        <div class="muted small" style="margin-top:10px;">
+            Inventory movement uses transactions, so stock remains consistent.
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="badge b-purple">SHORTCUTS</div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+            <a class="badge b-blue" href="/items/new">New Item</a>
+            <a class="badge b-blue" href="/transactions/new">New Transaction</a>
+            <a class="badge b-blue" href="/deliveries/new">New Delivery</a>
+            <a class="badge b-yellow" href="/low-stock">View Low Stock</a>
+        </div>
+    </div>
 </div>
 
-<div class="card">
-    <div class="kpi">{{ low_stock_count }}</div>
-    <div class="kpi-label">Low Stock Items</div>
-</div>
+<div class="row2" style="margin-top:14px;">
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div class="badge b-purple">TOP ITEMS BY STOCK</div>
+            <div class="muted small">{{ top_rows|length }} shown</div>
+        </div>
 
-<div class="card">
-    <div class="kpi">₦{{ "%.2f"|format(inventory_value) }}</div>
-    <div class="kpi-label">Inventory Value</div>
-</div>
+        <div style="margin-top:12px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Category</th>
+                        <th>Stock</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if not top_rows %}
+                    <tr><td colspan="3" class="muted">No items yet.</td></tr>
+                    {% endif %}
+                    {% for it, stock in top_rows %}
+                    <tr>
+                        <td><a class="badge b-blue" href="/items/{{ it.id }}">{{ it.name }}</a></td>
+                        <td class="muted">{{ it.category if it.category else "Uncategorized" }}</td>
+                        <td><span class="badge b-green">{{ stock }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
 
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div class="badge b-yellow">LOW STOCK ALERTS</div>
+            <div class="muted small">{{ low_rows|length }} shown</div>
+        </div>
+
+        <div style="margin-top:12px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Stock</th>
+                        <th>Reorder</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if not low_rows %}
+                    <tr><td colspan="3" class="muted">No low stock items.</td></tr>
+                    {% endif %}
+                    {% for it, stock in low_rows %}
+                    <tr>
+                        <td><a class="badge b-blue" href="/items/{{ it.id }}">{{ it.name }}</a></td>
+                        <td>
+                            {% if stock <= 0 %}
+                            <span class="badge b-red">{{ stock }}</span>
+                            {% else %}
+                            <span class="badge b-yellow">{{ stock }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="muted">{{ it.reorder_level }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
 {% endblock %}

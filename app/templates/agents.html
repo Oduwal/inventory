@@ -1,150 +1,75 @@
-<!doctype html>
-<html>
-<head>
-    <meta charset="utf-8" />
-    <title>Agents</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-        body {
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-            margin: 24px;
-        }
+{% extends "base.html" %}
+{% block title %}Agents{% endblock %}
+{% block page_title %}Agents{% endblock %}
+{% block page_subtitle %}Create and manage delivery agents{% endblock %}
+{% set active = 'agents' %}
 
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        nav a {
-            margin-right: 10px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 14px;
-        }
-
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
-        }
-
-        .muted {
-            color: #666;
-            font-size: 0.92rem;
-        }
-
-        form.create {
-            margin-top: 16px;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 10px;
-            max-width: 720px;
-        }
-
-        .row {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .field {
-            flex: 1 1 220px;
-        }
-
-        label {
-            display: block;
-            font-size: 0.9rem;
-            margin-bottom: 6px;
-        }
-
-        input {
-            padding: 8px;
-            width: 100%;
-        }
-
-        button {
-            padding: 9px 12px;
-            cursor: pointer;
-        }
-    </style>
-</head>
-
-<body>
-    <header>
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
         <div>
-            <h2 style="margin:0;">Agents</h2>
-            <div class="muted">
-                Signed in as <b>{{ user.username }}</b> ({{ user.role }})
-            </div>
+            <div class="badge b-purple">AGENT ACCOUNTS</div>
+            <div class="muted small" style="margin-top:6px;">Agents can view only their deliveries and mark delivered.</div>
         </div>
+    </div>
 
-        <nav>
-            <a href="/">Dashboard</a>
-            <a href="/items">Items</a>
-            <a href="/transactions">Transactions</a>
-            <a href="/deliveries">Deliveries</a>
-            <a href="/agents">Agents</a>
-            <form method="post" action="/logout" style="display:inline;">
-                <button type="submit">Logout</button>
-            </form>
-        </nav>
-    </header>
-
-    <form class="create" method="post" action="/agents/new">
-        <h3 style="margin-top:0;">Create Agent</h3>
-        <div class="row">
-            <div class="field">
-                <label for="username">Username</label>
-                <input id="username" name="username" required />
+    <form method="post" action="/agents/new" style="margin-top:14px;">
+        <div class="inputs">
+            <div>
+                <label>Username</label>
+                <input name="username" required />
             </div>
-            <div class="field">
-                <label for="password">Password</label>
-                <input id="password" name="password" type="password" required />
+            <div>
+                <label>Password</label>
+                <input name="password" type="password" required />
             </div>
-            <div class="field">
-                <label for="full_name">Full name</label>
-                <input id="full_name" name="full_name" />
+            <div>
+                <label>Full name</label>
+                <input name="full_name" />
             </div>
-            <div class="field">
-                <label for="phone">Phone</label>
-                <input id="phone" name="phone" />
+            <div>
+                <label>Phone</label>
+                <input name="phone" />
             </div>
-        </div>
-        <div style="margin-top:10px;">
-            <button type="submit">Create Agent</button>
+            <div>
+                <button class="btnPrimary" type="submit">Create Agent</button>
+            </div>
         </div>
     </form>
+</div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Username</th>
-                <th>Full name</th>
-                <th>Phone</th>
-                <th>Created</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% if not agents %}
-            <tr><td colspan="5" class="muted">No agents yet.</td></tr>
-            {% endif %}
-            {% for a in agents %}
-            <tr>
-                <td>{{ a.id }}</td>
-                <td>{{ a.username }}</td>
-                <td>{{ a.full_name if a.full_name else "-" }}</td>
-                <td>{{ a.phone if a.phone else "-" }}</td>
-                <td>{{ a.created_at }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</body>
-</html>
+<div class="card" style="margin-top:14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div class="badge b-blue">AGENTS LIST</div>
+        <div class="muted small">{{ agents|length }} total</div>
+    </div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Username</th>
+                    <th>Full name</th>
+                    <th>Phone</th>
+                    <th>Created</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not agents %}
+                <tr><td colspan="5" class="muted">No agents yet.</td></tr>
+                {% endif %}
+                {% for a in agents %}
+                <tr>
+                    <td>{{ a.id }}</td>
+                    <td><span class="badge b-purple">{{ a.username }}</span></td>
+                    <td>{{ a.full_name if a.full_name else "-" }}</td>
+                    <td>{{ a.phone if a.phone else "-" }}</td>
+                    <td class="muted">{{ a.created_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
