@@ -21,7 +21,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    role: Mapped[str] = mapped_column(String(10), default="AGENT", nullable=False)  # ADMIN / AGENT
+    # "ADMIN" or "AGENT"
+    role: Mapped[str] = mapped_column(String(10), default="AGENT", nullable=False)
 
     full_name: Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -29,7 +30,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     deliveries: Mapped[list["Delivery"]] = relationship(back_populates="agent")
-    cash_logs: Mapped[list["CashLog"]] = relationship(back_populates="agent")
+    cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="agent")
 
 
 class Item(Base):
@@ -42,6 +43,7 @@ class Item(Base):
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     unit: Mapped[str] = mapped_column(String(20), default="pcs", nullable=False)
+
     reorder_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
@@ -71,7 +73,9 @@ class Delivery(Base):
     customer_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     address: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
+    # PENDING, OUT_FOR_DELIVERY, DELIVERED, FAILED, RETURNED
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
+
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -83,7 +87,7 @@ class Delivery(Base):
         cascade="all, delete-orphan",
     )
 
-    cash_logs: Mapped[list["CashLog"]] = relationship(back_populates="delivery")
+    cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="delivery")
 
     __table_args__ = (
         CheckConstraint(
@@ -99,10 +103,9 @@ class DeliveryItem(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     delivery_id: Mapped[int] = mapped_column(ForeignKey("deliveries.id"), nullable=False)
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
-
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Money collected for this product line in the delivery
+    # Amount collected for this line (entered by agent/admin during order creation)
     line_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
     delivery: Mapped["Delivery"] = relationship(back_populates="items")
@@ -110,7 +113,6 @@ class DeliveryItem(Base):
 
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_delivery_item_qty_positive"),
-        CheckConstraint("line_amount >= 0", name="ck_delivery_item_amount_nonneg"),
     )
 
 
@@ -125,7 +127,7 @@ class Transaction(Base):
     # Optional link back to delivery
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    type: Mapped[str] = mapped_column(String(10), nullable=False)  # IN / OUT
+    type: Mapped[str] = mapped_column(String(10), nullable=False)  # "IN" or "OUT"
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
     reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -139,24 +141,26 @@ class Transaction(Base):
     )
 
 
-class CashLog(Base):
-    __tablename__ = "cash_logs"
+class CashEntry(Base):
+    __tablename__ = "cash_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # COLLECTION or EXPENSE
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    # EXPENSE / COLLECTION
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    agent: Mapped["User"] = relationship(back_populates="cash_logs")
-    delivery: Mapped["Delivery | None"] = relationship(back_populates="cash_logs")
+    agent: Mapped["User"] = relationship(back_populates="cash_entries")
+    delivery: Mapped["Delivery"] = relationship(back_populates="cash_entries")
 
     __table_args__ = (
-        CheckConstraint("kind IN ('EXPENSE','COLLECTION')", name="ck_cash_kind"),
+        CheckConstraint("kind IN ('COLLECTION','EXPENSE')", name="ck_cash_kind"),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
     )

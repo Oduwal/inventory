@@ -1,5 +1,6 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,7 @@ from sqlalchemy import select, text, desc
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Item, Transaction, User, Delivery, DeliveryItem
+from .models import Item, Transaction, User, Delivery, DeliveryItem, CashEntry
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -25,9 +26,10 @@ from .services import (
     in_out_last_7_days,
     top_items_by_stock,
     create_out_transactions_for_delivery_if_needed,
-    get_delivery_finance,
-    get_cash_summary,
-    add_cash_log,
+    delivery_line_total,
+    delivery_cash_totals,
+    cash_summary_by_day,
+    cash_totals,
 )
 
 app = FastAPI()
@@ -52,34 +54,10 @@ app.add_middleware(
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
-def redirect(path: str) -> RedirectResponse:
-    return RedirectResponse(url=path, status_code=303)
-
-
-def is_admin(user: User) -> bool:
-    return (user.role or "").upper() == "ADMIN"
-
-
-def hash_password(plain_password: str) -> str:
-    return pwd_context.hash(plain_password)
-
-
-def verify_password(plain_password: str, password_hash: str) -> bool:
-    if (password_hash or "").startswith("$2"):
-        try:
-            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
-        except Exception:
-            return False
-    try:
-        return pwd_context.verify(plain_password, password_hash)
-    except Exception:
-        return False
-
-
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    # Safe SQLite-style migrations
+    # Best-effort tiny migrations. Database owner might still need to run SQL manually on Postgres.
     with engine.connect() as conn:
         # transactions.delivery_id
         try:
@@ -95,11 +73,23 @@ def ensure_schema() -> None:
         try:
             conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
         except Exception:
-            try:
-                conn.execute(text("ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) DEFAULT 0"))
-                conn.commit()
-            except Exception:
-                pass
+            for ddl in (
+                "ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) NOT NULL DEFAULT 0",
+                "ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) DEFAULT 0",
+            ):
+                try:
+                    conn.execute(text(ddl))
+                    conn.commit()
+                    break
+                except Exception:
+                    pass
+
+        # cash_entries table might be missing on older DBs
+        try:
+            conn.execute(text("SELECT id FROM cash_entries LIMIT 1"))
+        except Exception:
+            # create_all already handles it if DB allows, so ignore here
+            pass
 
 
 def seed_admin_if_missing() -> None:
@@ -115,8 +105,7 @@ def seed_admin_if_missing() -> None:
         if existing_admin:
             return
 
-        existing_username = db.scalar(select(User).where(User.username == admin_user))
-        if existing_username:
+        if db.scalar(select(User).where(User.username == admin_user)):
             return
 
         db.add(
@@ -138,6 +127,14 @@ def _startup() -> None:
     seed_admin_if_missing()
 
 
+def redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(url=path, status_code=303)
+
+
+def is_admin(user: User) -> bool:
+    return (user.role or "").upper() == "ADMIN"
+
+
 def get_current_user(db: Session, request: Request) -> User | None:
     user_id = request.session.get("user_id")
     if not user_id:
@@ -152,9 +149,31 @@ def require_login_or_redirect(db: Session, request: Request) -> User | RedirectR
     return user
 
 
+def require_admin_or_403(user: User) -> HTMLResponse | None:
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    return None
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    if (password_hash or "").startswith("$2"):
+        try:
+            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+        except Exception:
+            return False
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
+def hash_password(plain_password: str) -> str:
+    return pwd_context.hash(plain_password)
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None, "user": None, "active": ""})
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -166,9 +185,7 @@ def login(
 ):
     u = db.scalar(select(User).where(User.username == username.strip()))
     if not u or not verify_password(password, u.password_hash):
-        return templates.TemplateResponse(
-            "login.html", {"request": request, "error": "Invalid login.", "user": None, "active": ""}
-        )
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid login."})
 
     request.session["user_id"] = u.id
     request.session["role"] = u.role
@@ -203,7 +220,6 @@ def home(request: Request, db: Session = Depends(get_db)):
         {
             "request": request,
             "user": user,
-            "active": "dashboard",
             **stats,
             "total_stock": total_stock,
             "inventory_value": inventory_value,
@@ -224,6 +240,9 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
     return {"count": len(get_low_stock(db))}
 
 
+# ---------------- Items ----------------
+# Route order matters: /items/new and /items/import must come before /items/{item_id}
+
 @app.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -242,10 +261,94 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
             or q_lower in ((item.category or "").lower())
         ]
 
-    return templates.TemplateResponse(
-        "items_list.html",
-        {"request": request, "rows": rows, "q": q, "user": user, "active": "items"},
+    return templates.TemplateResponse("items_list.html", {"request": request, "rows": rows, "q": q, "user": user})
+
+
+@app.get("/items/new", response_class=HTMLResponse)
+def item_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    error = request.query_params.get("error")
+    return templates.TemplateResponse("item_new.html", {"request": request, "user": user, "error": error})
+
+
+@app.post("/items/new")
+def item_create(
+    request: Request,
+    name: str = Form(...),
+    sku: str = Form(""),
+    category: str = Form(""),
+    unit: str = Form("pcs"),
+    reorder_level: int = Form(0),
+    cost_price: float = Form(0),
+    selling_price: float = Form(0),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    name_clean = name.strip()
+    if not name_clean:
+        return redirect("/items/new?error=Name+is+required")
+
+    sku_clean = (sku or "").strip() or None
+    if sku_clean and db.scalar(select(Item).where(Item.sku == sku_clean)):
+        return redirect("/items/new?error=SKU+already+exists")
+
+    db.add(
+        Item(
+            name=name_clean,
+            sku=sku_clean,
+            category=(category or "").strip() or None,
+            unit=(unit or "pcs").strip() or "pcs",
+            reorder_level=int(reorder_level or 0),
+            cost_price=float(cost_price or 0),
+            selling_price=float(selling_price or 0),
+        )
     )
+    db.commit()
+    return redirect("/items")
+
+
+@app.get("/items/import", response_class=HTMLResponse)
+def items_import_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    return templates.TemplateResponse("items_import.html", {"request": request, "user": user})
+
+
+@app.post("/items/import")
+def items_import_submit(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    return JSONResponse({"detail": "Import endpoint exists. CSV upload handling can be added next."})
 
 
 @app.get("/items/{item_id}", response_class=HTMLResponse)
@@ -266,9 +369,11 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "item_detail.html",
-        {"request": request, "item": item, "stock": stock, "txs": txs, "user": user, "active": "items"},
+        {"request": request, "item": item, "stock": stock, "txs": txs, "user": user},
     )
 
+
+# ---------------- Transactions ----------------
 
 @app.get("/transactions", response_class=HTMLResponse)
 def transactions_list(request: Request, db: Session = Depends(get_db)):
@@ -278,10 +383,7 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     txs = get_recent_transactions(db, limit=300)
-    return templates.TemplateResponse(
-        "transactions_list.html",
-        {"request": request, "txs": txs, "user": user, "active": "transactions"},
-    )
+    return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user})
 
 
 @app.get("/transactions/new", response_class=HTMLResponse)
@@ -291,16 +393,14 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
 
     rows = get_items_with_stock(db)
     items = [i for (i, _s) in rows]
     error = request.query_params.get("error")
-    return templates.TemplateResponse(
-        "tx_form.html",
-        {"request": request, "items": items, "error": error, "user": user, "active": "transactions"},
-    )
+    return templates.TemplateResponse("tx_form.html", {"request": request, "items": items, "error": error, "user": user})
 
 
 @app.post("/transactions/new")
@@ -318,8 +418,9 @@ def tx_create(
         return user_or
     user = user_or
 
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
 
     tx_type = (tx_type or "").strip().upper()
     if tx_type not in {"IN", "OUT"}:
@@ -350,6 +451,8 @@ def tx_create(
     return redirect("/transactions")
 
 
+# ---------------- Low stock ----------------
+
 @app.get("/low-stock", response_class=HTMLResponse)
 def low_stock(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -357,14 +460,11 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
-
     rows = get_low_stock(db)
-    return templates.TemplateResponse(
-        "low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"}
-    )
+    return templates.TemplateResponse("low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"})
 
+
+# ---------------- Agents ----------------
 
 @app.get("/agents", response_class=HTMLResponse)
 def agents_list(request: Request, db: Session = Depends(get_db)):
@@ -373,14 +473,15 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
 
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    return templates.TemplateResponse(
-        "agents_list.html", {"request": request, "agents": agents, "user": user, "active": "agents"}
-    )
+    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
 
+
+# ---------------- Deliveries / Orders ----------------
 
 @app.get("/deliveries", response_class=HTMLResponse)
 def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
@@ -406,15 +507,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "deliveries_list.html",
-        {
-            "request": request,
-            "rows": rows,
-            "agents": agents,
-            "status": status,
-            "agent_id": agent_id,
-            "user": user,
-            "active": "deliveries",
-        },
+        {"request": request, "rows": rows, "agents": agents, "status": status, "agent_id": agent_id, "user": user},
     )
 
 
@@ -425,15 +518,12 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    agents = []
-    if is_admin(user):
-        agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-
+    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
     items = db.execute(select(Item).order_by(Item.name.asc())).scalars().all()
 
     return templates.TemplateResponse(
         "delivery_new.html",
-        {"request": request, "agents": agents, "items": items, "user": user, "active": "deliveries"},
+        {"request": request, "agents": agents, "items": items, "user": user},
     )
 
 
@@ -447,7 +537,7 @@ def delivery_create(
     note: str = Form(""),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
-    line_amount: list[float] = Form(...),
+    line_amount: list[float] = Form([]),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -455,12 +545,11 @@ def delivery_create(
         return user_or
     user = user_or
 
-    chosen_agent_id = int(agent_id)
     if not is_admin(user):
-        chosen_agent_id = user.id
+        agent_id = user.id
 
     d = Delivery(
-        agent_id=chosen_agent_id,
+        agent_id=int(agent_id),
         customer_name=customer_name.strip(),
         customer_phone=customer_phone.strip() or None,
         address=address.strip() or None,
@@ -471,9 +560,11 @@ def delivery_create(
     db.flush()
 
     added_any = False
-    for iid, qty, amt in zip(item_id, quantity, line_amount):
+    for idx, (iid, qty) in enumerate(zip(item_id, quantity)):
         q = int(qty) if qty is not None else 0
+        amt = line_amount[idx] if idx < len(line_amount) else 0
         a = float(amt) if amt is not None else 0.0
+
         if q > 0:
             db.add(
                 DeliveryItem(
@@ -487,7 +578,7 @@ def delivery_create(
 
     if not added_any:
         db.rollback()
-        return HTMLResponse("Order must contain at least one item", status_code=400)
+        return JSONResponse({"detail": "Add at least one item with quantity > 0"}, status_code=400)
 
     db.commit()
     return redirect(f"/deliveries/{d.id}")
@@ -504,10 +595,7 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         select(Delivery).where(Delivery.agent_id == user.id).order_by(desc(Delivery.created_at)).limit(300)
     ).scalars().all()
 
-    return templates.TemplateResponse(
-        "my_deliveries.html",
-        {"request": request, "rows": rows, "user": user, "active": "deliveries"},
-    )
+    return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user})
 
 
 @app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
@@ -530,9 +618,11 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         .where(DeliveryItem.delivery_id == d.id)
     ).all()
 
-    collection_total, expense_total = get_delivery_finance(db, d.id)
+    line_total = delivery_line_total(db, d.id)
+    extra_collections, extra_expenses = delivery_cash_totals(db, d.id)
 
-    back_url = "/deliveries" if is_admin(user) else "/my-deliveries"
+    collection_total = float(line_total) + float(extra_collections)
+    expense_total = float(extra_expenses)
 
     return templates.TemplateResponse(
         "delivery_detail.html",
@@ -541,11 +631,9 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             "d": d,
             "d_items": d_items,
             "user": user,
-            "active": "deliveries",
             "error": None,
             "collection_total": collection_total,
             "expense_total": expense_total,
-            "back_url": back_url,
         },
     )
 
@@ -586,8 +674,13 @@ def update_delivery_status(
                 .join(Item, Item.id == DeliveryItem.item_id)
                 .where(DeliveryItem.delivery_id == d.id)
             ).all()
-            collection_total, expense_total = get_delivery_finance(db, d.id)
-            back_url = "/deliveries" if is_admin(user) else "/my-deliveries"
+
+            line_total = delivery_line_total(db, d.id)
+            extra_collections, extra_expenses = delivery_cash_totals(db, d.id)
+
+            collection_total = float(line_total) + float(extra_collections)
+            expense_total = float(extra_expenses)
+
             return templates.TemplateResponse(
                 "delivery_detail.html",
                 {
@@ -595,13 +688,12 @@ def update_delivery_status(
                     "d": d,
                     "d_items": d_items,
                     "user": user,
-                    "active": "deliveries",
                     "error": str(e),
                     "collection_total": collection_total,
                     "expense_total": expense_total,
-                    "back_url": back_url,
                 },
             )
+
         return redirect(f"/deliveries/{delivery_id}")
 
     d.status = status
@@ -609,54 +701,89 @@ def update_delivery_status(
     return redirect(f"/deliveries/{delivery_id}")
 
 
+# ---------------- Cash ----------------
+
+def _range_from_preset(preset: str | None) -> tuple[datetime, datetime]:
+    now = datetime.utcnow()
+    today_start = datetime(now.year, now.month, now.day)
+    preset_clean = (preset or "").strip()
+
+    if preset_clean == "today":
+        return today_start, today_start + timedelta(days=1) - timedelta(seconds=1)
+    if preset_clean == "yesterday":
+        ys = today_start - timedelta(days=1)
+        return ys, today_start - timedelta(seconds=1)
+    if preset_clean == "7d":
+        return now - timedelta(days=7), now
+    if preset_clean == "30d":
+        return now - timedelta(days=30), now
+
+    return now - timedelta(days=7), now
+
+
 @app.get("/cash", response_class=HTMLResponse)
-def cash_dashboard(request: Request, db: Session = Depends(get_db)):
+def cash_dashboard(
+    request: Request,
+    preset: str = "today",
+    start_date: str = "",
+    end_date: str = "",
+    agent_id: str = "",
+    db: Session = Depends(get_db),
+):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
 
-    preset = request.query_params.get("preset", "today")
-    start_date = request.query_params.get("start_date")
-    end_date = request.query_params.get("end_date")
-    agent_id_raw = request.query_params.get("agent_id", "")
+    start_dt, end_dt = _range_from_preset(preset)
 
-    selected_agent_id: int | None = None
-    if is_admin(user):
-        if agent_id_raw.isdigit():
-            selected_agent_id = int(agent_id_raw)
-        else:
-            selected_agent_id = None
-    else:
-        selected_agent_id = user.id
+    if start_date:
+        try:
+            y, m, d = [int(x) for x in start_date.split("-")]
+            start_dt = datetime(y, m, d)
+        except Exception:
+            pass
+    if end_date:
+        try:
+            y, m, d = [int(x) for x in end_date.split("-")]
+            end_dt = datetime(y, m, d, 23, 59, 59)
+        except Exception:
+            pass
 
-    rows, total_collections, total_expenses = get_cash_summary(
-        db,
-        agent_id=selected_agent_id,
-        preset=preset,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
+    chosen_agent_id: int | None = None
     agents = []
+
     if is_admin(user):
         agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+        if agent_id and agent_id.isdigit():
+            chosen_agent_id = int(agent_id)
+    else:
+        chosen_agent_id = user.id
+
+    rows = cash_summary_by_day(db, start_dt, end_dt, agent_id=chosen_agent_id)
+    total_collections, total_expenses = cash_totals(db, start_dt, end_dt, agent_id=chosen_agent_id)
 
     return templates.TemplateResponse(
         "cash_dashboard.html",
         {
             "request": request,
             "user": user,
-            "active": "cash",
-            "rows": rows,
-            "total_collections": total_collections,
-            "total_expenses": total_expenses,
-            "profit": total_collections - total_expenses,
             "preset": preset,
             "start_date": start_date,
             "end_date": end_date,
+            "agent_id": agent_id,
             "agents": agents,
-            "agent_id": agent_id_raw,
+            "rows": [
+                {
+                    "day": str(r.day),
+                    "collections": float(r.collections),
+                    "expenses": float(r.expenses),
+                }
+                for r in rows
+            ],
+            "total_collections": float(total_collections),
+            "total_expenses": float(total_expenses),
+            "profit": float(total_collections) - float(total_expenses),
         },
     )
 
@@ -666,8 +793,8 @@ def cash_new(
     request: Request,
     kind: str = Form(...),
     amount: float = Form(...),
-    note: str = Form(""),
     delivery_id: str = Form(""),
+    note: str = Form(""),
     agent_id: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -676,22 +803,32 @@ def cash_new(
         return user_or
     user = user_or
 
+    kind_clean = (kind or "").strip().upper()
+    if kind_clean not in {"COLLECTION", "EXPENSE"}:
+        raise HTTPException(status_code=400, detail="Invalid kind")
+
+    amt = float(amount)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be > 0")
+
     chosen_agent_id = user.id
     if is_admin(user) and agent_id and agent_id.isdigit():
         chosen_agent_id = int(agent_id)
 
-    did = int(delivery_id) if (delivery_id and delivery_id.isdigit()) else None
+    chosen_delivery_id = int(delivery_id) if (delivery_id or "").strip().isdigit() else None
 
-    add_cash_log(
-        db,
-        agent_id=chosen_agent_id,
-        kind=kind,
-        amount=float(amount),
-        note=note,
-        delivery_id=did,
+    db.add(
+        CashEntry(
+            kind=kind_clean,
+            amount=amt,
+            agent_id=chosen_agent_id,
+            delivery_id=chosen_delivery_id,
+            note=(note or "").strip() or None,
+        )
     )
+    db.commit()
 
-    if did is not None:
-        return redirect(f"/deliveries/{did}")
+    if chosen_delivery_id:
+        return redirect(f"/deliveries/{chosen_delivery_id}")
 
-    return redirect("/cash?preset=today")
+    return redirect("/cash")
