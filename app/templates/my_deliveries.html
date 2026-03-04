@@ -5,10 +5,26 @@
 {% set active = 'deliveries' %}
 
 {% block content %}
+<style>
+    .progWrap {
+        width: 160px;
+        height: 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.05);
+        overflow: hidden;
+    }
+
+    .prog {
+        height: 100%;
+        border-radius: 999px;
+    }
+</style>
+
 <div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div class="badge b-blue">ASSIGNED DELIVERIES</div>
-        <div class="muted small">{{ rows|length }} shown</div>
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span class="badge b-blue">ASSIGNED DELIVERIES</span>
+        <span class="muted small">{{ rows|length }} shown</span>
     </div>
 
     <div style="margin-top:12px;">
@@ -19,16 +35,23 @@
                     <th>Created</th>
                     <th>Customer</th>
                     <th>Status</th>
-                    <th>Delivered</th>
+                    <th>Progress</th>
                     <th>Open</th>
                 </tr>
             </thead>
+
             <tbody>
                 {% if not rows %}
                 <tr><td colspan="6" class="muted">No deliveries assigned yet.</td></tr>
                 {% endif %}
 
                 {% for d in rows %}
+                {% set pct = 20 %}
+                {% if d.status == "OUT_FOR_DELIVERY" %}{% set pct = 60 %}{% endif %}
+                {% if d.status == "DELIVERED" %}{% set pct = 100 %}{% endif %}
+                {% if d.status == "FAILED" %}{% set pct = 100 %}{% endif %}
+                {% if d.status == "RETURNED" %}{% set pct = 100 %}{% endif %}
+
                 <tr>
                     <td><span class="badge b-blue">#{{ d.id }}</span></td>
                     <td class="muted">{{ d.created_at }}</td>
@@ -50,7 +73,20 @@
                         <span class="badge">PENDING</span>
                         {% endif %}
                     </td>
-                    <td class="muted">{{ d.delivered_at if d.delivered_at else "-" }}</td>
+                    <td>
+                        <div class="progWrap">
+                            {% if d.status == "DELIVERED" %}
+                            <div class="prog" style="width:{{ pct }}%; background: rgba(45,212,191,.85);"></div>
+                            {% elif d.status == "FAILED" %}
+                            <div class="prog" style="width:{{ pct }}%; background: rgba(251,113,133,.85);"></div>
+                            {% elif d.status == "RETURNED" %}
+                            <div class="prog" style="width:{{ pct }}%; background: rgba(251,191,36,.85);"></div>
+                            {% else %}
+                            <div class="prog" style="width:{{ pct }}%; background: rgba(79,124,255,.85);"></div>
+                            {% endif %}
+                        </div>
+                        <div class="muted small" style="margin-top:6px;">{{ pct }}%</div>
+                    </td>
                     <td><a class="badge b-purple" href="/deliveries/{{ d.id }}">View</a></td>
                 </tr>
                 {% endfor %}

@@ -5,62 +5,81 @@
 {% set active = 'dashboard' %}
 
 {% block content %}
-<div class="grid kpis">
-    <div class="card kpi">
-        <div class="label">Items</div>
-        <div class="value">{{ items_count }}</div>
-        <div class="hint">Products in catalog</div>
-    </div>
-
-    <div class="card kpi">
-        <div class="label">Total stock</div>
-        <div class="value">{{ total_stock }}</div>
-        <div class="hint">Units across all items</div>
-    </div>
-
-    <div class="card kpi">
-        <div class="label">Inventory value</div>
-        <div class="value">{{ "%.2f"|format(inventory_value) }}</div>
-        <div class="hint">Cost price estimate</div>
-    </div>
-
-    <div class="card kpi">
-        <div class="label">Low stock</div>
-        <div class="value">{{ low_stock_count }}</div>
-        <div class="hint">At or below reorder level</div>
+<div class="card" style="margin-bottom:14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div>
+            <span class="badge b-blue">OVERVIEW</span>
+            <div class="muted small" style="margin-top:8px;">Numbers update from transactions and deliveries.</div>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <a class="badge b-purple" href="/items/new">New Item</a>
+            <a class="badge b-purple" href="/transactions/new">New Transaction</a>
+            <a class="badge b-purple" href="/deliveries/new">New Delivery</a>
+        </div>
     </div>
 </div>
 
-<div class="row2" style="margin-top:14px;">
+<div style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;">
     <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-            <div class="badge b-blue">LAST 7 DAYS</div>
+        <div class="muted small">Items</div>
+        <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ items_count }}</div>
+        <div class="muted small" style="margin-top:6px;">Products in catalog</div>
+    </div>
+
+    <div class="card">
+        <div class="muted small">Total stock</div>
+        <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ total_stock }}</div>
+        <div class="muted small" style="margin-top:6px;">Units across all items</div>
+    </div>
+
+    <div class="card">
+        <div class="muted small">Inventory value</div>
+        <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ "%.2f"|format(inventory_value) }}</div>
+        <div class="muted small" style="margin-top:6px;">Cost estimate</div>
+    </div>
+
+    <div class="card">
+        <div class="muted small">Low stock</div>
+        <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ low_stock_count }}</div>
+        <div class="muted small" style="margin-top:6px;">Needs restock</div>
+    </div>
+</div>
+
+<div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge b-blue">LAST 7 DAYS</span>
             <div>
                 <span class="badge b-green">IN: {{ in7 }}</span>
                 <span class="badge b-red" style="margin-left:8px;">OUT: {{ out7 }}</span>
             </div>
         </div>
-        <div class="muted small" style="margin-top:10px;">
-            Inventory movement uses transactions, so stock remains consistent.
+
+        <div style="margin-top:12px;" class="muted small">
+            Stock is calculated as IN minus OUT transactions.
         </div>
     </div>
 
     <div class="card">
-        <div class="badge b-purple">SHORTCUTS</div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-            <a class="badge b-blue" href="/items/new">New Item</a>
-            <a class="badge b-blue" href="/transactions/new">New Transaction</a>
-            <a class="badge b-blue" href="/deliveries/new">New Delivery</a>
-            <a class="badge b-yellow" href="/low-stock">View Low Stock</a>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge b-purple">STOCK BY CATEGORY</span>
+            <span class="muted small">Chart</span>
+        </div>
+
+        <div style="height:260px;margin-top:10px;">
+            <canvas id="catChart"></canvas>
+        </div>
+        <div class="muted small" style="margin-top:10px;">
+            Categories come from item category field.
         </div>
     </div>
 </div>
 
-<div class="row2" style="margin-top:14px;">
+<div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
     <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-            <div class="badge b-purple">TOP ITEMS BY STOCK</div>
-            <div class="muted small">{{ top_rows|length }} shown</div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge b-purple">TOP ITEMS BY STOCK</span>
+            <span class="muted small">{{ top_rows|length }} shown</span>
         </div>
 
         <div style="margin-top:12px;">
@@ -89,9 +108,9 @@
     </div>
 
     <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-            <div class="badge b-yellow">LOW STOCK ALERTS</div>
-            <div class="muted small">{{ low_rows|length }} shown</div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span class="badge b-yellow">LOW STOCK ALERTS</span>
+            <span class="muted small">{{ low_rows|length }} shown</span>
         </div>
 
         <div style="margin-top:12px;">
@@ -125,4 +144,33 @@
         </div>
     </div>
 </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+    // Dashboard expects a variable named cat_rows like: [(category, stock), ...]
+    const labels = [
+      {% if cat_rows %}
+        {% for c, s in cat_rows %}"{{ c }}"{% if not loop.last %},{% endif %}{% endfor %}
+      {% endif %}
+    ];
+    const values = [
+      {% if cat_rows %}
+        {% for c, s in cat_rows %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}
+      {% endif %}
+    ];
+
+    const ctx = document.getElementById("catChart");
+    if(ctx && labels.length){
+      new Chart(ctx, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "Stock", data: values }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    }
+</script>
 {% endblock %}

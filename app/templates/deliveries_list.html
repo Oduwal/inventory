@@ -10,146 +10,126 @@
 {% endblock %}
 
 {% block content %}
+<style>
+    .progWrap {
+        width: 160px;
+        height: 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.05);
+        overflow: hidden;
+    }
+
+    .prog {
+        height: 100%;
+        border-radius: 999px;
+    }
+</style>
 
 <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div class="badge b-blue">FILTERS</div>
-    </div>
+    <div class="badge b-blue">FILTERS</div>
 
     <form method="get" action="/deliveries" class="inputs" style="margin-top:12px;">
-
         <div>
             <label>Status</label>
             <select name="status">
                 <option value="" {% if not status %}selected{% endif %}>All</option>
-
-                <option value="PENDING" {% if status= ="PENDING" %}selected{% endif %}>
-                    PENDING
-                </option>
-
-                <option value="OUT_FOR_DELIVERY" {% if status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>
-                    OUT FOR DELIVERY
-                </option>
-
-                <option value="DELIVERED" {% if status= ="DELIVERED" %}selected{% endif %}>
-                    DELIVERED
-                </option>
-
-                <option value="FAILED" {% if status= ="FAILED" %}selected{% endif %}>
-                    FAILED
-                </option>
-
-                <option value="RETURNED" {% if status= ="RETURNED" %}selected{% endif %}>
-                    RETURNED
-                </option>
-
+                <option value="PENDING" {% if status= ="PENDING" %}selected{% endif %}>PENDING</option>
+                <option value="OUT_FOR_DELIVERY" {% if status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT FOR DELIVERY</option>
+                <option value="DELIVERED" {% if status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                <option value="FAILED" {% if status= ="FAILED" %}selected{% endif %}>FAILED</option>
+                <option value="RETURNED" {% if status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
             </select>
         </div>
 
         <div>
             <label>Agent</label>
             <select name="agent_id">
-
                 <option value="" {% if not agent_id %}selected{% endif %}>All</option>
-
                 {% for a in agents %}
                 <option value="{{ a.id }}" {% if agent_id|string= =a.id|string %}selected{% endif %}>
-                    {{ a.username }}
-                    {% if a.full_name %} ({{ a.full_name }}) {% endif %}
+                    {{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}
                 </option>
                 {% endfor %}
-
             </select>
         </div>
 
         <div>
             <button class="btnPrimary" type="submit">Apply</button>
         </div>
-
     </form>
 </div>
 
-
 <div class="card" style="margin-top:16px;">
-
     <table>
         <thead>
             <tr>
                 <th>ID</th>
-                <th>Date</th>
+                <th>Created</th>
                 <th>Agent</th>
                 <th>Customer</th>
                 <th>Status</th>
-                <th>Delivered</th>
+                <th>Progress</th>
                 <th>Open</th>
             </tr>
         </thead>
 
         <tbody>
-
             {% if not rows %}
-            <tr>
-                <td colspan="7" class="muted">No deliveries found.</td>
-            </tr>
+            <tr><td colspan="7" class="muted">No deliveries found.</td></tr>
             {% endif %}
 
             {% for d in rows %}
+            {% set pct = 20 %}
+            {% if d.status == "OUT_FOR_DELIVERY" %}{% set pct = 60 %}{% endif %}
+            {% if d.status == "DELIVERED" %}{% set pct = 100 %}{% endif %}
+            {% if d.status == "FAILED" %}{% set pct = 100 %}{% endif %}
+            {% if d.status == "RETURNED" %}{% set pct = 100 %}{% endif %}
+
             <tr>
-
-                <td>#{{ d.id }}</td>
-
+                <td><span class="badge b-blue">#{{ d.id }}</span></td>
                 <td class="muted">{{ d.created_at }}</td>
-
-                <td>
-                    {{ d.agent.username if d.agent else d.agent_id }}
-                </td>
+                <td><span class="badge b-purple">{{ d.agent.username if d.agent else d.agent_id }}</span></td>
 
                 <td>
                     <strong>{{ d.customer_name }}</strong>
-
-                    {% if d.customer_phone %}
-                    <div class="muted small">{{ d.customer_phone }}</div>
-                    {% endif %}
-
-                    {% if d.address %}
-                    <div class="muted small">{{ d.address }}</div>
-                    {% endif %}
+                    {% if d.customer_phone %}<div class="muted small">{{ d.customer_phone }}</div>{% endif %}
+                    {% if d.address %}<div class="muted small">{{ d.address }}</div>{% endif %}
                 </td>
 
                 <td>
-
                     {% if d.status == "DELIVERED" %}
                     <span class="badge b-green">DELIVERED</span>
-
                     {% elif d.status == "OUT_FOR_DELIVERY" %}
                     <span class="badge b-blue">OUT FOR DELIVERY</span>
-
                     {% elif d.status == "FAILED" %}
                     <span class="badge b-red">FAILED</span>
-
                     {% elif d.status == "RETURNED" %}
                     <span class="badge b-yellow">RETURNED</span>
-
                     {% else %}
                     <span class="badge">PENDING</span>
                     {% endif %}
-
-                </td>
-
-                <td class="muted">
-                    {{ d.delivered_at if d.delivered_at else "-" }}
                 </td>
 
                 <td>
-                    <a class="badge b-purple" href="/deliveries/{{ d.id }}">View</a>
+                    <div class="progWrap">
+                        {% if d.status == "DELIVERED" %}
+                        <div class="prog" style="width:{{ pct }}%; background: rgba(45,212,191,.85);"></div>
+                        {% elif d.status == "FAILED" %}
+                        <div class="prog" style="width:{{ pct }}%; background: rgba(251,113,133,.85);"></div>
+                        {% elif d.status == "RETURNED" %}
+                        <div class="prog" style="width:{{ pct }}%; background: rgba(251,191,36,.85);"></div>
+                        {% else %}
+                        <div class="prog" style="width:{{ pct }}%; background: rgba(79,124,255,.85);"></div>
+                        {% endif %}
+                    </div>
+                    <div class="muted small" style="margin-top:6px;">{{ pct }}%</div>
                 </td>
 
+                <td><a class="badge b-purple" href="/deliveries/{{ d.id }}">View</a></td>
             </tr>
             {% endfor %}
-
         </tbody>
     </table>
-
 </div>
-
 {% endblock %}
