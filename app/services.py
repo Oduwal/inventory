@@ -4,14 +4,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, func, case, desc
 from sqlalchemy.orm import Session
 
-from .models import Item, Transaction
+from .models import Item, Transaction, Delivery, DeliveryItem
 
 
 def stock_subquery():
-    """
-    Calculates stock per item:
-    SUM(IN qty) - SUM(OUT qty)
-    """
     signed_qty = case(
         (Transaction.type == "IN", Transaction.quantity),
         (Transaction.type == "OUT", -Transaction.quantity),
@@ -35,7 +31,7 @@ def get_items_with_stock(db: Session):
         .outerjoin(sq, sq.c.item_id == Item.id)
         .order_by(Item.name.asc())
     )
-    return db.execute(stmt).all()  # list[(Item, stock)]
+    return db.execute(stmt).all()
 
 
 def get_item_with_stock(db: Session, item_id: int):
@@ -45,7 +41,7 @@ def get_item_with_stock(db: Session, item_id: int):
         .outerjoin(sq, sq.c.item_id == Item.id)
         .where(Item.id == item_id)
     )
-    return db.execute(stmt).first()  # (Item, stock) | None
+    return db.execute(stmt).first()
 
 
 def get_low_stock(db: Session):
@@ -103,7 +99,7 @@ def stock_by_category(db: Session):
         .group_by(func.coalesce(Item.category, "Uncategorized"))
         .order_by(func.sum(func.coalesce(sq.c.stock, 0)).desc())
     )
-    return db.execute(stmt).all()  # list[(category, stock)]
+    return db.execute(stmt).all()
 
 
 def in_out_last_7_days(db: Session):
@@ -129,3 +125,53 @@ def top_items_by_stock(db: Session, limit: int = 5):
         .limit(limit)
     )
     return db.execute(stmt).all()
+
+
+def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
+    """
+    Stock subtract happens only once:
+    Existing OUT transactions linked to this delivery prevent double-deduction.
+    """
+    existing_out = db.scalar(
+        select(func.count(Transaction.id))
+        .where(Transaction.delivery_id == delivery_id)
+        .where(Transaction.type == "OUT")
+    ) or 0
+
+    if int(existing_out) > 0:
+        return
+
+    delivery = db.get(Delivery, delivery_id)
+    if not delivery:
+        raise ValueError("Delivery not found")
+
+    lines = db.execute(
+        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+    ).scalars().all()
+
+    if not lines:
+        raise ValueError("Order has no items")
+
+    # Stock check
+    for li in lines:
+        row = get_item_with_stock(db, li.item_id)
+        if not row:
+            raise ValueError("Item missing")
+        _it, stock = row
+        if int(stock) < int(li.quantity):
+            raise ValueError("Insufficient stock for one or more items")
+
+    # Create OUT transactions
+    for li in lines:
+        db.add(
+            Transaction(
+                item_id=li.item_id,
+                delivery_id=delivery_id,
+                type="OUT",
+                quantity=li.quantity,
+                reference=f"DELIVERY #{delivery_id}",
+                note=f"Auto-deduct on delivered by {performed_by}",
+            )
+        )
+
+    db.flush()

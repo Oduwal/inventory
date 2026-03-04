@@ -1,59 +1,172 @@
 {% extends "base.html" %}
+{% block title %}New Order{% endblock %}
+{% block page_title %}New Order{% endblock %}
+{% block page_subtitle %}Create an order for delivery. Stock subtracts only when delivered.{% endblock %}
+{% set active = 'deliveries' %}
+
 {% block content %}
-<h1>New Delivery</h1>
+<style>
+    .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
 
-<form class="form" method="post" action="/deliveries/new">
-    <label>Agent</label>
-    <select name="agent_id" required>
-        {% for a in agents %}
-        <option value="{{ a.id }}">{{ a.username }}{% if a.full_name %} - {{ a.full_name }}{% endif %}</option>
-        {% endfor %}
-    </select>
+    @media (max-width: 820px) {
+        .grid2 {
+            grid-template-columns: 1fr;
+        }
+    }
 
-    <label>Customer name</label>
-    <input name="customer_name" required />
+    .lineHead {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
 
-    <label>Customer phone</label>
-    <input name="customer_phone" />
+    .lineRow {
+        display: grid;
+        grid-template-columns: 2.2fr 1fr auto;
+        gap: 10px;
+        align-items: end;
+    }
 
-    <label>Address</label>
-    <input name="address" />
+    @media (max-width: 820px) {
+        .lineRow {
+            grid-template-columns: 1fr;
+        }
+    }
 
-    <label>Note</label>
-    <input name="note" />
+    .btnGhost {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.04);
+        color: var(--text);
+        cursor: pointer;
+    }
 
-    <div class="card">
-        <h2>Items</h2>
-        <div id="lines"></div>
-        <button type="button" class="button" onclick="addLine()">Add Item</button>
-    </div>
+        .btnGhost:hover {
+            background: rgba(255,255,255,.06);
+        }
 
-    <button class="primary" type="submit">Create Delivery</button>
-</form>
+    .btnDanger {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(251,113,133,.45);
+        background: rgba(251,113,133,.10);
+        color: var(--text);
+        cursor: pointer;
+    }
+
+        .btnDanger:hover {
+            background: rgba(251,113,133,.14);
+        }
+</style>
+
+<div class="card">
+    <div class="badge b-blue">ORDER DETAILS</div>
+
+    <form method="post" action="/deliveries/new" style="margin-top:12px;">
+        <div class="grid2">
+
+            {% if user.role == "ADMIN" %}
+            <div>
+                <label>Assign Agent</label>
+                <select name="agent_id" required>
+                    {% for a in agents %}
+                    <option value="{{ a.id }}">{{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% else %}
+            <input type="hidden" name="agent_id" value="{{ user.id }}">
+            <div>
+                <label>Agent</label>
+                <input value="{{ user.username }}" disabled />
+            </div>
+            {% endif %}
+
+            <div>
+                <label>Customer Name</label>
+                <input name="customer_name" required placeholder="Customer full name" />
+            </div>
+
+            <div>
+                <label>Customer Phone</label>
+                <input name="customer_phone" placeholder="Optional" />
+            </div>
+
+            <div>
+                <label>Address</label>
+                <input name="address" placeholder="Optional" />
+            </div>
+
+            <div style="grid-column: 1 / -1;">
+                <label>Note</label>
+                <input name="note" placeholder="Optional instructions" />
+            </div>
+
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+            <div class="lineHead">
+                <div>
+                    <span class="badge b-purple">ORDER ITEMS</span>
+                    <div class="muted small" style="margin-top:6px;">Add one or more items. Quantity must be greater than 0.</div>
+                </div>
+                <button class="btnGhost" type="button" id="addRowBtn">+ Add Item</button>
+            </div>
+
+            <div id="lines" style="margin-top:12px; display:flex; flex-direction:column; gap:10px;">
+                <div class="lineRow line">
+                    <div>
+                        <label>Item</label>
+                        <select name="item_id" required>
+                            {% for it in items %}
+                            <option value="{{ it.id }}">{{ it.name }}{% if it.sku %} ({{ it.sku }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label>Quantity</label>
+                        <input name="quantity" type="number" min="1" value="1" required />
+                    </div>
+
+                    <div>
+                        <button class="btnDanger" type="button" onclick="removeLine(this)">Remove</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+            <button class="btnPrimary" type="submit">Create Order</button>
+            <a class="btnGhost" href="/deliveries">Cancel</a>
+        </div>
+    </form>
+</div>
 
 <script>
-const items = {{ items | tojson }};
-function addLine(){
-  const wrap = document.getElementById("lines");
-  const div = document.createElement("div");
-  div.className = "row";
-  const sel = document.createElement("select");
-  sel.name = "item_id";
-  items.forEach(i => {
-    const o = document.createElement("option");
-    o.value = i.id;
-    o.textContent = i.name;
-    sel.appendChild(o);
-  });
-  const qty = document.createElement("input");
-  qty.type = "number";
-  qty.min = "1";
-  qty.value = "1";
-  qty.name = "quantity";
-  div.appendChild(sel);
-  div.appendChild(qty);
-  wrap.appendChild(div);
-}
-addLine();
+    const lines = document.getElementById("lines");
+    const addRowBtn = document.getElementById("addRowBtn");
+
+    function removeLine(btn) {
+        const all = lines.querySelectorAll(".line");
+        if (all.length <= 1) return;
+        btn.closest(".line").remove();
+    }
+
+    function addLine() {
+        const first = lines.querySelector(".line");
+        const clone = first.cloneNode(true);
+        clone.querySelector('input[name="quantity"]').value = 1;
+        lines.appendChild(clone);
+    }
+
+    addRowBtn.addEventListener("click", addLine);
 </script>
 {% endblock %}
