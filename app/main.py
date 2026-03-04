@@ -1107,3 +1107,15 @@ def cash_new(
     if d_id:
         return redirect(f"/deliveries/{d_id}")
     return redirect("/cash")
+
+from sqlalchemy import text
+
+@app.get("/admin/reset-system")
+def reset_system(db: Session = Depends(get_db)):
+    db.execute(text("TRUNCATE TABLE cash_entries RESTART IDENTITY CASCADE"))
+    db.execute(text("TRUNCATE TABLE cash_logs RESTART IDENTITY CASCADE"))
+    db.execute(text("TRUNCATE TABLE delivery_items RESTART IDENTITY CASCADE"))
+    db.execute(text("TRUNCATE TABLE deliveries RESTART IDENTITY CASCADE"))
+    db.execute(text("TRUNCATE TABLE transactions RESTART IDENTITY CASCADE"))
+    db.commit()
+    return {"status": "Database reset complete"}
