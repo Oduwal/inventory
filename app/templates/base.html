@@ -273,9 +273,15 @@
         <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
           <span class="dot"></span> Transactions
         </a>
-        <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
-          <span class="dot"></span> Deliveries
-        </a>
+        {% if user.role == "ADMIN" %}
+  <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+    <span class="dot"></span> Deliveries
+  </a>
+{% else %}
+  <a href="/my-deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+    <span class="dot"></span> Deliveries
+  </a>
+{% endif %}
         <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
           <span class="dot"></span> Agents
         </a>
