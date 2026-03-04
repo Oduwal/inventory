@@ -1,42 +1,84 @@
 {% extends "base.html" %}
+
+{% block title %}Delivery{% endblock %}
+
 {% block content %}
-<h1>Delivery #{{ d.id }}</h1>
-
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <div class="card">
-    <div><b>Customer:</b> {{ d.customer_name }}</div>
-    <div><b>Phone:</b> {{ d.customer_phone or "" }}</div>
-    <div><b>Address:</b> {{ d.address or "" }}</div>
-    <div><b>Status:</b> <span class="pill">{{ d.status }}</span></div>
+
+    <h2>Delivery #{{ d.id }}</h2>
+
+    <p><b>Customer:</b> {{ d.customer_name }}</p>
+    <p><b>Phone:</b> {{ d.customer_phone }}</p>
+    <p><b>Status:</b> {{ d.status }}</p>
+
 </div>
 
 <div class="card">
-    <h2>Items</h2>
-    <table class="table">
-        <tr><th>Item</th><th>Qty</th></tr>
-        {% for li, item in d_items %}
-        <tr><td>{{ item.name }}</td><td>{{ li.quantity }}</td></tr>
+
+    <h3>Items</h3>
+
+    <table>
+
+        <tr>
+            <th>Item</th>
+            <th>Quantity</th>
+        </tr>
+
+        {% for di,item in d_items %}
+
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ di.quantity }}</td>
+        </tr>
+
         {% endfor %}
+
     </table>
+
 </div>
 
-{% if d.status != "DELIVERED" %}
-<form method="post" action="/deliveries/{{ d.id }}/delivered">
-    <button class="primary" type="submit" onclick="return confirm('Mark as delivered and deduct stock?');">
-        Mark Delivered
-    </button>
-</form>
 
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-    <input type="hidden" name="status" value="OUT_FOR_DELIVERY">
-    <button class="btnPrimary" type="submit">Start Delivery</button>
-</form>
+<div class="card">
 
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-    <input type="hidden" name="status" value="DELIVERED">
-    <button class="btnPrimary" type="submit">Mark Delivered</button>
-</form>
-{% endif %}
+    <h3>Record Money</h3>
+
+    <form method="post" action="/cash/new">
+
+        <input type="hidden" name="delivery_id" value="{{ d.id }}">
+
+        <select name="kind">
+            <option value="COLLECTION">Money Collected</option>
+            <option value="EXPENSE">Expense</option>
+        </select>
+
+        <input type="number" step="0.01" name="amount" placeholder="Amount">
+
+        <input name="note" placeholder="Note">
+
+        <button class="btnPrimary">Save</button>
+
+    </form>
+
+</div>
+
+
+<div class="card">
+
+    <h3>Delivery Finance</h3>
+
+    <p class="badge b-blue">
+        Collected: {{ '%.2f'|format(collection_total) }}
+    </p>
+
+    <p class="badge b-red">
+        Expenses: {{ '%.2f'|format(expense_total) }}
+    </p>
+
+    <p class="badge b-purple">
+        Profit: {{ '%.2f'|format(collection_total-expense_total) }}
+    </p>
+
+</div>
 
 {% endblock %}
