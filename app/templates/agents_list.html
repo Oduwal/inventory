@@ -2,8 +2,8 @@
 {% extends "base.html" %}
 {% block title %}Agents{% endblock %}
 {% block page_title %}Agents{% endblock %}
-{% block page_subtitle %}Manage agents and view their daily/weekly/monthly performance.{% endblock %}
-{% set active = "agents" %}
+{% block page_subtitle %}Manage delivery agents and view their cash + delivery summaries.{% endblock %}
+{% set active = 'agents' %}
 
 {% block top_right %}
 <a class="btnPrimary" href="/agents/new">+ New Agent</a>
@@ -13,14 +13,15 @@
 <div class="card">
     <div class="badge b-purple">AGENTS</div>
 
-    <div style="margin-top:12px; overflow:auto;">
+    <div style="margin-top:12px;">
         <table>
             <thead>
                 <tr>
                     <th>ID</th>
                     <th>Username</th>
-                    <th>Full Name</th>
+                    <th>Full name</th>
                     <th>Phone</th>
+                    <th>Created</th>
                     <th>Open</th>
                 </tr>
             </thead>
@@ -28,15 +29,20 @@
                 {% if agents and agents|length > 0 %}
                 {% for a in agents %}
                 <tr>
-                    <td>{{ a.id }}</td>
+                    <td>#{{ a.id }}</td>
                     <td>{{ a.username }}</td>
                     <td>{{ a.full_name or "-" }}</td>
                     <td>{{ a.phone or "-" }}</td>
-                    <td><a class="btnPrimary" href="/agents/{{ a.id }}">View</a></td>
+                    <td>{{ a.created_at or "-" }}</td>
+                    <td>
+                        <a class="btnPrimary" href="/agents/{{ a.id }}">View</a>
+                    </td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="5" class="muted">No agents found.</td></tr>
+                <tr>
+                    <td colspan="6" class="muted">No agents found.</td>
+                </tr>
                 {% endif %}
             </tbody>
         </table>

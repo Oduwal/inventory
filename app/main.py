@@ -11,17 +11,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, desc, func, case, and_
+from sqlalchemy import select, text, desc, func
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Item, Transaction, User, Delivery, DeliveryItem
-# CashLog is optional in some repos; raw SQL is used to keep runtime stable even if model is missing.
-try:
-    from .models import CashLog  # type: ignore
-except Exception:  # pragma: no cover
-    CashLog = None  # type: ignore
-
+from .models import Item, Transaction, User, Delivery, DeliveryItem, CashEntry
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -33,6 +27,8 @@ from .services import (
     in_out_last_7_days,
     top_items_by_stock,
     create_out_transactions_for_delivery_if_needed,
+    cash_range_from_preset,
+    get_cash_summary,
 )
 
 app = FastAPI()
@@ -108,7 +104,6 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    # Safe migrations (no-op if already applied).
     with engine.connect() as conn:
         # transactions.delivery_id
         try:
@@ -130,7 +125,7 @@ def ensure_schema() -> None:
             except Exception:
                 pass
 
-        # delivery_items.line_amount (collected per line)
+        # delivery_items.line_amount
         try:
             conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
         except Exception:
@@ -140,29 +135,28 @@ def ensure_schema() -> None:
             except Exception:
                 pass
 
-        # cash_logs table (for COLLECTION/EXPENSE entries)
+        # cash_entries.kind extension (OPERATING_CASH)
+        # If a CHECK constraint exists from older runs, keep runtime safe by trying to relax it.
         try:
-            conn.execute(text("SELECT id FROM cash_logs LIMIT 1"))
+            conn.execute(text("SELECT kind FROM cash_entries LIMIT 1"))
         except Exception:
-            try:
-                conn.execute(
-                    text(
-                        """
-                        CREATE TABLE IF NOT EXISTS cash_logs (
-                            id SERIAL PRIMARY KEY,
-                            agent_id INTEGER,
-                            delivery_id INTEGER,
-                            kind VARCHAR(32) NOT NULL,
-                            amount NUMERIC NOT NULL,
-                            note TEXT,
-                            created_at TIMESTAMP DEFAULT NOW()
-                        )
-                        """
-                    )
+            # Table might not exist yet; Base.metadata.create_all() normally creates it.
+            pass
+
+        # Best-effort: drop older constraint name if it exists, then recreate broader one.
+        # Failures are ignored to avoid breaking deployment.
+        try:
+            conn.execute(text("ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind"))
+            conn.execute(
+                text(
+                    "ALTER TABLE cash_entries "
+                    "ADD CONSTRAINT ck_cash_kind "
+                    "CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH'))"
                 )
-                conn.commit()
-            except Exception:
-                pass
+            )
+            conn.commit()
+        except Exception:
+            pass
 
 
 def seed_admin_if_missing() -> None:
@@ -636,7 +630,7 @@ def agent_create(
     return redirect("/agents")
 
 
-def _range_from_preset(preset: str | None, start_date: str | None, end_date: str | None) -> tuple[date | None, date | None, str]:
+def _range_dates_from_inputs(preset: str | None, start_date: str | None, end_date: str | None):
     p = (preset or "").strip().lower()
     today = date.today()
 
@@ -674,59 +668,42 @@ def agent_detail(
         return forbid
 
     agent = db.get(User, agent_id)
-    if not agent or agent.role != "AGENT":
+    if not agent or (agent.role or "").upper() != "AGENT":
         return HTMLResponse("Agent not found", status_code=404)
 
-    sd, ed, preset_norm = _range_from_preset(preset, start_date, end_date)
+    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
-    where_parts = ["agent_id = :agent_id"]
-    params: dict = {"agent_id": agent_id}
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd:
+            start_dt = datetime.combine(sd, datetime.min.time())
+        if ed:
+            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
 
-    if sd:
-        where_parts.append("DATE(created_at) >= :sd")
-        params["sd"] = sd.isoformat()
-    if ed:
-        where_parts.append("DATE(created_at) <= :ed")
-        params["ed"] = ed.isoformat()
+    rows, total_collections, total_expenses, total_operating = get_cash_summary(
+        db=db, agent_id=agent_id, start=start_dt, end=end_dt
+    )
+    operating_balance = float(total_operating) - float(total_expenses)
 
-    where_sql = " AND ".join(where_parts)
+    expense_entries = db.scalars(
+        select(CashEntry)
+        .where(CashEntry.agent_id == agent_id)
+        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.created_at >= (start_dt or datetime.min))
+        .where(CashEntry.created_at < (end_dt or datetime.max))
+        .order_by(desc(CashEntry.created_at))
+        .limit(300)
+    ).all()
 
-    rows = db.execute(
-        text(
-            f"""
-            SELECT
-              DATE(created_at) AS day,
-              COALESCE(SUM(CASE WHEN kind='COLLECTION' THEN amount ELSE 0 END), 0) AS collections,
-              COALESCE(SUM(CASE WHEN kind='EXPENSE' THEN amount ELSE 0 END), 0) AS expenses
-            FROM cash_logs
-            WHERE {where_sql}
-            GROUP BY DATE(created_at)
-            ORDER BY DATE(created_at) DESC
-            """
-        ),
-        params,
-    ).mappings().all()
-
-    totals = db.execute(
-        text(
-            f"""
-            SELECT
-              COALESCE(SUM(CASE WHEN kind='COLLECTION' THEN amount ELSE 0 END), 0) AS collections,
-              COALESCE(SUM(CASE WHEN kind='EXPENSE' THEN amount ELSE 0 END), 0) AS expenses
-            FROM cash_logs
-            WHERE {where_sql}
-            """
-        ),
-        params,
-    ).mappings().first() or {"collections": 0, "expenses": 0}
-
-    deliveries_count = db.scalar(
-        select(func.count(Delivery.id)).where(Delivery.agent_id == agent_id)
-    ) or 0
-
-    total_collections = float(totals["collections"] or 0)
-    total_expenses = float(totals["expenses"] or 0)
-    profit = total_collections - total_expenses
+    delivery_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
+    if start_dt:
+        delivery_stmt = delivery_stmt.where(Delivery.created_at >= start_dt)
+    if end_dt:
+        delivery_stmt = delivery_stmt.where(Delivery.created_at < end_dt)
+    deliveries = db.scalars(delivery_stmt).all()
 
     return templates.TemplateResponse(
         "agent_detail.html",
@@ -735,10 +712,12 @@ def agent_detail(
             "user": user,
             "agent": agent,
             "rows": rows,
-            "total_collections": total_collections,
-            "total_expenses": total_expenses,
-            "profit": profit,
-            "deliveries_count": int(deliveries_count),
+            "total_collections": float(total_collections),
+            "total_expenses": float(total_expenses),
+            "total_operating_cash": float(total_operating),
+            "operating_balance": operating_balance,
+            "expense_entries": expense_entries,
+            "deliveries": deliveries,
             "preset": preset_norm or (preset or ""),
             "start_date": sd.isoformat() if sd else "",
             "end_date": ed.isoformat() if ed else "",
@@ -802,7 +781,6 @@ def delivery_create(
     note: str = Form(""),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
-    # optional amounts (template may send none; code handles missing)
     line_amount: list[float] = Form(default=[]),
     db: Session = Depends(get_db),
 ):
@@ -883,22 +861,20 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         .where(DeliveryItem.delivery_id == d.id)
     ).all()
 
-    # delivery finance totals from cash_logs
-    col = db.execute(
-        text(
-            "SELECT COALESCE(SUM(amount),0) AS total FROM cash_logs WHERE delivery_id=:d AND kind='COLLECTION'"
-        ),
-        {"d": d.id},
-    ).mappings().first()
-    exp = db.execute(
-        text(
-            "SELECT COALESCE(SUM(amount),0) AS total FROM cash_logs WHERE delivery_id=:d AND kind='EXPENSE'"
-        ),
-        {"d": d.id},
-    ).mappings().first()
+    # Delivery cash entries (extra collection + expenses)
+    col = db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.delivery_id == d.id)
+        .where(CashEntry.kind == "COLLECTION")
+    ) or 0
+    exp = db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.delivery_id == d.id)
+        .where(CashEntry.kind == "EXPENSE")
+    ) or 0
 
-    collection_total = float((col or {}).get("total") or 0)
-    expense_total = float((exp or {}).get("total") or 0)
+    collection_total = float(col or 0)
+    expense_total = float(exp or 0)
 
     return templates.TemplateResponse(
         "delivery_detail.html",
@@ -953,7 +929,16 @@ def update_delivery_status(
             ).all()
             return templates.TemplateResponse(
                 "delivery_detail.html",
-                {"request": request, "d": d, "d_items": d_items, "user": user, "error": str(e), "collection_total": 0, "expense_total": 0},
+                {
+                    "request": request,
+                    "d": d,
+                    "d_items": d_items,
+                    "user": user,
+                    "error": str(e),
+                    "collection_total": 0,
+                    "expense_total": 0,
+                    "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
+                },
             )
         return redirect(f"/deliveries/{delivery_id}")
 
@@ -978,60 +963,33 @@ def cash_dashboard(
         return user_or
     user = user_or
 
-    sd, ed, preset_norm = _range_from_preset(preset, start_date, end_date)
+    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
-    where_parts = []
-    params: dict = {}
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd:
+            start_dt = datetime.combine(sd, datetime.min.time())
+        if ed:
+            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
 
+    selected_agent_id = None
     if is_admin(user):
         if (agent_id or "").isdigit():
-            where_parts.append("agent_id = :agent_id")
-            params["agent_id"] = int(agent_id)
+            selected_agent_id = int(agent_id)
     else:
-        where_parts.append("agent_id = :agent_id")
-        params["agent_id"] = user.id
+        selected_agent_id = user.id
 
-    if sd:
-        where_parts.append("DATE(created_at) >= :sd")
-        params["sd"] = sd.isoformat()
-    if ed:
-        where_parts.append("DATE(created_at) <= :ed")
-        params["ed"] = ed.isoformat()
+    rows, total_collections, total_expenses, total_operating = get_cash_summary(
+        db=db,
+        agent_id=selected_agent_id,
+        start=start_dt,
+        end=end_dt,
+    )
 
-    where_sql = " AND ".join(where_parts) if where_parts else "1=1"
-
-    rows = db.execute(
-        text(
-            f"""
-            SELECT
-              DATE(created_at) AS day,
-              COALESCE(SUM(CASE WHEN kind='COLLECTION' THEN amount ELSE 0 END), 0) AS collections,
-              COALESCE(SUM(CASE WHEN kind='EXPENSE' THEN amount ELSE 0 END), 0) AS expenses
-            FROM cash_logs
-            WHERE {where_sql}
-            GROUP BY DATE(created_at)
-            ORDER BY DATE(created_at) DESC
-            """
-        ),
-        params,
-    ).mappings().all()
-
-    totals = db.execute(
-        text(
-            f"""
-            SELECT
-              COALESCE(SUM(CASE WHEN kind='COLLECTION' THEN amount ELSE 0 END), 0) AS collections,
-              COALESCE(SUM(CASE WHEN kind='EXPENSE' THEN amount ELSE 0 END), 0) AS expenses
-            FROM cash_logs
-            WHERE {where_sql}
-            """
-        ),
-        params,
-    ).mappings().first() or {"collections": 0, "expenses": 0}
-
-    total_collections = float(totals["collections"] or 0)
-    total_expenses = float(totals["expenses"] or 0)
-    profit = total_collections - total_expenses
+    operating_balance = float(total_operating) - float(total_expenses)
 
     agents = []
     if is_admin(user):
@@ -1043,9 +1001,10 @@ def cash_dashboard(
             "request": request,
             "user": user,
             "rows": rows,
-            "total_collections": total_collections,
-            "total_expenses": total_expenses,
-            "profit": profit,
+            "total_collections": float(total_collections),
+            "total_expenses": float(total_expenses),
+            "total_operating_cash": float(total_operating),
+            "operating_balance": operating_balance,
             "agents": agents,
             "agent_id": agent_id,
             "preset": preset_norm or (preset or ""),
@@ -1071,27 +1030,30 @@ def cash_new(
     user = user_or
 
     k = (kind or "").strip().upper()
-    if k not in {"COLLECTION", "EXPENSE"}:
+    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
 
     amt = float(amount or 0)
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
 
-    agent = user.id
+    # Agent selection rules:
+    # Agent can only create entries for self.
+    # Admin can create for any agent.
+    target_agent_id = user.id
     if is_admin(user) and (agent_id or "").isdigit():
-        agent = int(agent_id)
+        target_agent_id = int(agent_id)
 
     d_id = int(delivery_id) if (delivery_id or "").isdigit() else None
 
-    db.execute(
-        text(
-            """
-            INSERT INTO cash_logs (agent_id, delivery_id, kind, amount, note, created_at)
-            VALUES (:agent_id, :delivery_id, :kind, :amount, :note, NOW())
-            """
-        ),
-        {"agent_id": agent, "delivery_id": d_id, "kind": k, "amount": amt, "note": (note or "").strip() or None},
+    db.add(
+        CashEntry(
+            agent_id=target_agent_id,
+            delivery_id=d_id,
+            kind=k,
+            amount=amt,
+            note=(note or "").strip() or None,
+        )
     )
     db.commit()
 

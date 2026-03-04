@@ -1,3 +1,4 @@
+# app/services.py
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -128,10 +129,6 @@ def top_items_by_stock(db: Session, limit: int = 5):
 
 
 def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
-    """
-    Stock deduct happens ONLY when delivery becomes DELIVERED.
-    Idempotent: no duplicate OUT transactions for same delivery.
-    """
     existing_out = db.scalar(
         select(func.count(Transaction.id))
         .where(Transaction.delivery_id == delivery_id)
@@ -173,25 +170,26 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
 
 
 def cash_range_from_preset(preset: str | None):
+    p = (preset or "").strip().lower()
     now = datetime.utcnow()
     today = now.date()
 
-    if preset == "today":
+    if p == "today":
         start = datetime.combine(today, datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
 
-    if preset == "yesterday":
+    if p == "yesterday":
         start = datetime.combine(today - timedelta(days=1), datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
 
-    if preset == "7d":
+    if p == "7d":
         end = now
         start = now - timedelta(days=7)
         return start, end
 
-    if preset == "30d":
+    if p == "30d":
         end = now
         start = now - timedelta(days=30)
         return start, end
@@ -202,6 +200,7 @@ def cash_range_from_preset(preset: str | None):
 def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, end: datetime | None):
     """
     Collections = sum(DeliveryItem.line_amount) + sum(CashEntry COLLECTION)
+    Operating cash = sum(CashEntry OPERATING_CASH)
     Expenses = sum(CashEntry EXPENSE)
 
     Grouped by day.
@@ -229,6 +228,7 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     delivery_rows = db.execute(delivery_stmt).all()
 
     c_day = func.date(CashEntry.created_at).label("day")
+
     expenses_sum = func.coalesce(
         func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)),
         0,
@@ -239,11 +239,17 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
         0,
     ).label("extra_collections")
 
+    operating_sum = func.coalesce(
+        func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)),
+        0,
+    ).label("operating_cash")
+
     cash_stmt = (
         select(
             c_day,
             expenses_sum,
             extra_collections_sum,
+            operating_sum,
         )
         .select_from(CashEntry)
         .group_by(c_day)
@@ -263,19 +269,21 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
 
     for r in delivery_rows:
         key = str(r.day)
-        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0})
+        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0, "operating_cash": 0.0})
         by_day[key]["collections"] += float(r.delivery_collections or 0)
 
     for r in cash_rows:
         key = str(r.day)
-        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0})
+        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0, "operating_cash": 0.0})
         by_day[key]["collections"] += float(r.extra_collections or 0)
         by_day[key]["expenses"] += float(r.expenses or 0)
+        by_day[key]["operating_cash"] += float(r.operating_cash or 0)
 
     merged = list(by_day.values())
     merged.sort(key=lambda x: x["day"])
 
     total_collections = sum(x["collections"] for x in merged)
     total_expenses = sum(x["expenses"] for x in merged)
+    total_operating = sum(x["operating_cash"] for x in merged)
 
-    return merged, float(total_collections), float(total_expenses)
+    return merged, float(total_collections), float(total_expenses), float(total_operating)
