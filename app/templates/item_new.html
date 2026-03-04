@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}New Item{% endblock %}
+{% block page_title %}New Item{% endblock %}
+{% block page_subtitle %}Add a new product to inventory.{% endblock %}
+{% set active = "items" %}
+
+{% block top_right %}
+<a class="btnGhost" href="/items">Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="badge b-blue">ITEM DETAILS</div>
+
+    {% if error %}
+    <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/items/new" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Name</label>
+                <input name="name" required placeholder="e.g. Xemdem Tea" />
+            </div>
+
+            <div>
+                <label>SKU (optional)</label>
+                <input name="sku" placeholder="e.g. XEM-TEA-01" />
+            </div>
+
+            <div>
+                <label>Category (optional)</label>
+                <input name="category" placeholder="e.g. Drinks" />
+            </div>
+
+            <div>
+                <label>Unit</label>
+                <input name="unit" value="pcs" placeholder="pcs, pack, bottle..." />
+            </div>
+
+            <div>
+                <label>Reorder Level</label>
+                <input name="reorder_level" type="number" min="0" value="0" />
+            </div>
+
+            <div>
+                <label>Cost Price</label>
+                <input name="cost_price" type="number" step="0.01" min="0" value="0" />
+            </div>
+
+            <div>
+                <label>Selling Price</label>
+                <input name="selling_price" type="number" step="0.01" min="0" value="0" />
+            </div>
+
+            <div>
+                <button class="btnPrimary" type="submit">Save Item</button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}

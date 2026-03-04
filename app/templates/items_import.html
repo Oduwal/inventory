@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Import Items{% endblock %}
+{% block page_title %}Import Items{% endblock %}
+{% block page_subtitle %}Upload items in bulk (CSV).{% endblock %}
+{% set active = "items" %}
+
+{% block top_right %}
+<a class="btnGhost" href="/items">Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="badge b-purple">IMPORT</div>
+
+    <div class="muted" style="margin-top:12px;">
+        Import is enabled on the backend route <b>/items/import</b>.
+        CSV upload handling can be added next. For now, use “New Item”.
+    </div>
+
+    <div style="margin-top:14px;">
+        <a class="btnPrimary" href="/items/new">+ New Item</a>
+    </div>
+</div>
+{% endblock %}
