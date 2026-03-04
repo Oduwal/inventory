@@ -18,11 +18,11 @@
                 <label>Status</label>
                 <select name="status">
                     <option value="" {% if not status %}selected{% endif %}>All</option>
-                    <option value="PENDING" {% if status= ="PENDING" %}selected{% endif %}>PENDING</option>
-                    <option value="OUT_FOR_DELIVERY" {% if status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
-                    <option value="DELIVERED" {% if status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
-                    <option value="FAILED" {% if status= ="FAILED" %}selected{% endif %}>FAILED</option>
-                    <option value="RETURNED" {% if status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
+                    <option value="PENDING" {% if status =="PENDING" %}selected{% endif %}>PENDING</option>
+                    <option value="OUT_FOR_DELIVERY" {% if status =="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
+                    <option value="DELIVERED" {% if status =="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                    <option value="FAILED" {% if status =="FAILED" %}selected{% endif %}>FAILED</option>
+                    <option value="RETURNED" {% if status =="RETURNED" %}selected{% endif %}>RETURNED</option>
                 </select>
             </div>
 
@@ -31,7 +31,7 @@
                 <select name="agent_id">
                     <option value="" {% if not agent_id %}selected{% endif %}>All</option>
                     {% for a in agents %}
-                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int= =a.id) %}selected{% endif %}>
+                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int == a.id) %}selected{% endif %}>
                         {{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}
                     </option>
                     {% endfor %}
