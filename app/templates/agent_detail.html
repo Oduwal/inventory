@@ -19,10 +19,10 @@
                 <label>Quick Filter</label>
                 <select name="preset">
                     <option value="" {% if not preset %}selected{% endif %}>Custom</option>
-                    <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
-                    <option value="yesterday" {% if preset= ="yesterday" %}selected{% endif %}>Yesterday</option>
-                    <option value="7d" {% if preset= ="7d" %}selected{% endif %}>Last 7 days</option>
-                    <option value="30d" {% if preset= ="30d" %}selected{% endif %}>Last 30 days</option>
+                    <option value="today" {% if preset=="today" %}selected{% endif %}>Today</option>
+                    <option value="yesterday" {% if preset=="yesterday" %}selected{% endif %}>Yesterday</option>
+                    <option value="7d" {% if preset=="7d" %}selected{% endif %}>Last 7 days</option>
+                    <option value="30d" {% if preset=="30d" %}selected{% endif %}>Last 30 days</option>
                 </select>
             </div>
 
