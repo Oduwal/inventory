@@ -1,34 +1,99 @@
 {% extends "base.html" %}
-{% block content %}
-<h1>Items</h1>
+{% block title %}Items{% endblock %}
+{% block page_title %}Items{% endblock %}
+{% block page_subtitle %}Manage products, categories (merchants), and stock levels.{% endblock %}
+{% set active = "items" %}
 
-<div class="row">
-    <a class="button primary" href="/items/new">Add Item</a>
-    <a class="button" href="/import">Import Items</a>
+{% block top_right %}
+<div style="display:flex; gap:10px; flex-wrap:wrap;">
+    {% if user and user.role == "ADMIN" %}
+    <a class="btnPrimary" href="/items/new">+ New Item</a>
+    <a class="btnGhost" href="/items/import">Import</a>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <div class="badge b-blue">FILTERS</div>
+
+    <form method="get" action="/items" style="margin-top:12px;">
+        <div class="inputs">
+            <div style="min-width:240px;">
+                <label>Search</label>
+                <input type="text" name="q" value="{{ q or '' }}" placeholder="Search name / SKU / category" />
+            </div>
+
+            <div>
+                <button class="btnPrimary" type="submit">Apply</button>
+            </div>
+
+            <div>
+                <a class="btnGhost" href="/items">Reset</a>
+            </div>
+        </div>
+    </form>
 </div>
 
-<table class="table">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Stock</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for item, stock in rows %}
-        <tr>
-            <td>{{ item.name }}</td>
-            <td>{{ stock }}</td>
-            <td>
-                <form method="post" action="/items/{{ item.id }}/delete" style="display:inline;">
-                    <button class="danger" type="submit" onclick="return confirm('Delete this item?');">
-                        Delete
-                    </button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-purple">ITEMS</div>
+
+    <div style="margin-top:12px; overflow:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>SKU</th>
+                    <th>Category / Merchant</th>
+                    <th>Unit</th>
+                    <th>Stock</th>
+                    <th>Reorder</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% if rows and rows|length > 0 %}
+                {% for item, stock in rows %}
+                <tr>
+                    <td style="font-weight:800;">
+                        <a href="/items/{{ item.id }}" style="color:inherit; text-decoration:underline;">
+                            {{ item.name }}
+                        </a>
+                    </td>
+
+                    <td>{{ item.sku or "-" }}</td>
+                    <td>{{ item.category or "-" }}</td>
+                    <td>{{ item.unit or "pcs" }}</td>
+
+                    <td>
+                        {% set rl = (item.reorder_level or 0) %}
+                        {% if (stock|int) <= (rl|int) %}
+                        <span class="badge b-red">{{ stock }}</span>
+                        {% else %}
+                        <span class="badge b-green">{{ stock }}</span>
+                        {% endif %}
+                    </td>
+
+                    <td>{{ item.reorder_level or 0 }}</td>
+
+                    <td style="white-space:nowrap;">
+                        <a class="btnPrimary" href="/items/{{ item.id }}">View</a>
+                        {% if user and user.role == "ADMIN" %}
+                        <a class="btnGhost" href="/items/{{ item.id }}/edit">Edit</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="7" class="muted">No items found.</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
 {% endblock %}

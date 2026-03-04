@@ -5,7 +5,9 @@
 {% set active = "items" %}
 
 {% block top_right %}
-<a class="btnGhost" href="/items/{{ item.id }}">Back</a>
+<div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <a class="btnGhost" href="/items/{{ item.id }}">Back</a>
+</div>
 {% endblock %}
 
 {% block content %}
