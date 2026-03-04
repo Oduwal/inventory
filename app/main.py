@@ -623,6 +623,27 @@ def agent_create(
     return redirect("/agents")
 
 
+def _range_dates_from_inputs(
+    preset: str | None, start_date: str | None, end_date: str | None
+) -> tuple[date | None, date | None, str]:
+    p = (preset or "").strip().lower()
+    today = date.today()
+
+    if p == "today":
+        return today, today, "today"
+    if p == "yesterday":
+        y = today - timedelta(days=1)
+        return y, y, "yesterday"
+    if p == "7d":
+        return today - timedelta(days=6), today, "7d"
+    if p == "30d":
+        return today - timedelta(days=29), today, "30d"
+
+    sd = date.fromisoformat(start_date) if start_date else None
+    ed = date.fromisoformat(end_date) if end_date else None
+    return sd, ed, ""
+
+
 @app.get("/agents/{agent_id}", response_class=HTMLResponse)
 def agent_detail(
     request: Request,
@@ -647,50 +668,95 @@ def agent_detail(
 
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
-    start_dt = datetime.combine(sd, datetime.min.time()) if sd else None
-    end_dt = (datetime.combine(ed, datetime.min.time()) + timedelta(days=1)) if ed else None
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd:
+            start_dt = datetime.combine(sd, datetime.min.time())
+        if ed:
+            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
 
-    # Deliveries table for this agent within selected range
+    # Cash summary for THIS agent (office expenses remain global inside get_cash_summary)
+    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(
+        db=db,
+        agent_id=agent_id,
+        start=start_dt,
+        end=end_dt,
+    )
+
+    operating_balance = float(total_operating) - float(total_expenses)
+    remittance = float(total_collections) - float(total_office_expenses)
+    net_position = remittance + operating_balance
+
+    # Deliveries list for range
     d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
+
     if start_dt:
         d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
     if end_dt:
         d_stmt = d_stmt.where(Delivery.created_at < end_dt)
 
     deliveries = db.execute(d_stmt).scalars().all()
-    delivery_ids = [d.id for d in deliveries]
-    items_summary = build_items_summary_for_deliveries(db, delivery_ids)
 
-    # Cash summary (OPERATING_CASH + EXPENSE + COLLECTION)
-    rows, total_collections, total_expenses, total_operating = get_cash_summary(
-        db=db,
-        agent_id=agent_id,
-        start=start_dt,
-        end=end_dt,
+    # Items summary per delivery: "Item ×Qty, Item ×Qty"
+    delivery_ids = [d.id for d in deliveries]
+    items_summary: dict[int, str] = {}
+
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+
+        grouped: dict[int, list[str]] = {}
+        for did, name, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{name} ×{int(qty)}")
+
+        for did, parts in grouped.items():
+            items_summary[did] = ", ".join(parts)
+
+            # ---------------- Cash entry details (audit list) ----------------
+    cash_stmt = select(CashEntry).order_by(desc(CashEntry.created_at))
+
+    if start_dt:
+        cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
+
+    if end_dt:
+        cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
+
+    # Show: agent entries + office expenses
+    cash_stmt = cash_stmt.where(
+        (CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE")
     )
-    operating_balance = float(total_operating) - float(total_expenses)
+
+    cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
     return templates.TemplateResponse(
         "agent_detail.html",
         {
+            "cash_entries": cash_entries,
             "request": request,
             "user": user,
             "agent": agent,
-            "preset": preset_norm or (preset or ""),
-            "start_date": sd.isoformat() if sd else "",
-            "end_date": ed.isoformat() if ed else "",
-
             "rows": rows,
+            "deliveries": deliveries,
+            "items_summary": items_summary,
             "total_collections": float(total_collections),
             "total_expenses": float(total_expenses),
             "total_operating_cash": float(total_operating),
             "operating_balance": float(operating_balance),
-
-            "deliveries": deliveries,
-            "items_summary": items_summary,
+            "total_office_expenses": float(total_office_expenses),
+            "remittance": float(remittance),
+            "net_position": float(net_position),
+            "preset": preset_norm or (preset or ""),
+            "start_date": sd.isoformat() if sd else "",
+            "end_date": ed.isoformat() if ed else "",
         },
     )
-
 
 # ---------------- Deliveries / Orders ----------------
 
@@ -928,6 +994,8 @@ def cash_dashboard(
         return user_or
     user = user_or
 
+    # You already have this helper in your file in earlier updates:
+    # _range_dates_from_inputs(preset, start_date, end_date)
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
     start_dt = None
@@ -947,7 +1015,8 @@ def cash_dashboard(
     else:
         selected_agent_id = user.id
 
-    rows, total_collections, total_expenses, total_operating = get_cash_summary(
+    # Updated service returns office expenses too
+    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(
         db=db,
         agent_id=selected_agent_id,
         start=start_dt,
@@ -955,6 +1024,8 @@ def cash_dashboard(
     )
 
     operating_balance = float(total_operating) - float(total_expenses)
+    remittance = float(total_collections) - float(total_office_expenses)
+    net_position = remittance + operating_balance
 
     agents = []
     if is_admin(user):
@@ -970,6 +1041,9 @@ def cash_dashboard(
             "total_expenses": float(total_expenses),
             "total_operating_cash": float(total_operating),
             "operating_balance": float(operating_balance),
+            "total_office_expenses": float(total_office_expenses),
+            "remittance": float(remittance),
+            "net_position": float(net_position),
             "agents": agents,
             "agent_id": agent_id,
             "preset": preset_norm or (preset or ""),
@@ -995,17 +1069,27 @@ def cash_new(
     user = user_or
 
     k = (kind or "").strip().upper()
-    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH"}:
+    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
+
+    # Only admin can create OFFICE_EXPENSE
+    if k == "OFFICE_EXPENSE" and not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
 
     amt = float(amount or 0)
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
 
-    # Agent can only create entries for self; admin can create for any agent
+    # Agent rules:
+    # - Agent can only create for self
+    # - Admin can create for any agent
     target_agent_id = user.id
     if is_admin(user) and (agent_id or "").isdigit():
         target_agent_id = int(agent_id)
+
+    # Office expense is global; keep it tied to admin (agent_id ignored in totals anyway)
+    if k == "OFFICE_EXPENSE":
+        target_agent_id = user.id
 
     d_id = int(delivery_id) if (delivery_id or "").isdigit() else None
 

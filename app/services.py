@@ -1,4 +1,3 @@
-# app/services.py
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -65,7 +64,11 @@ def dashboard_stats(db: Session):
     items_count = db.scalar(select(func.count(Item.id))) or 0
     low_stock_count = len(get_low_stock(db))
     recent = get_recent_transactions(db, limit=10)
-    return {"items_count": items_count, "low_stock_count": low_stock_count, "recent_transactions": recent}
+    return {
+        "items_count": items_count,
+        "low_stock_count": low_stock_count,
+        "recent_transactions": recent,
+    }
 
 
 def dashboard_kpis(db: Session):
@@ -166,23 +169,25 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
 
 
 def cash_range_from_preset(preset: str | None):
-    p = (preset or "").strip().lower()
     now = datetime.utcnow()
     today = now.date()
 
-    if p == "today":
+    if preset == "today":
         start = datetime.combine(today, datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
-    if p == "yesterday":
+
+    if preset == "yesterday":
         start = datetime.combine(today - timedelta(days=1), datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
-    if p == "7d":
+
+    if preset == "7d":
         end = now
         start = now - timedelta(days=7)
         return start, end
-    if p == "30d":
+
+    if preset == "30d":
         end = now
         start = now - timedelta(days=30)
         return start, end
@@ -192,12 +197,24 @@ def cash_range_from_preset(preset: str | None):
 
 def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, end: datetime | None):
     """
-    Collections = sum(DeliveryItem.line_amount) + sum(CashEntry COLLECTION)
-    Operating cash = sum(CashEntry OPERATING_CASH)
-    Expenses = sum(CashEntry EXPENSE)
+    DAILY SUMMARY
 
-    Grouped by day.
+    Collections:
+      - DeliveryItem.line_amount summed per day (deliveries)
+      - + CashEntry.kind == COLLECTION (extra)
+
+    Operating cash:
+      - CashEntry.kind == OPERATING_CASH
+
+    Agent expenses:
+      - CashEntry.kind == EXPENSE  (subtract from operating cash only)
+
+    Office expenses (GLOBAL):
+      - CashEntry.kind == OFFICE_EXPENSE (subtract from remittance only)
+      - Agent filter does NOT apply to office expenses.
     """
+
+    # --- Delivery collections by day (optionally filtered by agent) ---
     d_day = func.date(Delivery.created_at).label("day")
 
     delivery_stmt = (
@@ -220,52 +237,95 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
 
     delivery_rows = db.execute(delivery_stmt).all()
 
+    # --- Cash entries by day (filtered by agent where appropriate) ---
     c_day = func.date(CashEntry.created_at).label("day")
-    expenses_sum = func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0).label(
-        "expenses"
-    )
+
     extra_collections_sum = func.coalesce(
-        func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)), 0
+        func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)),
+        0,
     ).label("extra_collections")
+
     operating_sum = func.coalesce(
-        func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)), 0
+        func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)),
+        0,
     ).label("operating_cash")
 
+    agent_expenses_sum = func.coalesce(
+        func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)),
+        0,
+    ).label("expenses")
+
+    # office expenses are global; agent filter must NOT apply
+    office_expenses_sum = func.coalesce(
+        func.sum(case((CashEntry.kind == "OFFICE_EXPENSE", CashEntry.amount), else_=0)),
+        0,
+    ).label("office_expenses")
+
     cash_stmt = (
-        select(c_day, expenses_sum, extra_collections_sum, operating_sum)
+        select(
+            c_day,
+            extra_collections_sum,
+            operating_sum,
+            agent_expenses_sum,
+            office_expenses_sum,
+        )
         .select_from(CashEntry)
         .group_by(c_day)
         .order_by(c_day.asc())
     )
 
-    if agent_id:
-        cash_stmt = cash_stmt.where(CashEntry.agent_id == agent_id)
     if start:
         cash_stmt = cash_stmt.where(CashEntry.created_at >= start)
     if end:
         cash_stmt = cash_stmt.where(CashEntry.created_at < end)
 
+    # Filter agent-linked kinds only
+    if agent_id:
+        cash_stmt = cash_stmt.where(
+            (CashEntry.kind == "OFFICE_EXPENSE") | (CashEntry.agent_id == agent_id)
+        )
+
     cash_rows = db.execute(cash_stmt).all()
 
     by_day: dict[str, dict] = {}
 
+    def ensure(day_key: str):
+        by_day.setdefault(
+            day_key,
+            {
+                "day": day_key,
+                "collections": 0.0,
+                "operating_cash": 0.0,
+                "expenses": 0.0,
+                "office_expenses": 0.0,
+            },
+        )
+
     for r in delivery_rows:
         key = str(r.day)
-        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0, "operating_cash": 0.0})
+        ensure(key)
         by_day[key]["collections"] += float(r.delivery_collections or 0)
 
     for r in cash_rows:
         key = str(r.day)
-        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0, "operating_cash": 0.0})
+        ensure(key)
         by_day[key]["collections"] += float(r.extra_collections or 0)
-        by_day[key]["expenses"] += float(r.expenses or 0)
         by_day[key]["operating_cash"] += float(r.operating_cash or 0)
+        by_day[key]["expenses"] += float(r.expenses or 0)
+        by_day[key]["office_expenses"] += float(r.office_expenses or 0)
 
     merged = list(by_day.values())
     merged.sort(key=lambda x: x["day"])
 
     total_collections = sum(x["collections"] for x in merged)
-    total_expenses = sum(x["expenses"] for x in merged)
     total_operating = sum(x["operating_cash"] for x in merged)
+    total_expenses = sum(x["expenses"] for x in merged)
+    total_office_expenses = sum(x["office_expenses"] for x in merged)
 
-    return merged, float(total_collections), float(total_expenses), float(total_operating)
+    return (
+        merged,
+        float(total_collections),
+        float(total_expenses),
+        float(total_operating),
+        float(total_office_expenses),
+    )
