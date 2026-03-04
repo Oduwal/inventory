@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Item #{{ item.id }}{% endblock %}
+{% block page_title %}{{ item.name }}{% endblock %}
+{% block page_subtitle %}SKU, category/merchant, stock level, and transaction history.{% endblock %}
+{% set active = "items" %}
+
+{% block top_right %}
+<div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <a class="btnGhost" href="/items">Back</a>
+    {% if user and user.role == "ADMIN" %}
+    <a class="btnPrimary" href="/items/{{ item.id }}/edit">Edit Item</a>
+    <a class="btnGhost" href="/transactions/new">+ New Transaction</a>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <div class="badge b-blue">SUMMARY</div>
+
+    <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+        <div>
+            <div class="muted">Name</div>
+            <div style="font-weight:900; font-size:18px;">{{ item.name }}</div>
+
+            <div class="muted" style="margin-top:10px;">SKU</div>
+            <div>{{ item.sku or "-" }}</div>
+
+            <div class="muted" style="margin-top:10px;">Category / Merchant</div>
+            <div>{{ item.category or "-" }}</div>
+        </div>
+
+        <div>
+            <div class="muted">Unit</div>
+            <div>{{ item.unit or "pcs" }}</div>
+
+            <div class="muted" style="margin-top:10px;">Reorder level</div>
+            <div>{{ item.reorder_level or 0 }}</div>
+
+            <div class="muted" style="margin-top:10px;">Stock available</div>
+            <div style="font-weight:900; font-size:20px;">
+                {{ stock }}
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+        <span class="badge b-purple">Cost: ₦{{ '%.2f'|format(item.cost_price|float) }}</span>
+        <span class="badge b-green">Selling: ₦{{ '%.2f'|format(item.selling_price|float) }}</span>
+    </div>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-purple">TRANSACTIONS</div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Reference</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if txs and txs|length > 0 %}
+                {% for t in txs %}
+                <tr>
+                    <td>{{ t.created_at }}</td>
+                    <td>
+                        {% if t.type == "IN" %}
+                        <span class="badge b-green">IN</span>
+                        {% else %}
+                        <span class="badge b-red">OUT</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ t.quantity }}</td>
+                    <td>{{ t.reference or "-" }}</td>
+                    <td>{{ t.note or "-" }}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="5" class="muted">No transactions found for this item.</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}

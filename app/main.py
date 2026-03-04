@@ -350,6 +350,74 @@ def items_import_submit(request: Request, db: Session = Depends(get_db)):
 
     return JSONResponse({"detail": "Import endpoint exists. CSV upload handling can be added next."})
 
+@app.get("/items/{item_id}/edit", response_class=HTMLResponse)
+def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    item = db.get(Item, item_id)
+    if not item:
+        return HTMLResponse("Item not found", status_code=404)
+
+    error = request.query_params.get("error")
+    return templates.TemplateResponse(
+        "item_edit.html",
+        {"request": request, "user": user, "item": item, "error": error},
+    )
+
+
+@app.post("/items/{item_id}/edit")
+def item_edit_submit(
+    request: Request,
+    item_id: int,
+    name: str = Form(...),
+    sku: str = Form(""),
+    category: str = Form(""),
+    unit: str = Form("pcs"),
+    reorder_level: int = Form(0),
+    cost_price: float = Form(0),
+    selling_price: float = Form(0),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    item = db.get(Item, item_id)
+    if not item:
+        return HTMLResponse("Item not found", status_code=404)
+
+    name_clean = name.strip()
+    if not name_clean:
+        return redirect(f"/items/{item_id}/edit?error=Name+is+required")
+
+    sku_clean = (sku or "").strip() or None
+    if sku_clean:
+        exists = db.scalar(select(Item).where(Item.sku == sku_clean).where(Item.id != item_id))
+        if exists:
+            return redirect(f"/items/{item_id}/edit?error=SKU+already+exists")
+
+    item.name = name_clean
+    item.sku = sku_clean
+    item.category = (category or "").strip() or None
+    item.unit = (unit or "pcs").strip() or "pcs"
+    item.reorder_level = int(reorder_level or 0)
+    item.cost_price = float(cost_price or 0)
+    item.selling_price = float(selling_price or 0)
+
+    db.commit()
+    return redirect(f"/items/{item_id}")
 
 @app.get("/items/{item_id}", response_class=HTMLResponse)
 def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
