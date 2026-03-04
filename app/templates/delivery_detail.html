@@ -1,23 +1,28 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}Delivery #{{ d.id }}{% endblock %}
 {% block page_title %}Delivery #{{ d.id }}{% endblock %}
-{% block page_subtitle %}Customer, items, status updates, and delivery finance.{% endblock %}
+{% block page_subtitle %}Customer, items, status updates, and money tracking.{% endblock %}
 
 {% block top_right %}
-<a class="btnGhost" href="/deliveries">Back</a>
+<a class="btnGhost" href="{{ back_url or '/deliveries' }}">Back</a>
 {% endblock %}
 
 {% block content %}
 
 <div class="card">
     <div class="badge b-blue">DETAILS</div>
+
     <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
         <div>
             <div class="muted">Customer</div>
             <div style="font-weight:800; font-size:16px;">{{ d.customer_name }}</div>
             <div class="muted" style="margin-top:6px;">Phone: {{ d.customer_phone or "-" }}</div>
             <div class="muted">Address: {{ d.address or "-" }}</div>
+            {% if d.note %}
+            <div class="muted" style="margin-top:8px;">Note: {{ d.note }}</div>
+            {% endif %}
         </div>
+
         <div>
             <div class="muted">Status</div>
             <div style="margin-top:6px;">
@@ -44,10 +49,12 @@
                             <option value="RETURNED" {% if d.status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
                         </select>
                     </div>
+
                     <div>
                         <button class="btnPrimary" type="submit">Save</button>
                     </div>
                 </div>
+
                 {% if error %}
                 <div class="badge b-red" style="margin-top:10px;">{{ error }}</div>
                 {% endif %}
@@ -58,47 +65,60 @@
 
 <div class="card" style="margin-top:14px;">
     <div class="badge b-purple">ITEMS</div>
+
     <div style="margin-top:12px;">
         <table>
             <thead>
                 <tr>
                     <th>Item</th>
                     <th>Qty</th>
+                    <th>Amount Collected (₦)</th>
                 </tr>
             </thead>
             <tbody>
+                {% set line_total = 0 %}
                 {% for di, it in d_items %}
+                {% set line_total = line_total + (di.line_amount|float) %}
                 <tr>
                     <td>{{ it.name }}</td>
                     <td>{{ di.quantity }}</td>
+                    <td>{{ '%.2f'|format(di.line_amount|float) }}</td>
                 </tr>
                 {% endfor %}
+                <tr>
+                    <td colspan="2" style="font-weight:800;">Line Total</td>
+                    <td style="font-weight:800;">{{ '%.2f'|format(line_total) }}</td>
+                </tr>
             </tbody>
         </table>
     </div>
 </div>
 
 <div class="card" style="margin-top:14px;">
-    <div class="badge b-blue">RECORD MONEY</div>
+    <div class="badge b-blue">RECORD EXPENSE OR EXTRA COLLECTION</div>
 
     <form method="post" action="/cash/new" style="margin-top:12px;">
         <input type="hidden" name="delivery_id" value="{{ d.id }}">
+
         <div class="inputs">
             <div>
                 <label>Type</label>
                 <select name="kind" required>
-                    <option value="COLLECTION">Money Collected</option>
+                    <option value="COLLECTION">Extra Collection</option>
                     <option value="EXPENSE">Expense</option>
                 </select>
             </div>
+
             <div>
                 <label>Amount</label>
                 <input type="number" name="amount" step="0.01" min="0.01" required />
             </div>
+
             <div style="min-width:240px;">
                 <label>Note</label>
                 <input type="text" name="note" placeholder="Fuel, dispatch, etc." />
             </div>
+
             <div>
                 <button class="btnPrimary" type="submit">Save</button>
             </div>
@@ -113,6 +133,10 @@
         <span class="badge b-blue">Collected: {{ '%.2f'|format(collection_total) }}</span>
         <span class="badge b-red">Expenses: {{ '%.2f'|format(expense_total) }}</span>
         <span class="badge b-purple">Profit: {{ '%.2f'|format(collection_total - expense_total) }}</span>
+    </div>
+
+    <div class="muted" style="margin-top:8px;">
+        Line totals come from the order form. Extra entries come from cash logs.
     </div>
 </div>
 

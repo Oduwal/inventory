@@ -129,8 +129,8 @@ def top_items_by_stock(db: Session, limit: int = 5):
 
 def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
     """
-    Deduct stock ONLY when delivery becomes DELIVERED.
-    Idempotent: if OUT tx already exists for this delivery, no duplication happens.
+    Stock gets deducted only when the delivery becomes DELIVERED.
+    Idempotent behavior prevents duplicate OUT transactions per delivery.
     """
     existing_out = (
         db.scalar(
@@ -152,7 +152,6 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     if not lines:
         raise ValueError("Order has no items")
 
-    # Stock check before deduction
     for li in lines:
         row = get_item_with_stock(db, li.item_id)
         if not row:
@@ -177,7 +176,19 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
 
 
 def get_delivery_finance(db: Session, delivery_id: int):
-    collection_total = (
+    """
+    Collections = sum(DeliveryItem.line_amount) + extra cash logs (COLLECTION)
+    Expenses = sum cash logs (EXPENSE)
+    """
+    line_total = (
+        db.scalar(
+            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+            .where(DeliveryItem.delivery_id == delivery_id)
+        )
+        or 0
+    )
+
+    extra_collection = (
         db.scalar(
             select(func.coalesce(func.sum(CashLog.amount), 0))
             .where(CashLog.delivery_id == delivery_id)
@@ -185,6 +196,7 @@ def get_delivery_finance(db: Session, delivery_id: int):
         )
         or 0
     )
+
     expense_total = (
         db.scalar(
             select(func.coalesce(func.sum(CashLog.amount), 0))
@@ -193,6 +205,8 @@ def get_delivery_finance(db: Session, delivery_id: int):
         )
         or 0
     )
+
+    collection_total = float(line_total) + float(extra_collection)
     return float(collection_total), float(expense_total)
 
 
@@ -222,7 +236,6 @@ def _preset_range(preset: str | None):
 def get_cash_summary(db: Session, agent_id: int | None, preset: str | None, start_date: str | None, end_date: str | None):
     start_dt, end_dt = _preset_range(preset)
 
-    # Custom range overrides preset
     if start_date:
         y, m, d = [int(x) for x in start_date.split("-")]
         start_dt = datetime(y, m, d)
@@ -252,7 +265,6 @@ def get_cash_summary(db: Session, agent_id: int | None, preset: str | None, star
     stmt = stmt.group_by(func.date(CashLog.created_at)).order_by(func.date(CashLog.created_at).desc())
 
     rows = db.execute(stmt).all()
-
     total_collections = sum(float(r.collections) for r in rows)
     total_expenses = sum(float(r.expenses) for r in rows)
 

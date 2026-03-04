@@ -13,7 +13,7 @@ from sqlalchemy import select, text, desc
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Item, Transaction, User, Delivery, DeliveryItem, CashLog
+from .models import Item, Transaction, User, Delivery, DeliveryItem
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -52,16 +52,51 @@ app.add_middleware(
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
+def redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(url=path, status_code=303)
+
+
+def is_admin(user: User) -> bool:
+    return (user.role or "").upper() == "ADMIN"
+
+
+def hash_password(plain_password: str) -> str:
+    return pwd_context.hash(plain_password)
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    if (password_hash or "").startswith("$2"):
+        try:
+            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+        except Exception:
+            return False
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    # Safe migration: add delivery_id to transactions if missing (SQLite-friendly attempt).
+    # Safe SQLite-style migrations
     with engine.connect() as conn:
+        # transactions.delivery_id
         try:
             conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
         except Exception:
             try:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # delivery_items.line_amount
+        try:
+            conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) DEFAULT 0"))
                 conn.commit()
             except Exception:
                 pass
@@ -80,7 +115,8 @@ def seed_admin_if_missing() -> None:
         if existing_admin:
             return
 
-        if db.scalar(select(User).where(User.username == admin_user)):
+        existing_username = db.scalar(select(User).where(User.username == admin_user))
+        if existing_username:
             return
 
         db.add(
@@ -102,14 +138,6 @@ def _startup() -> None:
     seed_admin_if_missing()
 
 
-def redirect(path: str) -> RedirectResponse:
-    return RedirectResponse(url=path, status_code=303)
-
-
-def is_admin(user: User) -> bool:
-    return (user.role or "").upper() == "ADMIN"
-
-
 def get_current_user(db: Session, request: Request) -> User | None:
     user_id = request.session.get("user_id")
     if not user_id:
@@ -124,31 +152,9 @@ def require_login_or_redirect(db: Session, request: Request) -> User | RedirectR
     return user
 
 
-def require_admin_or_403(user: User) -> HTMLResponse | None:
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
-    return None
-
-
-def verify_password(plain_password: str, password_hash: str) -> bool:
-    if (password_hash or "").startswith("$2"):
-        try:
-            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
-        except Exception:
-            return False
-    try:
-        return pwd_context.verify(plain_password, password_hash)
-    except Exception:
-        return False
-
-
-def hash_password(plain_password: str) -> str:
-    return pwd_context.hash(plain_password)
-
-
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None, "user": None})
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "user": None, "active": ""})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -160,7 +166,9 @@ def login(
 ):
     u = db.scalar(select(User).where(User.username == username.strip()))
     if not u or not verify_password(password, u.password_hash):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid login.", "user": None})
+        return templates.TemplateResponse(
+            "login.html", {"request": request, "error": "Invalid login.", "user": None, "active": ""}
+        )
 
     request.session["user_id"] = u.id
     request.session["role"] = u.role
@@ -283,9 +291,8 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
 
     rows = get_items_with_stock(db)
     items = [i for (i, _s) in rows]
@@ -311,9 +318,8 @@ def tx_create(
         return user_or
     user = user_or
 
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
 
     tx_type = (tx_type or "").strip().upper()
     if tx_type not in {"IN", "OUT"}:
@@ -351,6 +357,9 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
     rows = get_low_stock(db)
     return templates.TemplateResponse(
         "low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"}
@@ -364,9 +373,8 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
 
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
     return templates.TemplateResponse(
@@ -417,7 +425,10 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+    agents = []
+    if is_admin(user):
+        agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+
     items = db.execute(select(Item).order_by(Item.name.asc())).scalars().all()
 
     return templates.TemplateResponse(
@@ -436,6 +447,7 @@ def delivery_create(
     note: str = Form(""),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
+    line_amount: list[float] = Form(...),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -443,11 +455,12 @@ def delivery_create(
         return user_or
     user = user_or
 
+    chosen_agent_id = int(agent_id)
     if not is_admin(user):
-        agent_id = user.id
+        chosen_agent_id = user.id
 
     d = Delivery(
-        agent_id=int(agent_id),
+        agent_id=chosen_agent_id,
         customer_name=customer_name.strip(),
         customer_phone=customer_phone.strip() or None,
         address=address.strip() or None,
@@ -457,10 +470,24 @@ def delivery_create(
     db.add(d)
     db.flush()
 
-    for iid, qty in zip(item_id, quantity):
+    added_any = False
+    for iid, qty, amt in zip(item_id, quantity, line_amount):
         q = int(qty) if qty is not None else 0
+        a = float(amt) if amt is not None else 0.0
         if q > 0:
-            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q))
+            db.add(
+                DeliveryItem(
+                    delivery_id=d.id,
+                    item_id=int(iid),
+                    quantity=q,
+                    line_amount=a,
+                )
+            )
+            added_any = True
+
+    if not added_any:
+        db.rollback()
+        return HTMLResponse("Order must contain at least one item", status_code=400)
 
     db.commit()
     return redirect(f"/deliveries/{d.id}")
@@ -505,6 +532,8 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
 
     collection_total, expense_total = get_delivery_finance(db, d.id)
 
+    back_url = "/deliveries" if is_admin(user) else "/my-deliveries"
+
     return templates.TemplateResponse(
         "delivery_detail.html",
         {
@@ -516,6 +545,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             "error": None,
             "collection_total": collection_total,
             "expense_total": expense_total,
+            "back_url": back_url,
         },
     )
 
@@ -557,6 +587,7 @@ def update_delivery_status(
                 .where(DeliveryItem.delivery_id == d.id)
             ).all()
             collection_total, expense_total = get_delivery_finance(db, d.id)
+            back_url = "/deliveries" if is_admin(user) else "/my-deliveries"
             return templates.TemplateResponse(
                 "delivery_detail.html",
                 {
@@ -568,6 +599,7 @@ def update_delivery_status(
                     "error": str(e),
                     "collection_total": collection_total,
                     "expense_total": expense_total,
+                    "back_url": back_url,
                 },
             )
         return redirect(f"/deliveries/{delivery_id}")
@@ -590,7 +622,6 @@ def cash_dashboard(request: Request, db: Session = Depends(get_db)):
     agent_id_raw = request.query_params.get("agent_id", "")
 
     selected_agent_id: int | None = None
-
     if is_admin(user):
         if agent_id_raw.isdigit():
             selected_agent_id = int(agent_id_raw)
