@@ -129,8 +129,8 @@ def top_items_by_stock(db: Session, limit: int = 5):
 
 def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
     """
-    Stock subtract happens only once:
-    Existing OUT transactions linked to this delivery prevent double-deduction.
+    Deduct stock ONLY when delivery becomes DELIVERED.
+    Idempotent: if OUT tx already exists for this delivery, no duplication happens.
     """
     existing_out = db.scalar(
         select(func.count(Transaction.id))
@@ -152,7 +152,7 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     if not lines:
         raise ValueError("Order has no items")
 
-    # Stock check
+    # Stock check before deduction
     for li in lines:
         row = get_item_with_stock(db, li.item_id)
         if not row:
@@ -161,7 +161,6 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
         if int(stock) < int(li.quantity):
             raise ValueError("Insufficient stock for one or more items")
 
-    # Create OUT transactions
     for li in lines:
         db.add(
             Transaction(

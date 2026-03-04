@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,13 +53,14 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
+    # Safe migration: ensure transactions.delivery_id exists
     with engine.connect() as conn:
-        # Ensure delivery_id exists on transactions for older DBs
         try:
             conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
         except Exception:
             try:
                 conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
+                conn.commit()
             except Exception:
                 pass
 
@@ -76,8 +78,7 @@ def seed_admin_if_missing() -> None:
         if existing_admin:
             return
 
-        existing_username = db.scalar(select(User).where(User.username == admin_user))
-        if existing_username:
+        if db.scalar(select(User).where(User.username == admin_user)):
             return
 
         db.add(
@@ -99,19 +100,19 @@ def _startup() -> None:
     seed_admin_if_missing()
 
 
-def get_current_user(db: Session, request: Request) -> User | None:
-    user_id = request.session.get("user_id")
-    if not user_id:
-        return None
-    return db.get(User, int(user_id))
+def redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(url=path, status_code=303)
 
 
 def is_admin(user: User) -> bool:
     return (user.role or "").upper() == "ADMIN"
 
 
-def redirect(path: str) -> RedirectResponse:
-    return RedirectResponse(url=path, status_code=303)
+def get_current_user(db: Session, request: Request) -> User | None:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return None
+    return db.get(User, int(user_id))
 
 
 def require_login_or_redirect(db: Session, request: Request) -> User | RedirectResponse:
@@ -130,13 +131,9 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
 def verify_password(plain_password: str, password_hash: str) -> bool:
     if (password_hash or "").startswith("$2"):
         try:
-            return bcrypt_lib.checkpw(
-                plain_password.encode("utf-8"),
-                password_hash.encode("utf-8"),
-            )
+            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
         except Exception:
             return False
-
     try:
         return pwd_context.verify(plain_password, password_hash)
     except Exception:
@@ -213,9 +210,7 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"count": 0}, status_code=401)
-
-    low = get_low_stock(db)
-    return {"count": len(low)}
+    return {"count": len(get_low_stock(db))}
 
 
 # ---------------- Items ----------------
@@ -241,6 +236,28 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
     return templates.TemplateResponse("items_list.html", {"request": request, "rows": rows, "q": q, "user": user})
 
 
+@app.get("/items/{item_id}", response_class=HTMLResponse)
+def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    row = get_item_with_stock(db, item_id)
+    if not row:
+        return HTMLResponse("Item not found", status_code=404)
+    item, stock = row
+
+    txs = db.scalars(
+        select(Transaction).where(Transaction.item_id == item_id).order_by(desc(Transaction.created_at)).limit(200)
+    ).all()
+
+    return templates.TemplateResponse(
+        "item_detail.html",
+        {"request": request, "item": item, "stock": stock, "txs": txs, "user": user},
+    )
+
+
 # ---------------- Transactions ----------------
 
 @app.get("/transactions", response_class=HTMLResponse)
@@ -250,8 +267,21 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    txs = get_recent_transactions(db, limit=200)
+    txs = get_recent_transactions(db, limit=300)
     return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user})
+
+
+# ---------------- Low stock ----------------
+
+@app.get("/low-stock", response_class=HTMLResponse)
+def low_stock(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    rows = get_low_stock(db)
+    return templates.TemplateResponse("low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"})
 
 
 # ---------------- Agents ----------------
@@ -269,41 +299,6 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
 
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
     return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
-
-
-@app.post("/agents/new")
-def agent_create(
-    request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
-    full_name: str = Form(""),
-    phone: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
-
-    username = username.strip()
-    if not username or db.scalar(select(User).where(User.username == username)):
-        return redirect("/agents")
-
-    db.add(
-        User(
-            username=username,
-            password_hash=hash_password(password),
-            role="AGENT",
-            full_name=full_name.strip() or None,
-            phone=phone.strip() or None,
-        )
-    )
-    db.commit()
-    return redirect("/agents")
 
 
 # ---------------- Deliveries / Orders ----------------
@@ -344,7 +339,6 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    # Admin sees agent picker, agent sees self only
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
     items = db.execute(select(Item).order_by(Item.name.asc())).scalars().all()
 
@@ -371,7 +365,7 @@ def delivery_create(
         return user_or
     user = user_or
 
-    # Agents can only create orders for themselves
+    # Agents can create orders only for themselves
     if not is_admin(user):
         agent_id = user.id
 
@@ -387,9 +381,9 @@ def delivery_create(
     db.flush()
 
     for iid, qty in zip(item_id, quantity):
-        qty_int = int(qty) if qty is not None else 0
-        if qty_int > 0:
-            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=qty_int))
+        q = int(qty) if qty is not None else 0
+        if q > 0:
+            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q))
 
     db.commit()
     return redirect(f"/deliveries/{d.id}")
