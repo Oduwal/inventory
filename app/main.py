@@ -10,7 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, desc
+from sqlalchemy import select, text, desc, func
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -26,10 +26,8 @@ from .services import (
     in_out_last_7_days,
     top_items_by_stock,
     create_out_transactions_for_delivery_if_needed,
-    delivery_line_total,
-    delivery_cash_totals,
-    cash_summary_by_day,
-    cash_totals,
+    cash_range_from_preset,
+    get_cash_summary,
 )
 
 app = FastAPI()
@@ -52,79 +50,6 @@ app.add_middleware(
 )
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
-
-
-def ensure_schema() -> None:
-    Base.metadata.create_all(bind=engine)
-
-    # Best-effort tiny migrations. Database owner might still need to run SQL manually on Postgres.
-    with engine.connect() as conn:
-        # transactions.delivery_id
-        try:
-            conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
-
-        # delivery_items.line_amount
-        try:
-            conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
-        except Exception:
-            for ddl in (
-                "ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) NOT NULL DEFAULT 0",
-                "ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) DEFAULT 0",
-            ):
-                try:
-                    conn.execute(text(ddl))
-                    conn.commit()
-                    break
-                except Exception:
-                    pass
-
-        # cash_entries table might be missing on older DBs
-        try:
-            conn.execute(text("SELECT id FROM cash_entries LIMIT 1"))
-        except Exception:
-            # create_all already handles it if DB allows, so ignore here
-            pass
-
-
-def seed_admin_if_missing() -> None:
-    admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
-    admin_pass = os.getenv("ADMIN_PASSWORD") or ""
-    if not admin_user or not admin_pass:
-        return
-
-    gen = get_db()
-    db = next(gen)
-    try:
-        existing_admin = db.scalar(select(User).where(User.role == "ADMIN"))
-        if existing_admin:
-            return
-
-        if db.scalar(select(User).where(User.username == admin_user)):
-            return
-
-        db.add(
-            User(
-                username=admin_user,
-                password_hash=hash_password(admin_pass),
-                role="ADMIN",
-                full_name="Admin",
-            )
-        )
-        db.commit()
-    finally:
-        gen.close()
-
-
-@app.on_event("startup")
-def _startup() -> None:
-    ensure_schema()
-    seed_admin_if_missing()
 
 
 def redirect(path: str) -> RedirectResponse:
@@ -171,6 +96,82 @@ def hash_password(plain_password: str) -> str:
     return pwd_context.hash(plain_password)
 
 
+def ensure_schema() -> None:
+    """
+    Creates tables and runs small safe migrations.
+    """
+    Base.metadata.create_all(bind=engine)
+
+    with engine.connect() as conn:
+        # transactions.delivery_id
+        try:
+            conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # delivery_items.line_amount
+        try:
+            conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC(12,2) NOT NULL DEFAULT 0"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # cash_entries table existence
+        try:
+            conn.execute(text("SELECT id FROM cash_entries LIMIT 1"))
+        except Exception:
+            # Table missing, Base.metadata.create_all should have created it in most cases.
+            # This block exists only as a fallback.
+            try:
+                Base.metadata.create_all(bind=engine)
+            except Exception:
+                pass
+
+
+def seed_admin_if_missing() -> None:
+    admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
+    admin_pass = os.getenv("ADMIN_PASSWORD") or ""
+    if not admin_user or not admin_pass:
+        return
+
+    gen = get_db()
+    db = next(gen)
+    try:
+        existing_admin = db.scalar(select(User).where(User.role == "ADMIN"))
+        if existing_admin:
+            return
+
+        if db.scalar(select(User).where(User.username == admin_user)):
+            return
+
+        db.add(
+            User(
+                username=admin_user,
+                password_hash=hash_password(admin_pass),
+                role="ADMIN",
+                full_name="Admin",
+            )
+        )
+        db.commit()
+    finally:
+        gen.close()
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    ensure_schema()
+    seed_admin_if_missing()
+
+
+# ---------------- Auth ----------------
+
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "error": None})
@@ -197,6 +198,8 @@ def logout(request: Request):
     request.session.clear()
     return redirect("/login")
 
+
+# ---------------- Home / Dashboard ----------------
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
@@ -240,8 +243,7 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
     return {"count": len(get_low_stock(db))}
 
 
-# ---------------- Items ----------------
-# Route order matters: /items/new and /items/import must come before /items/{item_id}
+# ---------------- Items (route order matters) ----------------
 
 @app.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
@@ -348,7 +350,8 @@ def items_import_submit(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
 
-    return JSONResponse({"detail": "Import endpoint exists. CSV upload handling can be added next."})
+    return JSONResponse({"detail": "Import endpoint exists. CSV upload can be added next."})
+
 
 @app.get("/items/{item_id}/edit", response_class=HTMLResponse)
 def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)):
@@ -366,10 +369,7 @@ def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)
         return HTMLResponse("Item not found", status_code=404)
 
     error = request.query_params.get("error")
-    return templates.TemplateResponse(
-        "item_edit.html",
-        {"request": request, "user": user, "item": item, "error": error},
-    )
+    return templates.TemplateResponse("item_edit.html", {"request": request, "user": user, "item": item, "error": error})
 
 
 @app.post("/items/{item_id}/edit")
@@ -418,6 +418,7 @@ def item_edit_submit(
 
     db.commit()
     return redirect(f"/items/{item_id}")
+
 
 @app.get("/items/{item_id}", response_class=HTMLResponse)
 def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
@@ -549,6 +550,63 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
 
 
+@app.get("/agents/{agent_id}", response_class=HTMLResponse)
+def agent_detail(
+    request: Request,
+    agent_id: int,
+    preset: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    agent = db.get(User, agent_id)
+    if not agent or (agent.role or "").upper() != "AGENT":
+        return HTMLResponse("Agent not found", status_code=404)
+
+    start, end = cash_range_from_preset(preset)
+
+    if start_date:
+        start = datetime.fromisoformat(start_date)
+    if end_date:
+        end = datetime.fromisoformat(end_date) + timedelta(days=1)
+
+    rows, total_collections, total_expenses = get_cash_summary(db, agent_id, start, end)
+    profit = float(total_collections) - float(total_expenses)
+
+    deliveries_count_stmt = select(func.count(Delivery.id)).where(Delivery.agent_id == agent_id)
+    if start:
+        deliveries_count_stmt = deliveries_count_stmt.where(Delivery.created_at >= start)
+    if end:
+        deliveries_count_stmt = deliveries_count_stmt.where(Delivery.created_at < end)
+    deliveries_count = int(db.scalar(deliveries_count_stmt) or 0)
+
+    return templates.TemplateResponse(
+        "agent_detail.html",
+        {
+            "request": request,
+            "user": user,
+            "agent": agent,
+            "preset": preset or "",
+            "start_date": start_date or "",
+            "end_date": end_date or "",
+            "rows": rows,
+            "total_collections": total_collections,
+            "total_expenses": total_expenses,
+            "profit": profit,
+            "deliveries_count": deliveries_count,
+        },
+    )
+
+
 # ---------------- Deliveries / Orders ----------------
 
 @app.get("/deliveries", response_class=HTMLResponse)
@@ -605,7 +663,7 @@ def delivery_create(
     note: str = Form(""),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
-    line_amount: list[float] = Form([]),
+    line_amount: list[float] = Form(...),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -615,6 +673,9 @@ def delivery_create(
 
     if not is_admin(user):
         agent_id = user.id
+
+    if len(item_id) != len(quantity) or len(item_id) != len(line_amount):
+        raise HTTPException(status_code=422, detail="Mismatched item lines")
 
     d = Delivery(
         agent_id=int(agent_id),
@@ -627,26 +688,18 @@ def delivery_create(
     db.add(d)
     db.flush()
 
-    added_any = False
-    for idx, (iid, qty) in enumerate(zip(item_id, quantity)):
+    for iid, qty, amt in zip(item_id, quantity, line_amount):
         q = int(qty) if qty is not None else 0
-        amt = line_amount[idx] if idx < len(line_amount) else 0
         a = float(amt) if amt is not None else 0.0
-
         if q > 0:
             db.add(
                 DeliveryItem(
                     delivery_id=d.id,
                     item_id=int(iid),
                     quantity=q,
-                    line_amount=a,
+                    line_amount=max(a, 0.0),
                 )
             )
-            added_any = True
-
-    if not added_any:
-        db.rollback()
-        return JSONResponse({"detail": "Add at least one item with quantity > 0"}, status_code=400)
 
     db.commit()
     return redirect(f"/deliveries/{d.id}")
@@ -686,11 +739,29 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         .where(DeliveryItem.delivery_id == d.id)
     ).all()
 
-    line_total = delivery_line_total(db, d.id)
-    extra_collections, extra_expenses = delivery_cash_totals(db, d.id)
+    line_collection_total = 0.0
+    for di, _it in d_items:
+        line_collection_total += float(di.line_amount or 0)
 
-    collection_total = float(line_total) + float(extra_collections)
-    expense_total = float(extra_expenses)
+    expense_total = float(
+        db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.delivery_id == d.id)
+            .where(CashEntry.kind == "EXPENSE")
+        )
+        or 0
+    )
+
+    extra_collection_total = float(
+        db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.delivery_id == d.id)
+            .where(CashEntry.kind == "COLLECTION")
+        )
+        or 0
+    )
+
+    collection_total = line_collection_total + extra_collection_total
 
     return templates.TemplateResponse(
         "delivery_detail.html",
@@ -700,8 +771,10 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             "d_items": d_items,
             "user": user,
             "error": None,
-            "collection_total": collection_total,
+            "line_collection_total": line_collection_total,
+            "extra_collection_total": extra_collection_total,
             "expense_total": expense_total,
+            "collection_total": collection_total,
         },
     )
 
@@ -743,11 +816,24 @@ def update_delivery_status(
                 .where(DeliveryItem.delivery_id == d.id)
             ).all()
 
-            line_total = delivery_line_total(db, d.id)
-            extra_collections, extra_expenses = delivery_cash_totals(db, d.id)
+            line_collection_total = sum(float(di.line_amount or 0) for di, _ in d_items)
 
-            collection_total = float(line_total) + float(extra_collections)
-            expense_total = float(extra_expenses)
+            expense_total = float(
+                db.scalar(
+                    select(func.coalesce(func.sum(CashEntry.amount), 0))
+                    .where(CashEntry.delivery_id == d.id)
+                    .where(CashEntry.kind == "EXPENSE")
+                )
+                or 0
+            )
+            extra_collection_total = float(
+                db.scalar(
+                    select(func.coalesce(func.sum(CashEntry.amount), 0))
+                    .where(CashEntry.delivery_id == d.id)
+                    .where(CashEntry.kind == "COLLECTION")
+                )
+                or 0
+            )
 
             return templates.TemplateResponse(
                 "delivery_detail.html",
@@ -757,11 +843,12 @@ def update_delivery_status(
                     "d_items": d_items,
                     "user": user,
                     "error": str(e),
-                    "collection_total": collection_total,
+                    "line_collection_total": line_collection_total,
+                    "extra_collection_total": extra_collection_total,
                     "expense_total": expense_total,
+                    "collection_total": line_collection_total + extra_collection_total,
                 },
             )
-
         return redirect(f"/deliveries/{delivery_id}")
 
     d.status = status
@@ -771,31 +858,13 @@ def update_delivery_status(
 
 # ---------------- Cash ----------------
 
-def _range_from_preset(preset: str | None) -> tuple[datetime, datetime]:
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
-    preset_clean = (preset or "").strip()
-
-    if preset_clean == "today":
-        return today_start, today_start + timedelta(days=1) - timedelta(seconds=1)
-    if preset_clean == "yesterday":
-        ys = today_start - timedelta(days=1)
-        return ys, today_start - timedelta(seconds=1)
-    if preset_clean == "7d":
-        return now - timedelta(days=7), now
-    if preset_clean == "30d":
-        return now - timedelta(days=30), now
-
-    return now - timedelta(days=7), now
-
-
 @app.get("/cash", response_class=HTMLResponse)
 def cash_dashboard(
     request: Request,
-    preset: str = "today",
-    start_date: str = "",
-    end_date: str = "",
-    agent_id: str = "",
+    preset: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    agent_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -803,55 +872,38 @@ def cash_dashboard(
         return user_or
     user = user_or
 
-    start_dt, end_dt = _range_from_preset(preset)
+    selected_agent_id = agent_id
+    if not is_admin(user):
+        selected_agent_id = user.id
+
+    start, end = cash_range_from_preset(preset)
 
     if start_date:
-        try:
-            y, m, d = [int(x) for x in start_date.split("-")]
-            start_dt = datetime(y, m, d)
-        except Exception:
-            pass
+        start = datetime.fromisoformat(start_date)
     if end_date:
-        try:
-            y, m, d = [int(x) for x in end_date.split("-")]
-            end_dt = datetime(y, m, d, 23, 59, 59)
-        except Exception:
-            pass
+        end = datetime.fromisoformat(end_date) + timedelta(days=1)
 
-    chosen_agent_id: int | None = None
+    rows, total_collections, total_expenses = get_cash_summary(db, selected_agent_id, start, end)
+    profit = float(total_collections) - float(total_expenses)
+
     agents = []
-
     if is_admin(user):
-        agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-        if agent_id and agent_id.isdigit():
-            chosen_agent_id = int(agent_id)
-    else:
-        chosen_agent_id = user.id
-
-    rows = cash_summary_by_day(db, start_dt, end_dt, agent_id=chosen_agent_id)
-    total_collections, total_expenses = cash_totals(db, start_dt, end_dt, agent_id=chosen_agent_id)
+        agents = db.scalars(select(User).where(User.role == "AGENT").order_by(User.username.asc())).all()
 
     return templates.TemplateResponse(
         "cash_dashboard.html",
         {
             "request": request,
             "user": user,
-            "preset": preset,
-            "start_date": start_date,
-            "end_date": end_date,
-            "agent_id": agent_id,
             "agents": agents,
-            "rows": [
-                {
-                    "day": str(r.day),
-                    "collections": float(r.collections),
-                    "expenses": float(r.expenses),
-                }
-                for r in rows
-            ],
-            "total_collections": float(total_collections),
-            "total_expenses": float(total_expenses),
-            "profit": float(total_collections) - float(total_expenses),
+            "agent_id": selected_agent_id,
+            "preset": preset or "",
+            "start_date": start_date or "",
+            "end_date": end_date or "",
+            "rows": rows,
+            "total_collections": total_collections,
+            "total_expenses": total_expenses,
+            "profit": profit,
         },
     )
 
@@ -879,24 +931,25 @@ def cash_new(
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
 
-    chosen_agent_id = user.id
-    if is_admin(user) and agent_id and agent_id.isdigit():
-        chosen_agent_id = int(agent_id)
+    used_agent_id = user.id
+    if is_admin(user) and agent_id and str(agent_id).isdigit():
+        used_agent_id = int(agent_id)
 
-    chosen_delivery_id = int(delivery_id) if (delivery_id or "").strip().isdigit() else None
+    used_delivery_id = None
+    if delivery_id and str(delivery_id).isdigit():
+        used_delivery_id = int(delivery_id)
 
     db.add(
         CashEntry(
+            agent_id=used_agent_id,
+            delivery_id=used_delivery_id,
             kind=kind_clean,
             amount=amt,
-            agent_id=chosen_agent_id,
-            delivery_id=chosen_delivery_id,
             note=(note or "").strip() or None,
         )
     )
     db.commit()
 
-    if chosen_delivery_id:
-        return redirect(f"/deliveries/{chosen_delivery_id}")
-
+    if used_delivery_id:
+        return redirect(f"/deliveries/{used_delivery_id}")
     return redirect("/cash")

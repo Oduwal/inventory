@@ -43,7 +43,6 @@ class Item(Base):
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     unit: Mapped[str] = mapped_column(String(20), default="pcs", nullable=False)
-
     reorder_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
@@ -81,7 +80,8 @@ class Delivery(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    agent: Mapped["User"] = relationship(back_populates="deliveries")
+    agent: Mapped[User] = relationship(back_populates="deliveries")
+
     items: Mapped[list["DeliveryItem"]] = relationship(
         back_populates="delivery",
         cascade="all, delete-orphan",
@@ -105,14 +105,15 @@ class DeliveryItem(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Amount collected for this line (entered by agent/admin during order creation)
+    # Amount collected for THIS line (per item line) in this delivery
     line_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
-    delivery: Mapped["Delivery"] = relationship(back_populates="items")
-    item: Mapped["Item"] = relationship(back_populates="delivery_items")
+    delivery: Mapped[Delivery] = relationship(back_populates="items")
+    item: Mapped[Item] = relationship(back_populates="delivery_items")
 
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_delivery_item_qty_positive"),
+        CheckConstraint("line_amount >= 0", name="ck_delivery_item_amount_nonneg"),
     )
 
 
@@ -133,7 +134,7 @@ class Transaction(Base):
     reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    item: Mapped["Item"] = relationship(back_populates="transactions")
+    item: Mapped[Item] = relationship(back_populates="transactions")
 
     __table_args__ = (
         CheckConstraint("type IN ('IN','OUT')", name="ck_tx_type_in_out"),
@@ -147,18 +148,18 @@ class CashEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # COLLECTION or EXPENSE
+    agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
+
+    # "COLLECTION" or "EXPENSE"
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
 
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
 
-    agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
-
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    agent: Mapped["User"] = relationship(back_populates="cash_entries")
-    delivery: Mapped["Delivery"] = relationship(back_populates="cash_entries")
+    agent: Mapped[User] = relationship(back_populates="cash_entries")
+    delivery: Mapped[Delivery | None] = relationship(back_populates="cash_entries")
 
     __table_args__ = (
         CheckConstraint("kind IN ('COLLECTION','EXPENSE')", name="ck_cash_kind"),

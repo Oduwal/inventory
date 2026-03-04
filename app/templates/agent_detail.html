@@ -1,18 +1,22 @@
-﻿{% extends "base.html" %}
-{% block title %}Cash{% endblock %}
-{% block page_title %}Cash Summary{% endblock %}
-{% block page_subtitle %}Delivery collections + expenses with filters.{% endblock %}
-{% set active = "cash" %}
+{% extends "base.html" %}
+{% block title %}Agent Details{% endblock %}
+{% block page_title %}Agent: {{ agent.username }}{% endblock %}
+{% block page_subtitle %}Collections, expenses, profit, and deliveries by range.{% endblock %}
+{% set active = "agents" %}
+
+{% block top_right %}
+<a class="btnGhost" href="/agents">Back</a>
+{% endblock %}
 
 {% block content %}
 
 <div class="card">
-    <div class="badge b-blue">FILTERS</div>
+    <div class="badge b-blue">FILTER</div>
 
-    <form method="get" action="/cash" style="margin-top:12px;">
+    <form method="get" action="/agents/{{ agent.id }}" style="margin-top:12px;">
         <div class="inputs">
             <div>
-                <label>Quick Filter</label>
+                <label>Quick</label>
                 <select name="preset">
                     <option value="" {% if not preset %}selected{% endif %}>Custom</option>
                     <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
@@ -32,20 +36,6 @@
                 <input type="date" name="end_date" value="{{ end_date or '' }}">
             </div>
 
-            {% if user and user.role == "ADMIN" %}
-            <div>
-                <label>Agent</label>
-                <select name="agent_id">
-                    <option value="" {% if not agent_id %}selected{% endif %}>All</option>
-                    {% for a in agents %}
-                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int= =a.id) %}selected{% endif %}>
-                        {{ a.username }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            {% endif %}
-
             <div>
                 <button class="btnPrimary" type="submit">Apply</button>
             </div>
@@ -54,52 +44,18 @@
 </div>
 
 <div class="card" style="margin-top:14px;">
-    <div class="badge b-purple">ADD ENTRY</div>
-
-    <form method="post" action="/cash/new" style="margin-top:12px;">
-        <div class="inputs">
-            <div>
-                <label>Type</label>
-                <select name="kind" required>
-                    <option value="COLLECTION">COLLECTION</option>
-                    <option value="EXPENSE">EXPENSE</option>
-                </select>
-            </div>
-
-            <div>
-                <label>Amount</label>
-                <input name="amount" type="number" step="0.01" min="0.01" required>
-            </div>
-
-            <div>
-                <label>Delivery ID (optional)</label>
-                <input name="delivery_id" placeholder="e.g. 12">
-            </div>
-
-            <div style="min-width:240px;">
-                <label>Note</label>
-                <input name="note" placeholder="Optional note">
-            </div>
-
-            {% if user and user.role == "ADMIN" %}
-            <input type="hidden" name="agent_id" value="{{ agent_id or '' }}">
-            {% endif %}
-
-            <div>
-                <button class="btnPrimary" type="submit">Save</button>
-            </div>
-        </div>
-    </form>
-</div>
-
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-green">TOTALS</div>
+    <div class="badge b-green">SUMMARY</div>
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
         <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
         <span class="badge b-red">Expenses: {{ '%.2f'|format(total_expenses) }}</span>
         <span class="badge b-purple">Profit: {{ '%.2f'|format(profit) }}</span>
+        <span class="badge b-yellow">Deliveries: {{ deliveries_count }}</span>
     </div>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-purple">DAILY BREAKDOWN</div>
 
     <div style="margin-top:12px; overflow:auto;">
         <table>
@@ -122,7 +78,7 @@
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="4" class="muted">No records for this range.</td></tr>
+                <tr><td colspan="4" class="muted">No records.</td></tr>
                 {% endif %}
             </tbody>
         </table>

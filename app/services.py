@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from sqlalchemy import select, func, case, desc
 from sqlalchemy.orm import Session
 
@@ -128,6 +128,10 @@ def top_items_by_stock(db: Session, limit: int = 5):
 
 
 def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
+    """
+    Stock deduct happens ONLY when delivery becomes DELIVERED.
+    Idempotent: no duplicate OUT transactions for same delivery.
+    """
     existing_out = db.scalar(
         select(func.count(Transaction.id))
         .where(Transaction.delivery_id == delivery_id)
@@ -141,10 +145,7 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     if not delivery:
         raise ValueError("Delivery not found")
 
-    lines = db.execute(
-        select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
-    ).scalars().all()
-
+    lines = db.execute(select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)).scalars().all()
     if not lines:
         raise ValueError("Order has no items")
 
@@ -171,73 +172,110 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     db.flush()
 
 
-def delivery_line_total(db: Session, delivery_id: int) -> float:
-    total = db.scalar(
-        select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
-        .where(DeliveryItem.delivery_id == delivery_id)
-    ) or 0
-    return float(total)
+def cash_range_from_preset(preset: str | None):
+    now = datetime.utcnow()
+    today = now.date()
+
+    if preset == "today":
+        start = datetime.combine(today, datetime.min.time())
+        end = start + timedelta(days=1)
+        return start, end
+
+    if preset == "yesterday":
+        start = datetime.combine(today - timedelta(days=1), datetime.min.time())
+        end = start + timedelta(days=1)
+        return start, end
+
+    if preset == "7d":
+        end = now
+        start = now - timedelta(days=7)
+        return start, end
+
+    if preset == "30d":
+        end = now
+        start = now - timedelta(days=30)
+        return start, end
+
+    return None, None
 
 
-def delivery_cash_totals(db: Session, delivery_id: int) -> tuple[float, float]:
-    collections = db.scalar(
-        select(func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.delivery_id == delivery_id)
-        .where(CashEntry.kind == "COLLECTION")
-    ) or 0
+def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, end: datetime | None):
+    """
+    Collections = sum(DeliveryItem.line_amount) + sum(CashEntry COLLECTION)
+    Expenses = sum(CashEntry EXPENSE)
 
-    expenses = db.scalar(
-        select(func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.delivery_id == delivery_id)
-        .where(CashEntry.kind == "EXPENSE")
-    ) or 0
+    Grouped by day.
+    """
+    d_day = func.date(Delivery.created_at).label("day")
 
-    return float(collections), float(expenses)
-
-
-def cash_summary_by_day(
-    db: Session,
-    start_dt: datetime,
-    end_dt: datetime,
-    agent_id: int | None = None,
-):
-    day_col = func.date(CashEntry.created_at).label("day")
-    collections = func.coalesce(func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)), 0).label("collections")
-    expenses = func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0).label("expenses")
-
-    stmt = (
-        select(day_col, collections, expenses)
-        .where(CashEntry.created_at >= start_dt)
-        .where(CashEntry.created_at <= end_dt)
-        .group_by(day_col)
-        .order_by(day_col.desc())
+    delivery_stmt = (
+        select(
+            d_day,
+            func.coalesce(func.sum(func.coalesce(DeliveryItem.line_amount, 0)), 0).label("delivery_collections"),
+        )
+        .select_from(Delivery)
+        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+        .group_by(d_day)
+        .order_by(d_day.asc())
     )
 
-    if agent_id is not None:
-        stmt = stmt.where(CashEntry.agent_id == agent_id)
+    if agent_id:
+        delivery_stmt = delivery_stmt.where(Delivery.agent_id == agent_id)
+    if start:
+        delivery_stmt = delivery_stmt.where(Delivery.created_at >= start)
+    if end:
+        delivery_stmt = delivery_stmt.where(Delivery.created_at < end)
 
-    return db.execute(stmt).all()
+    delivery_rows = db.execute(delivery_stmt).all()
 
+    c_day = func.date(CashEntry.created_at).label("day")
+    expenses_sum = func.coalesce(
+        func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)),
+        0,
+    ).label("expenses")
 
-def cash_totals(
-    db: Session,
-    start_dt: datetime,
-    end_dt: datetime,
-    agent_id: int | None = None,
-):
-    collections = func.coalesce(func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)), 0)
-    expenses = func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0)
+    extra_collections_sum = func.coalesce(
+        func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)),
+        0,
+    ).label("extra_collections")
 
-    stmt = (
-        select(collections.label("collections"), expenses.label("expenses"))
-        .where(CashEntry.created_at >= start_dt)
-        .where(CashEntry.created_at <= end_dt)
+    cash_stmt = (
+        select(
+            c_day,
+            expenses_sum,
+            extra_collections_sum,
+        )
+        .select_from(CashEntry)
+        .group_by(c_day)
+        .order_by(c_day.asc())
     )
 
-    if agent_id is not None:
-        stmt = stmt.where(CashEntry.agent_id == agent_id)
+    if agent_id:
+        cash_stmt = cash_stmt.where(CashEntry.agent_id == agent_id)
+    if start:
+        cash_stmt = cash_stmt.where(CashEntry.created_at >= start)
+    if end:
+        cash_stmt = cash_stmt.where(CashEntry.created_at < end)
 
-    row = db.execute(stmt).first()
-    if not row:
-        return 0.0, 0.0
-    return float(row.collections), float(row.expenses)
+    cash_rows = db.execute(cash_stmt).all()
+
+    by_day: dict[str, dict] = {}
+
+    for r in delivery_rows:
+        key = str(r.day)
+        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0})
+        by_day[key]["collections"] += float(r.delivery_collections or 0)
+
+    for r in cash_rows:
+        key = str(r.day)
+        by_day.setdefault(key, {"day": key, "collections": 0.0, "expenses": 0.0})
+        by_day[key]["collections"] += float(r.extra_collections or 0)
+        by_day[key]["expenses"] += float(r.expenses or 0)
+
+    merged = list(by_day.values())
+    merged.sort(key=lambda x: x["day"])
+
+    total_collections = sum(x["collections"] for x in merged)
+    total_expenses = sum(x["expenses"] for x in merged)
+
+    return merged, float(total_collections), float(total_expenses)
