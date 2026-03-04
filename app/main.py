@@ -727,6 +727,10 @@ def agent_detail(
 
 # ---------------- Deliveries / Orders ----------------
 
+from collections import defaultdict
+from sqlalchemy import select, desc
+from .models import Delivery, DeliveryItem, Item, User
+
 @app.get("/deliveries", response_class=HTMLResponse)
 def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -747,29 +751,41 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         stmt = stmt.where(Delivery.agent_id == int(agent_id))
 
     rows = db.execute(stmt).scalars().all()
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+
+    agents = db.execute(
+        select(User).where(User.role == "AGENT").order_by(User.username.asc())
+    ).scalars().all()
+
+    # Build summary: delivery_id -> "Item ×Qty, Item2 ×Qty2"
+    items_summary: dict[int, str] = {}
+    delivery_ids = [d.id for d in rows]
+
+    if delivery_ids:
+        line_rows = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+
+        grouped = defaultdict(list)
+        for delivery_id_val, name, qty in line_rows:
+            grouped[int(delivery_id_val)].append(f"{name} ×{int(qty)}")
+
+        items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 
     return templates.TemplateResponse(
         "deliveries_list.html",
-        {"request": request, "rows": rows, "agents": agents, "status": status, "agent_id": agent_id, "user": user},
+        {
+            "request": request,
+            "rows": rows,
+            "agents": agents,
+            "status": status,
+            "agent_id": agent_id,
+            "user": user,
+            "items_summary": items_summary,
+        },
     )
-
-
-@app.get("/deliveries/new", response_class=HTMLResponse)
-def delivery_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    items = db.execute(select(Item).order_by(Item.name.asc())).scalars().all()
-
-    return templates.TemplateResponse(
-        "delivery_new.html",
-        {"request": request, "agents": agents, "items": items, "user": user},
-    )
-
 
 @app.post("/deliveries/new")
 def delivery_create(
