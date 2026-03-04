@@ -1,42 +1,119 @@
 {% extends "base.html" %}
+{% block title %}Delivery #{{ d.id }}{% endblock %}
+{% block page_title %}Delivery #{{ d.id }}{% endblock %}
+{% block page_subtitle %}Customer, items, status updates, and delivery finance.{% endblock %}
+
+{% block top_right %}
+<a class="btnGhost" href="/deliveries">Back</a>
+{% endblock %}
+
 {% block content %}
-<h1>Delivery #{{ d.id }}</h1>
-
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <div class="card">
-    <div><b>Customer:</b> {{ d.customer_name }}</div>
-    <div><b>Phone:</b> {{ d.customer_phone or "" }}</div>
-    <div><b>Address:</b> {{ d.address or "" }}</div>
-    <div><b>Status:</b> <span class="pill">{{ d.status }}</span></div>
+    <div class="badge b-blue">DETAILS</div>
+    <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+        <div>
+            <div class="muted">Customer</div>
+            <div style="font-weight:800; font-size:16px;">{{ d.customer_name }}</div>
+            <div class="muted" style="margin-top:6px;">Phone: {{ d.customer_phone or "-" }}</div>
+            <div class="muted">Address: {{ d.address or "-" }}</div>
+        </div>
+        <div>
+            <div class="muted">Status</div>
+            <div style="margin-top:6px;">
+                {% if d.status == "DELIVERED" %}
+                <span class="badge b-green">{{ d.status }}</span>
+                {% elif d.status == "OUT_FOR_DELIVERY" %}
+                <span class="badge b-blue">{{ d.status }}</span>
+                {% elif d.status == "PENDING" %}
+                <span class="badge b-yellow">{{ d.status }}</span>
+                {% else %}
+                <span class="badge b-red">{{ d.status }}</span>
+                {% endif %}
+            </div>
+
+            <form method="post" action="/deliveries/{{ d.id }}/status" style="margin-top:12px;">
+                <div class="inputs">
+                    <div>
+                        <label>Update status</label>
+                        <select name="status">
+                            <option value="PENDING" {% if d.status= ="PENDING" %}selected{% endif %}>PENDING</option>
+                            <option value="OUT_FOR_DELIVERY" {% if d.status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
+                            <option value="DELIVERED" {% if d.status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                            <option value="FAILED" {% if d.status= ="FAILED" %}selected{% endif %}>FAILED</option>
+                            <option value="RETURNED" {% if d.status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button class="btnPrimary" type="submit">Save</button>
+                    </div>
+                </div>
+                {% if error %}
+                <div class="badge b-red" style="margin-top:10px;">{{ error }}</div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
 </div>
 
-<div class="card">
-    <h2>Items</h2>
-    <table class="table">
-        <tr><th>Item</th><th>Qty</th></tr>
-        {% for li, item in d_items %}
-        <tr><td>{{ item.name }}</td><td>{{ li.quantity }}</td></tr>
-        {% endfor %}
-    </table>
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-purple">ITEMS</div>
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for di, it in d_items %}
+                <tr>
+                    <td>{{ it.name }}</td>
+                    <td>{{ di.quantity }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 
-{% if d.status != "DELIVERED" %}
-<form method="post" action="/deliveries/{{ d.id }}/delivered">
-    <button class="primary" type="submit" onclick="return confirm('Mark as delivered and deduct stock?');">
-        Mark Delivered
-    </button>
-</form>
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-blue">RECORD MONEY</div>
 
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-    <input type="hidden" name="status" value="OUT_FOR_DELIVERY">
-    <button class="btnPrimary" type="submit">Start Delivery</button>
-</form>
+    <form method="post" action="/cash/new" style="margin-top:12px;">
+        <input type="hidden" name="delivery_id" value="{{ d.id }}">
+        <div class="inputs">
+            <div>
+                <label>Type</label>
+                <select name="kind" required>
+                    <option value="COLLECTION">Money Collected</option>
+                    <option value="EXPENSE">Expense</option>
+                </select>
+            </div>
+            <div>
+                <label>Amount</label>
+                <input type="number" name="amount" step="0.01" min="0.01" required />
+            </div>
+            <div style="min-width:240px;">
+                <label>Note</label>
+                <input type="text" name="note" placeholder="Fuel, dispatch, etc." />
+            </div>
+            <div>
+                <button class="btnPrimary" type="submit">Save</button>
+            </div>
+        </div>
+    </form>
+</div>
 
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-    <input type="hidden" name="status" value="DELIVERED">
-    <button class="btnPrimary" type="submit">Mark Delivered</button>
-</form>
-{% endif %}
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-green">DELIVERY FINANCE</div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+        <span class="badge b-blue">Collected: {{ '%.2f'|format(collection_total) }}</span>
+        <span class="badge b-red">Expenses: {{ '%.2f'|format(expense_total) }}</span>
+        <span class="badge b-purple">Profit: {{ '%.2f'|format(collection_total - expense_total) }}</span>
+    </div>
+</div>
 
 {% endblock %}

@@ -1,6 +1,5 @@
 import os
 from datetime import datetime
-
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,11 +9,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, desc, func
+from sqlalchemy import select, text, desc
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import Item, Transaction, User, Delivery, DeliveryItem
+from .models import Item, Transaction, User, Delivery, DeliveryItem, CashLog
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -26,6 +25,9 @@ from .services import (
     in_out_last_7_days,
     top_items_by_stock,
     create_out_transactions_for_delivery_if_needed,
+    get_delivery_finance,
+    get_cash_summary,
+    add_cash_log,
 )
 
 app = FastAPI()
@@ -53,7 +55,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    # Safe migration: add delivery_id to transactions if missing.
+    # Safe migration: add delivery_id to transactions if missing (SQLite-friendly attempt).
     with engine.connect() as conn:
         try:
             conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
@@ -146,7 +148,7 @@ def hash_password(plain_password: str) -> str:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "user": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -158,7 +160,7 @@ def login(
 ):
     u = db.scalar(select(User).where(User.username == username.strip()))
     if not u or not verify_password(password, u.password_hash):
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid login."})
+        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid login.", "user": None})
 
     request.session["user_id"] = u.id
     request.session["role"] = u.role
@@ -193,6 +195,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         {
             "request": request,
             "user": user,
+            "active": "dashboard",
             **stats,
             "total_stock": total_stock,
             "inventory_value": inventory_value,
@@ -213,8 +216,6 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
     return {"count": len(get_low_stock(db))}
 
 
-# ---------------- Items ----------------
-
 @app.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -233,7 +234,10 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
             or q_lower in ((item.category or "").lower())
         ]
 
-    return templates.TemplateResponse("items_list.html", {"request": request, "rows": rows, "q": q, "user": user})
+    return templates.TemplateResponse(
+        "items_list.html",
+        {"request": request, "rows": rows, "q": q, "user": user, "active": "items"},
+    )
 
 
 @app.get("/items/{item_id}", response_class=HTMLResponse)
@@ -254,11 +258,9 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "item_detail.html",
-        {"request": request, "item": item, "stock": stock, "txs": txs, "user": user},
+        {"request": request, "item": item, "stock": stock, "txs": txs, "user": user, "active": "items"},
     )
 
-
-# ---------------- Transactions ----------------
 
 @app.get("/transactions", response_class=HTMLResponse)
 def transactions_list(request: Request, db: Session = Depends(get_db)):
@@ -268,7 +270,10 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     txs = get_recent_transactions(db, limit=300)
-    return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user})
+    return templates.TemplateResponse(
+        "transactions_list.html",
+        {"request": request, "txs": txs, "user": user, "active": "transactions"},
+    )
 
 
 @app.get("/transactions/new", response_class=HTMLResponse)
@@ -285,7 +290,10 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
     rows = get_items_with_stock(db)
     items = [i for (i, _s) in rows]
     error = request.query_params.get("error")
-    return templates.TemplateResponse("tx_form.html", {"request": request, "items": items, "error": error, "user": user})
+    return templates.TemplateResponse(
+        "tx_form.html",
+        {"request": request, "items": items, "error": error, "user": user, "active": "transactions"},
+    )
 
 
 @app.post("/transactions/new")
@@ -336,8 +344,6 @@ def tx_create(
     return redirect("/transactions")
 
 
-# ---------------- Low stock ----------------
-
 @app.get("/low-stock", response_class=HTMLResponse)
 def low_stock(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -346,10 +352,10 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     rows = get_low_stock(db)
-    return templates.TemplateResponse("low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"})
+    return templates.TemplateResponse(
+        "low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"}
+    )
 
-
-# ---------------- Agents ----------------
 
 @app.get("/agents", response_class=HTMLResponse)
 def agents_list(request: Request, db: Session = Depends(get_db)):
@@ -363,10 +369,10 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
         return forbid
 
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
+    return templates.TemplateResponse(
+        "agents_list.html", {"request": request, "agents": agents, "user": user, "active": "agents"}
+    )
 
-
-# ---------------- Deliveries / Orders ----------------
 
 @app.get("/deliveries", response_class=HTMLResponse)
 def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
@@ -392,7 +398,15 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "deliveries_list.html",
-        {"request": request, "rows": rows, "agents": agents, "status": status, "agent_id": agent_id, "user": user},
+        {
+            "request": request,
+            "rows": rows,
+            "agents": agents,
+            "status": status,
+            "agent_id": agent_id,
+            "user": user,
+            "active": "deliveries",
+        },
     )
 
 
@@ -408,7 +422,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "delivery_new.html",
-        {"request": request, "agents": agents, "items": items, "user": user},
+        {"request": request, "agents": agents, "items": items, "user": user, "active": "deliveries"},
     )
 
 
@@ -463,7 +477,10 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         select(Delivery).where(Delivery.agent_id == user.id).order_by(desc(Delivery.created_at)).limit(300)
     ).scalars().all()
 
-    return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user})
+    return templates.TemplateResponse(
+        "my_deliveries.html",
+        {"request": request, "rows": rows, "user": user, "active": "deliveries"},
+    )
 
 
 @app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
@@ -486,9 +503,20 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         .where(DeliveryItem.delivery_id == d.id)
     ).all()
 
+    collection_total, expense_total = get_delivery_finance(db, d.id)
+
     return templates.TemplateResponse(
         "delivery_detail.html",
-        {"request": request, "d": d, "d_items": d_items, "user": user, "error": None},
+        {
+            "request": request,
+            "d": d,
+            "d_items": d_items,
+            "user": user,
+            "active": "deliveries",
+            "error": None,
+            "collection_total": collection_total,
+            "expense_total": expense_total,
+        },
     )
 
 
@@ -528,12 +556,111 @@ def update_delivery_status(
                 .join(Item, Item.id == DeliveryItem.item_id)
                 .where(DeliveryItem.delivery_id == d.id)
             ).all()
+            collection_total, expense_total = get_delivery_finance(db, d.id)
             return templates.TemplateResponse(
                 "delivery_detail.html",
-                {"request": request, "d": d, "d_items": d_items, "user": user, "error": str(e)},
+                {
+                    "request": request,
+                    "d": d,
+                    "d_items": d_items,
+                    "user": user,
+                    "active": "deliveries",
+                    "error": str(e),
+                    "collection_total": collection_total,
+                    "expense_total": expense_total,
+                },
             )
         return redirect(f"/deliveries/{delivery_id}")
 
     d.status = status
     db.commit()
     return redirect(f"/deliveries/{delivery_id}")
+
+
+@app.get("/cash", response_class=HTMLResponse)
+def cash_dashboard(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    preset = request.query_params.get("preset", "today")
+    start_date = request.query_params.get("start_date")
+    end_date = request.query_params.get("end_date")
+    agent_id_raw = request.query_params.get("agent_id", "")
+
+    selected_agent_id: int | None = None
+
+    if is_admin(user):
+        if agent_id_raw.isdigit():
+            selected_agent_id = int(agent_id_raw)
+        else:
+            selected_agent_id = None
+    else:
+        selected_agent_id = user.id
+
+    rows, total_collections, total_expenses = get_cash_summary(
+        db,
+        agent_id=selected_agent_id,
+        preset=preset,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    agents = []
+    if is_admin(user):
+        agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+
+    return templates.TemplateResponse(
+        "cash_dashboard.html",
+        {
+            "request": request,
+            "user": user,
+            "active": "cash",
+            "rows": rows,
+            "total_collections": total_collections,
+            "total_expenses": total_expenses,
+            "profit": total_collections - total_expenses,
+            "preset": preset,
+            "start_date": start_date,
+            "end_date": end_date,
+            "agents": agents,
+            "agent_id": agent_id_raw,
+        },
+    )
+
+
+@app.post("/cash/new")
+def cash_new(
+    request: Request,
+    kind: str = Form(...),
+    amount: float = Form(...),
+    note: str = Form(""),
+    delivery_id: str = Form(""),
+    agent_id: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    chosen_agent_id = user.id
+    if is_admin(user) and agent_id and agent_id.isdigit():
+        chosen_agent_id = int(agent_id)
+
+    did = int(delivery_id) if (delivery_id and delivery_id.isdigit()) else None
+
+    add_cash_log(
+        db,
+        agent_id=chosen_agent_id,
+        kind=kind,
+        amount=float(amount),
+        note=note,
+        delivery_id=did,
+    )
+
+    if did is not None:
+        return redirect(f"/deliveries/{did}")
+
+    return redirect("/cash?preset=today")

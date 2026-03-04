@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Cash{% endblock %}
+{% block page_title %}Cash Summary{% endblock %}
+{% block page_subtitle %}Track collections and expenses with quick filters.{% endblock %}
+
+{% block content %}
+
+<div class="card">
+    <div class="badge b-blue">FILTERS</div>
+
+    <form method="get" action="/cash" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Quick Filter</label>
+                <select name="preset">
+                    <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
+                    <option value="yesterday" {% if preset= ="yesterday" %}selected{% endif %}>Yesterday</option>
+                    <option value="7d" {% if preset= ="7d" %}selected{% endif %}>Last 7 days</option>
+                    <option value="30d" {% if preset= ="30d" %}selected{% endif %}>Last 30 days</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Start date</label>
+                <input type="date" name="start_date" value="{{ start_date or '' }}">
+            </div>
+
+            <div>
+                <label>End date</label>
+                <input type="date" name="end_date" value="{{ end_date or '' }}">
+            </div>
+
+            {% if user and user.role == "ADMIN" %}
+            <div>
+                <label>Agent</label>
+                <select name="agent_id">
+                    <option value="" {% if not agent_id %}selected{% endif %}>All</option>
+                    {% for a in agents %}
+                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int= =a.id) %}selected{% endif %}>
+                        {{ a.username }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <div>
+                <button class="btnPrimary" type="submit">Apply</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-purple">ADD ENTRY</div>
+
+    <form method="post" action="/cash/new" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Type</label>
+                <select name="kind" required>
+                    <option value="COLLECTION">COLLECTION</option>
+                    <option value="EXPENSE">EXPENSE</option>
+                </select>
+            </div>
+
+            <div>
+                <label>Amount</label>
+                <input name="amount" type="number" step="0.01" min="0.01" required>
+            </div>
+
+            <div>
+                <label>Delivery ID (optional)</label>
+                <input name="delivery_id" placeholder="e.g. 12">
+            </div>
+
+            <div style="min-width:240px;">
+                <label>Note</label>
+                <input name="note" placeholder="Optional note">
+            </div>
+
+            {% if user and user.role == "ADMIN" %}
+            <input type="hidden" name="agent_id" value="{{ agent_id or '' }}">
+            {% endif %}
+
+            <div>
+                <button class="btnPrimary" type="submit">Save</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-green">TOTALS</div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+        <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
+        <span class="badge b-red">Expenses: {{ '%.2f'|format(total_expenses) }}</span>
+        <span class="badge b-purple">Profit: {{ '%.2f'|format(profit) }}</span>
+    </div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Collections</th>
+                    <th>Expenses</th>
+                    <th>Profit</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if rows and rows|length > 0 %}
+                {% for r in rows %}
+                <tr>
+                    <td>{{ r.day }}</td>
+                    <td>{{ '%.2f'|format(r.collections) }}</td>
+                    <td>{{ '%.2f'|format(r.expenses) }}</td>
+                    <td>{{ '%.2f'|format((r.collections|float) - (r.expenses|float)) }}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="4" class="muted">No records for this range.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
