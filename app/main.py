@@ -53,7 +53,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    # Safe migration: ensure transactions.delivery_id exists
+    # Safe migration: add delivery_id to transactions if missing.
     with engine.connect() as conn:
         try:
             conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
@@ -246,8 +246,8 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
     row = get_item_with_stock(db, item_id)
     if not row:
         return HTMLResponse("Item not found", status_code=404)
-    item, stock = row
 
+    item, stock = row
     txs = db.scalars(
         select(Transaction).where(Transaction.item_id == item_id).order_by(desc(Transaction.created_at)).limit(200)
     ).all()
@@ -269,6 +269,71 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
 
     txs = get_recent_transactions(db, limit=300)
     return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user})
+
+
+@app.get("/transactions/new", response_class=HTMLResponse)
+def tx_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    rows = get_items_with_stock(db)
+    items = [i for (i, _s) in rows]
+    error = request.query_params.get("error")
+    return templates.TemplateResponse("tx_form.html", {"request": request, "items": items, "error": error, "user": user})
+
+
+@app.post("/transactions/new")
+def tx_create(
+    request: Request,
+    item_id: int = Form(...),
+    tx_type: str = Form(...),
+    quantity: int = Form(...),
+    reference: str = Form(default=""),
+    note: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    tx_type = (tx_type or "").strip().upper()
+    if tx_type not in {"IN", "OUT"}:
+        return redirect("/transactions/new?error=Invalid+type")
+
+    qty = int(quantity)
+    if qty <= 0:
+        return redirect("/transactions/new?error=Quantity+must+be+greater+than+0")
+
+    if tx_type == "OUT":
+        row = get_item_with_stock(db, item_id)
+        if not row:
+            return redirect("/transactions/new?error=Item+not+found")
+        _it, stock = row
+        if int(stock) < qty:
+            return redirect("/transactions/new?error=Insufficient+stock")
+
+    db.add(
+        Transaction(
+            item_id=item_id,
+            type=tx_type,
+            quantity=qty,
+            reference=(reference or "").strip() or None,
+            note=(note or "").strip() or None,
+        )
+    )
+    db.commit()
+    return redirect("/transactions")
 
 
 # ---------------- Low stock ----------------
@@ -310,9 +375,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not is_admin(user):
+        return redirect("/my-deliveries")
 
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
@@ -365,7 +429,6 @@ def delivery_create(
         return user_or
     user = user_or
 
-    # Agents can create orders only for themselves
     if not is_admin(user):
         agent_id = user.id
 
