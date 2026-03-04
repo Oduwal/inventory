@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}Item #{{ item.id }}{% endblock %}
 {% block page_title %}{{ item.name }}{% endblock %}
 {% block page_subtitle %}SKU, category/merchant, stock level, and transaction history.{% endblock %}
@@ -46,8 +46,8 @@
     </div>
 
     <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <span class="badge b-purple">Cost: ₦{{ '%.2f'|format(item.cost_price|float) }}</span>
-        <span class="badge b-green">Selling: ₦{{ '%.2f'|format(item.selling_price|float) }}</span>
+        <span class="badge b-purple">Cost: â‚¦{{ '%.2f'|format(item.cost_price|float) }}</span>
+        <span class="badge b-green">Selling: â‚¦{{ '%.2f'|format(item.selling_price|float) }}</span>
     </div>
 </div>
 

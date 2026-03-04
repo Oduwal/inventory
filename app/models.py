@@ -2,14 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import (
-    String,
-    Integer,
-    DateTime,
-    ForeignKey,
-    Numeric,
-    CheckConstraint,
-)
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Numeric, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -49,14 +42,9 @@ class Item(Base):
     selling_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    transactions: Mapped[list["Transaction"]] = relationship(
-        back_populates="item",
-        cascade="all, delete-orphan",
-    )
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="item", cascade="all, delete-orphan")
     delivery_items: Mapped[list["DeliveryItem"]] = relationship(back_populates="item")
 
 
@@ -64,7 +52,6 @@ class Delivery(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
     customer_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -78,19 +65,11 @@ class Delivery(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     agent: Mapped[User] = relationship(back_populates="deliveries")
-
-    items: Mapped[list["DeliveryItem"]] = relationship(
-        back_populates="delivery",
-        cascade="all, delete-orphan",
-    )
-
+    items: Mapped[list["DeliveryItem"]] = relationship(back_populates="delivery", cascade="all, delete-orphan")
     cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="delivery")
 
     __table_args__ = (
-        CheckConstraint(
-            "status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED')",
-            name="ck_delivery_status",
-        ),
+        CheckConstraint("status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED')", name="ck_delivery_status"),
     )
 
 
@@ -145,11 +124,7 @@ class CashEntry(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    # COLLECTION = extra collections not on delivery lines
-    # EXPENSE = expenses spent by agent
-    # OPERATING_CASH = operating cash given to agent
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
-
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 

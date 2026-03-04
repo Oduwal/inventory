@@ -1,11 +1,11 @@
-﻿{% extends "base.html" %}
+﻿<!-- app/templates/cash_dashboard.html -->
+{% extends "base.html" %}
 {% block title %}Cash{% endblock %}
 {% block page_title %}Cash Summary{% endblock %}
-{% block page_subtitle %}Delivery collections + expenses with filters.{% endblock %}
-{% set active = "cash" %}
+{% block page_subtitle %}Track collections, operating cash given, and expenses.{% endblock %}
+{% set active = 'cash' %}
 
 {% block content %}
-
 <div class="card">
     <div class="badge b-blue">FILTERS</div>
 
@@ -14,11 +14,10 @@
             <div>
                 <label>Quick Filter</label>
                 <select name="preset">
-                    <option value="" {% if not preset %}selected{% endif %}>Custom</option>
-                    <option value="today" {% if preset =="today" %}selected{% endif %}>Today</option>
-                    <option value="yesterday" {% if preset =="yesterday" %}selected{% endif %}>Yesterday</option>
-                    <option value="7d" {% if preset =="7d" %}selected{% endif %}>Last 7 days</option>
-                    <option value="30d" {% if preset =="30d" %}selected{% endif %}>Last 30 days</option>
+                    <option value="today" {% if preset=="today" %}selected{% endif %}>Today</option>
+                    <option value="yesterday" {% if preset=="yesterday" %}selected{% endif %}>Yesterday</option>
+                    <option value="7d" {% if preset=="7d" %}selected{% endif %}>Last 7 days</option>
+                    <option value="30d" {% if preset=="30d" %}selected{% endif %}>Last 30 days</option>
                 </select>
             </div>
 
@@ -39,7 +38,7 @@
                     <option value="" {% if not agent_id %}selected{% endif %}>All</option>
                     {% for a in agents %}
                     <option value="{{ a.id }}" {% if agent_id and (agent_id|int==a.id) %}selected{% endif %}>
-                        {{ a.username }}
+                        {{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}
                     </option>
                     {% endfor %}
                 </select>
@@ -61,28 +60,35 @@
             <div>
                 <label>Type</label>
                 <select name="kind" required>
-                    <option value="COLLECTION">COLLECTION</option>
-                    <option value="EXPENSE">EXPENSE</option>
+                    <option value="OPERATING_CASH">Operating Cash (given)</option>
+                    <option value="EXPENSE">Expense (spend)</option>
+                    <option value="COLLECTION">Extra Collection</option>
                 </select>
             </div>
 
             <div>
                 <label>Amount</label>
-                <input name="amount" type="number" step="0.01" min="0.01" required>
-            </div>
-
-            <div>
-                <label>Delivery ID (optional)</label>
-                <input name="delivery_id" placeholder="e.g. 12">
+                <input type="number" name="amount" step="0.01" min="0.01" required />
             </div>
 
             <div style="min-width:240px;">
                 <label>Note</label>
-                <input name="note" placeholder="Optional note">
+                <input type="text" name="note" placeholder="Fuel, dispatch, cash given, etc." />
             </div>
 
             {% if user and user.role == "ADMIN" %}
-            <input type="hidden" name="agent_id" value="{{ agent_id or '' }}">
+            <div>
+                <label>Agent</label>
+                <select name="agent_id">
+                    <option value="">Choose agent (optional)</option>
+                    {% for a in agents %}
+                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int==a.id) %}selected{% endif %}>
+                        {{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="muted small" style="margin-top:6px;">Empty means your own account.</div>
+            </div>
             {% endif %}
 
             <div>
@@ -97,37 +103,42 @@
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
         <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
+        <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(total_operating_cash) }}</span>
         <span class="badge b-red">Expenses: {{ '%.2f'|format(total_expenses) }}</span>
-        <span class="badge b-purple">Profit: {{ '%.2f'|format(profit) }}</span>
+        <span class="badge b-yellow">Operating Balance: {{ '%.2f'|format(operating_balance) }}</span>
     </div>
 
-    <div style="margin-top:12px; overflow:auto;">
+    <div class="muted" style="margin-top:8px;">
+        Operating Balance is calculated as Operating Cash minus Expenses.
+    </div>
+
+    <div style="margin-top:12px;">
         <table>
             <thead>
                 <tr>
                     <th>Date</th>
                     <th>Collections</th>
+                    <th>Operating Cash</th>
                     <th>Expenses</th>
-                    <th>Profit</th>
+                    <th>Operating Balance</th>
                 </tr>
             </thead>
             <tbody>
                 {% if rows and rows|length > 0 %}
                 {% for r in rows %}
                 <tr>
-                    <td>{{ r["day"] }}</td>
-                    <td>{{ '%.2f'|format(r["collections"]) }}</td>
-                    <td>{{ '%.2f'|format(r["expenses"]) }}</td>
-                    <td>{{ '%.2f'|format((r["collections"]|float) - (r["expenses"]|float)) }}</td>
+                    <td>{{ r.day }}</td>
+                    <td>{{ '%.2f'|format(r.collections|float) }}</td>
+                    <td>{{ '%.2f'|format(r.operating_cash|float) }}</td>
+                    <td>{{ '%.2f'|format(r.expenses|float) }}</td>
+                    <td>{{ '%.2f'|format((r.operating_cash|float) - (r.expenses|float)) }}</td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="4" class="muted">No records for this range.</td></tr>
+                <tr><td colspan="5" class="muted">No records for this range.</td></tr>
                 {% endif %}
             </tbody>
         </table>
     </div>
 </div>
-
 {% endblock %}
-

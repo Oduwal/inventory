@@ -1,15 +1,15 @@
-﻿{% extends "base.html" %}
+﻿<!-- app/templates/delivery_detail.html -->
+{% extends "base.html" %}
 {% block title %}Delivery #{{ d.id }}{% endblock %}
 {% block page_title %}Delivery #{{ d.id }}{% endblock %}
-{% block page_subtitle %}Customer, items, status, and money.{% endblock %}
-{% set active = "deliveries" %}
+{% block page_subtitle %}Customer, items, status updates, and money tracking.{% endblock %}
+{% set active = 'deliveries' %}
 
 {% block top_right %}
-<a class="btnGhost" href="/deliveries">Back</a>
+<a class="btnGhost" href="{{ back_url or '/deliveries' }}">Back</a>
 {% endblock %}
 
 {% block content %}
-
 <div class="card">
     <div class="badge b-blue">DETAILS</div>
 
@@ -43,13 +43,14 @@
                     <div>
                         <label>Update status</label>
                         <select name="status">
-                            <option value="PENDING" {% if d.status =="PENDING" %}selected{% endif %}>PENDING</option>
-                            <option value="OUT_FOR_DELIVERY" {% if d.status =="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
-                            <option value="DELIVERED" {% if d.status =="DELIVERED" %}selected{% endif %}>DELIVERED</option>
-                            <option value="FAILED" {% if d.status =="FAILED" %}selected{% endif %}>FAILED</option>
-                            <option value="RETURNED" {% if d.status =="RETURNED" %}selected{% endif %}>RETURNED</option>
+                            <option value="PENDING" {% if d.status=="PENDING" %}selected{% endif %}>PENDING</option>
+                            <option value="OUT_FOR_DELIVERY" {% if d.status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
+                            <option value="DELIVERED" {% if d.status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                            <option value="FAILED" {% if d.status=="FAILED" %}selected{% endif %}>FAILED</option>
+                            <option value="RETURNED" {% if d.status=="RETURNED" %}selected{% endif %}>RETURNED</option>
                         </select>
                     </div>
+
                     <div>
                         <button class="btnPrimary" type="submit">Save</button>
                     </div>
@@ -66,7 +67,7 @@
 <div class="card" style="margin-top:14px;">
     <div class="badge b-purple">ITEMS</div>
 
-    <div style="margin-top:12px; overflow:auto;">
+    <div style="margin-top:12px;">
         <table>
             <thead>
                 <tr>
@@ -76,7 +77,9 @@
                 </tr>
             </thead>
             <tbody>
+                {% set line_total = 0 %}
                 {% for di, it in d_items %}
+                {% set line_total = line_total + (di.line_amount|float) %}
                 <tr>
                     <td>{{ it.name }}</td>
                     <td>{{ di.quantity }}</td>
@@ -84,8 +87,8 @@
                 </tr>
                 {% endfor %}
                 <tr>
-                    <td colspan="2" style="font-weight:800;">Lines Total</td>
-                    <td style="font-weight:800;">{{ '%.2f'|format(line_collection_total) }}</td>
+                    <td colspan="2" style="font-weight:800;">Line Total</td>
+                    <td style="font-weight:800;">{{ '%.2f'|format(line_total) }}</td>
                 </tr>
             </tbody>
         </table>
@@ -93,7 +96,11 @@
 </div>
 
 <div class="card" style="margin-top:14px;">
-    <div class="badge b-blue">ADD EXPENSE OR EXTRA COLLECTION</div>
+    <div class="badge b-blue">RECORD EXPENSE OR EXTRA COLLECTION</div>
+
+    <div class="muted" style="margin-top:8px;">
+        Operating cash should be recorded from the Cash page, because it is not tied to a delivery.
+    </div>
 
     <form method="post" action="/cash/new" style="margin-top:12px;">
         <input type="hidden" name="delivery_id" value="{{ d.id }}">
@@ -102,19 +109,19 @@
             <div>
                 <label>Type</label>
                 <select name="kind" required>
-                    <option value="EXPENSE">EXPENSE</option>
-                    <option value="COLLECTION">COLLECTION</option>
+                    <option value="COLLECTION">Extra Collection</option>
+                    <option value="EXPENSE">Expense</option>
                 </select>
             </div>
 
             <div>
                 <label>Amount</label>
-                <input name="amount" type="number" step="0.01" min="0.01" required>
+                <input type="number" name="amount" step="0.01" min="0.01" required />
             </div>
 
             <div style="min-width:240px;">
                 <label>Note</label>
-                <input name="note" placeholder="Fuel, dispatch, etc.">
+                <input type="text" name="note" placeholder="Fuel, dispatch, etc." />
             </div>
 
             <div>
@@ -128,11 +135,13 @@
     <div class="badge b-green">DELIVERY FINANCE</div>
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-        <span class="badge b-blue">Lines: {{ '%.2f'|format(line_collection_total) }}</span>
-        <span class="badge b-blue">Extra Collections: {{ '%.2f'|format(extra_collection_total) }}</span>
+        <span class="badge b-blue">Collected: {{ '%.2f'|format(collection_total) }}</span>
         <span class="badge b-red">Expenses: {{ '%.2f'|format(expense_total) }}</span>
-        <span class="badge b-purple">Total Profit: {{ '%.2f'|format(collection_total - expense_total) }}</span>
+        <span class="badge b-purple">Profit: {{ '%.2f'|format(collection_total - expense_total) }}</span>
+    </div>
+
+    <div class="muted" style="margin-top:8px;">
+        Line totals come from the order form. Extra entries come from cash entries linked to this delivery.
     </div>
 </div>
-
 {% endblock %}

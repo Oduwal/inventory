@@ -948,6 +948,12 @@ def update_delivery_status(
 
 
 # ---------------- Cash ----------------
+# Uses CashEntry model + includes OPERATING_CASH
+# Assumes these helpers exist above:
+# - _range_dates_from_inputs(preset, start_date, end_date) -> (sd: date|None, ed: date|None, preset_norm: str)
+# - cash_range_from_preset(preset_norm) -> (start_dt: datetime|None, end_dt: datetime|None)
+# - get_cash_summary(db, agent_id, start, end) -> (rows, total_collections, total_expenses, total_operating)
+# Assumes CashEntry is imported from models and is_admin(), require_login_or_redirect(), redirect() exist.
 
 @app.get("/cash", response_class=HTMLResponse)
 def cash_dashboard(
@@ -965,17 +971,19 @@ def cash_dashboard(
 
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
-    start_dt = None
-    end_dt = None
+    start_dt: datetime | None = None
+    end_dt: datetime | None = None
+
     if preset_norm:
         start_dt, end_dt = cash_range_from_preset(preset_norm)
     else:
         if sd:
             start_dt = datetime.combine(sd, datetime.min.time())
         if ed:
+            # inclusive end date in UI -> exclusive end datetime in DB query
             end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
 
-    selected_agent_id = None
+    selected_agent_id: int | None = None
     if is_admin(user):
         if (agent_id or "").isdigit():
             selected_agent_id = int(agent_id)
@@ -989,6 +997,7 @@ def cash_dashboard(
         end=end_dt,
     )
 
+    # Expenses reduce ONLY operating cash (as you requested)
     operating_balance = float(total_operating) - float(total_expenses)
 
     agents = []
@@ -1004,7 +1013,7 @@ def cash_dashboard(
             "total_collections": float(total_collections),
             "total_expenses": float(total_expenses),
             "total_operating_cash": float(total_operating),
-            "operating_balance": operating_balance,
+            "operating_balance": float(operating_balance),
             "agents": agents,
             "agent_id": agent_id,
             "preset": preset_norm or (preset or ""),
@@ -1037,14 +1046,16 @@ def cash_new(
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
 
-    # Agent selection rules:
-    # Agent can only create entries for self.
-    # Admin can create for any agent.
+    # Agent can only create for self; admin can create for any agent.
     target_agent_id = user.id
     if is_admin(user) and (agent_id or "").isdigit():
         target_agent_id = int(agent_id)
 
     d_id = int(delivery_id) if (delivery_id or "").isdigit() else None
+
+    # Operating cash should not be tied to a delivery (keep it clean)
+    if k == "OPERATING_CASH":
+        d_id = None
 
     db.add(
         CashEntry(
@@ -1057,6 +1068,10 @@ def cash_new(
     )
     db.commit()
 
+    # Redirect back where user came from if possible (nice UX)
+    referer = request.headers.get("referer") or ""
     if d_id:
         return redirect(f"/deliveries/{d_id}")
+    if "/agents/" in referer:
+        return RedirectResponse(referer, status_code=303)
     return redirect("/cash")

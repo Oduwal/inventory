@@ -1,6 +1,7 @@
+﻿<!-- app/templates/delivery_new.html -->
 {% extends "base.html" %}
-{% block title %}New Order{% endblock %}
-{% block page_title %}New Order{% endblock %}
+{% block title %}New Delivery{% endblock %}
+{% block page_title %}New Delivery{% endblock %}
 {% block page_subtitle %}Create an order for delivery. Stock subtracts only when delivered.{% endblock %}
 {% set active = 'deliveries' %}
 
@@ -28,7 +29,7 @@
 
     .lineRow {
         display: grid;
-        grid-template-columns: 2.2fr 1fr 1.2fr auto;
+        grid-template-columns: 2.2fr 1fr 1fr auto;
         gap: 10px;
         align-items: end;
     }
@@ -71,7 +72,6 @@
 
     <form method="post" action="/deliveries/new" style="margin-top:12px;">
         <div class="grid2">
-
             {% if user.role == "ADMIN" %}
             <div>
                 <label>Assign Agent</label>
@@ -85,30 +85,29 @@
             <input type="hidden" name="agent_id" value="{{ user.id }}">
             <div>
                 <label>Agent</label>
-                <input value="{{ user.username }}" disabled>
+                <input value="{{ user.username }}" disabled />
             </div>
             {% endif %}
 
             <div>
                 <label>Customer Name</label>
-                <input name="customer_name" required placeholder="Customer full name">
+                <input name="customer_name" required placeholder="Customer full name" />
             </div>
 
             <div>
                 <label>Customer Phone</label>
-                <input name="customer_phone" placeholder="Optional">
+                <input name="customer_phone" placeholder="Optional" />
             </div>
 
             <div>
                 <label>Address</label>
-                <input name="address" placeholder="Optional">
+                <input name="address" placeholder="Optional" />
             </div>
 
             <div style="grid-column: 1 / -1;">
                 <label>Note</label>
-                <input name="note" placeholder="Optional instructions">
+                <input name="note" placeholder="Optional instructions" />
             </div>
-
         </div>
 
         <div class="card" style="margin-top:14px;">
@@ -133,12 +132,12 @@
 
                     <div>
                         <label>Quantity</label>
-                        <input name="quantity" type="number" min="1" value="1" required>
+                        <input name="quantity" type="number" min="1" value="1" required />
                     </div>
 
                     <div>
-                        <label>Amount Collected (₦)</label>
-                        <input name="line_amount" type="number" step="0.01" min="0" value="0">
+                        <label>Amount Collected (â‚¦)</label>
+                        <input name="line_amount" type="number" step="0.01" min="0" value="0" />
                     </div>
 
                     <div>
@@ -149,7 +148,7 @@
         </div>
 
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
-            <button class="btnPrimary" type="submit">Create Order</button>
+            <button class="btnPrimary" type="submit">Create Delivery</button>
             <a class="btnGhost" href="/deliveries">Cancel</a>
         </div>
     </form>

@@ -65,11 +65,7 @@ def dashboard_stats(db: Session):
     items_count = db.scalar(select(func.count(Item.id))) or 0
     low_stock_count = len(get_low_stock(db))
     recent = get_recent_transactions(db, limit=10)
-    return {
-        "items_count": items_count,
-        "low_stock_count": low_stock_count,
-        "recent_transactions": recent,
-    }
+    return {"items_count": items_count, "low_stock_count": low_stock_count, "recent_transactions": recent}
 
 
 def dashboard_kpis(db: Session):
@@ -178,17 +174,14 @@ def cash_range_from_preset(preset: str | None):
         start = datetime.combine(today, datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
-
     if p == "yesterday":
         start = datetime.combine(today - timedelta(days=1), datetime.min.time())
         end = start + timedelta(days=1)
         return start, end
-
     if p == "7d":
         end = now
         start = now - timedelta(days=7)
         return start, end
-
     if p == "30d":
         end = now
         start = now - timedelta(days=30)
@@ -228,29 +221,18 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     delivery_rows = db.execute(delivery_stmt).all()
 
     c_day = func.date(CashEntry.created_at).label("day")
-
-    expenses_sum = func.coalesce(
-        func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)),
-        0,
-    ).label("expenses")
-
+    expenses_sum = func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0).label(
+        "expenses"
+    )
     extra_collections_sum = func.coalesce(
-        func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)),
-        0,
+        func.sum(case((CashEntry.kind == "COLLECTION", CashEntry.amount), else_=0)), 0
     ).label("extra_collections")
-
     operating_sum = func.coalesce(
-        func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)),
-        0,
+        func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)), 0
     ).label("operating_cash")
 
     cash_stmt = (
-        select(
-            c_day,
-            expenses_sum,
-            extra_collections_sum,
-            operating_sum,
-        )
+        select(c_day, expenses_sum, extra_collections_sum, operating_sum)
         .select_from(CashEntry)
         .group_by(c_day)
         .order_by(c_day.asc())

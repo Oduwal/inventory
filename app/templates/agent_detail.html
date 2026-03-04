@@ -1,24 +1,23 @@
-﻿{% extends "base.html" %}
-{% block title %}Agent Details{% endblock %}
+﻿<!-- app/templates/agent_detail.html -->
+{% extends "base.html" %}
+{% block title %}Agent: {{ agent.username }}{% endblock %}
 {% block page_title %}Agent: {{ agent.username }}{% endblock %}
-{% block page_subtitle %}Collections, expenses, profit, and deliveries by range.{% endblock %}
-{% set active = "agents" %}
+{% block page_subtitle %}Operating cash, expenses, collections, and deliveries for a selected range.{% endblock %}
+{% set active = 'agents' %}
 
 {% block top_right %}
 <a class="btnGhost" href="/agents">Back</a>
 {% endblock %}
 
 {% block content %}
-
 <div class="card">
-    <div class="badge b-blue">FILTER</div>
+    <div class="badge b-blue">FILTERS</div>
 
     <form method="get" action="/agents/{{ agent.id }}" style="margin-top:12px;">
         <div class="inputs">
             <div>
-                <label>Quick</label>
+                <label>Quick Filter</label>
                 <select name="preset">
-                    <option value="" {% if not preset %}selected{% endif %}>Custom</option>
                     <option value="today" {% if preset=="today" %}selected{% endif %}>Today</option>
                     <option value="yesterday" {% if preset=="yesterday" %}selected{% endif %}>Yesterday</option>
                     <option value="7d" {% if preset=="7d" %}selected{% endif %}>Last 7 days</option>
@@ -48,41 +47,120 @@
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
         <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
+        <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(total_operating_cash) }}</span>
         <span class="badge b-red">Expenses: {{ '%.2f'|format(total_expenses) }}</span>
-        <span class="badge b-purple">Profit: {{ '%.2f'|format(profit) }}</span>
-        <span class="badge b-yellow">Deliveries: {{ deliveries_count }}</span>
+        <span class="badge b-yellow">Operating Balance: {{ '%.2f'|format(operating_balance) }}</span>
+    </div>
+
+    <div class="muted" style="margin-top:8px;">
+        Operating Balance is calculated as Operating Cash minus Expenses.
     </div>
 </div>
 
 <div class="card" style="margin-top:14px;">
     <div class="badge b-purple">DAILY BREAKDOWN</div>
 
-    <div style="margin-top:12px; overflow:auto;">
+    <div style="margin-top:12px;">
         <table>
             <thead>
                 <tr>
                     <th>Date</th>
                     <th>Collections</th>
+                    <th>Operating Cash</th>
                     <th>Expenses</th>
-                    <th>Profit</th>
+                    <th>Operating Balance</th>
                 </tr>
             </thead>
             <tbody>
                 {% if rows and rows|length > 0 %}
                 {% for r in rows %}
                 <tr>
-                    <td>{{ r["day"] }}</td>
-                    <td>{{ '%.2f'|format(r["collections"]) }}</td>
-                    <td>{{ '%.2f'|format(r["expenses"]) }}</td>
-                    <td>{{ '%.2f'|format((r["collections"]|float) - (r["expenses"]|float)) }}</td>
+                    <td>{{ r.day }}</td>
+                    <td>{{ '%.2f'|format(r.collections|float) }}</td>
+                    <td>{{ '%.2f'|format(r.operating_cash|float) }}</td>
+                    <td>{{ '%.2f'|format(r.expenses|float) }}</td>
+                    <td>{{ '%.2f'|format((r.operating_cash|float) - (r.expenses|float)) }}</td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="4" class="muted">No records.</td></tr>
+                <tr><td colspan="5" class="muted">No records for this range.</td></tr>
                 {% endif %}
             </tbody>
         </table>
     </div>
 </div>
 
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-red">EXPENSE DETAILS</div>
+
+    <div class="muted" style="margin-top:8px;">
+        Expenses shown here are the items the operating cash was used for.
+    </div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Date/Time</th>
+                    <th>Amount (₦)</th>
+                    <th>Note</th>
+                    <th>Delivery</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if expense_entries and expense_entries|length > 0 %}
+                {% for e in expense_entries %}
+                <tr>
+                    <td>{{ e.created_at }}</td>
+                    <td>{{ '%.2f'|format(e.amount|float) }}</td>
+                    <td>{{ e.note or "-" }}</td>
+                    <td>
+                        {% if e.delivery_id %}
+                        <a class="btnGhost" href="/deliveries/{{ e.delivery_id }}">#{{ e.delivery_id }}</a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="4" class="muted">No expenses recorded for this range.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-blue">DELIVERIES IN RANGE</div>
+
+    <div style="margin-top:12px;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Customer</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Open</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if deliveries and deliveries|length > 0 %}
+                {% for d in deliveries %}
+                <tr>
+                    <td>#{{ d.id }}</td>
+                    <td>{{ d.customer_name or "-" }}</td>
+                    <td>{{ d.status }}</td>
+                    <td>{{ d.created_at }}</td>
+                    <td><a class="btnPrimary" href="/deliveries/{{ d.id }}">View</a></td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="5" class="muted">No deliveries for this range.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
 {% endblock %}
