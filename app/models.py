@@ -1,100 +1,132 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
+from __future__ import annotations
 
+from datetime import datetime
+from sqlalchemy import (
+    String,
+    Integer,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    CheckConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password_hash = Column(String, nullable=False)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    role = Column(String, default="AGENT")
-    full_name = Column(String)
+    # "ADMIN" or "AGENT"
+    role: Mapped[str] = mapped_column(String(10), default="AGENT", nullable=False)
 
-    deliveries = relationship("Delivery", back_populates="agent")
+    full_name: Mapped[str | None] = mapped_column(String(140), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    deliveries: Mapped[list["Delivery"]] = relationship(back_populates="agent")
 
 
 class Item(Base):
     __tablename__ = "items"
 
-    id = Column(Integer, primary_key=True)
-    sku = Column(String, index=True)
-    name = Column(String)
-    category = Column(String)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    cost_price = Column(Float, default=0)
-    reorder_level = Column(Integer, default=0)
+    sku: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    unit: Mapped[str] = mapped_column(String(20), default="pcs", nullable=False)
 
-class Transaction(Base):
-    __tablename__ = "transactions"
+    reorder_level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
-    id = Column(Integer, primary_key=True)
-    item_id = Column(Integer, ForeignKey("items.id"))
-    delivery_id = Column(Integer, nullable=True)
+    cost_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    selling_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
-    type = Column(String)
-    quantity = Column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    reference = Column(String)
-    note = Column(String)
+    transactions: Mapped[list["Transaction"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+    )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    item = relationship("Item")
+    delivery_items: Mapped[list["DeliveryItem"]] = relationship(back_populates="item")
 
 
 class Delivery(Base):
     __tablename__ = "deliveries"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    agent_id = Column(Integer, ForeignKey("users.id"))
+    agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
-    customer_name = Column(String)
-    customer_phone = Column(String)
-    address = Column(String)
+    customer_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    customer_phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
-    status = Column(String, default="PENDING")
+    # PENDING, OUT_FOR_DELIVERY, DELIVERED, FAILED, RETURNED
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
 
-    note = Column(String)
+    note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    delivered_at = Column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    agent = relationship("User", back_populates="deliveries")
-    items = relationship("DeliveryItem", back_populates="delivery")
+    agent: Mapped[User] = relationship(back_populates="deliveries")
+    items: Mapped[list["DeliveryItem"]] = relationship(
+        back_populates="delivery",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED')",
+            name="ck_delivery_status",
+        ),
+    )
 
 
 class DeliveryItem(Base):
     __tablename__ = "delivery_items"
 
-    id = Column(Integer, primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("deliveries.id"), nullable=False)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    delivery_id = Column(Integer, ForeignKey("deliveries.id"))
-    item_id = Column(Integer, ForeignKey("items.id"))
+    delivery: Mapped[Delivery] = relationship(back_populates="items")
+    item: Mapped[Item] = relationship(back_populates="delivery_items")
 
-    quantity = Column(Integer)
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_delivery_item_qty_positive"),
+    )
 
-    delivery = relationship("Delivery", back_populates="items")
-    item = relationship("Item")
 
+class Transaction(Base):
+    __tablename__ = "transactions"
 
-class CashLog(Base):
-    __tablename__ = "cash_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    id = Column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
 
-    agent_id = Column(Integer, ForeignKey("users.id"))
-    delivery_id = Column(Integer, ForeignKey("deliveries.id"), nullable=True)
+    # Optional link back to delivery
+    delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    kind = Column(String)  # EXPENSE or COLLECTION
-    amount = Column(Float)
+    type: Mapped[str] = mapped_column(String(10), nullable=False)  # "IN" or "OUT"
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    note = Column(String)
+    reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    item: Mapped[Item] = relationship(back_populates="transactions")
+
+    __table_args__ = (
+        CheckConstraint("type IN ('IN','OUT')", name="ck_tx_type_in_out"),
+        CheckConstraint("quantity > 0", name="ck_tx_quantity_positive"),
+    )

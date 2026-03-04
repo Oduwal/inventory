@@ -27,16 +27,6 @@
         Mark Delivered
     </button>
 </form>
-
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-    <input type="hidden" name="status" value="OUT_FOR_DELIVERY">
-    <button class="btnPrimary" type="submit">Start Delivery</button>
-</form>
-
-<form method="post" action="/deliveries/{{ d.id }}/status" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-    <input type="hidden" name="status" value="DELIVERED">
-    <button class="btnPrimary" type="submit">Mark Delivered</button>
-</form>
 {% endif %}
 
 {% endblock %}
