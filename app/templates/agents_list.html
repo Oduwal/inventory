@@ -1,8 +1,13 @@
+<!-- app/templates/agents_list.html -->
 {% extends "base.html" %}
 {% block title %}Agents{% endblock %}
 {% block page_title %}Agents{% endblock %}
-{% block page_subtitle %}Open an agent to view performance by range.{% endblock %}
+{% block page_subtitle %}Manage agents and view their daily/weekly/monthly performance.{% endblock %}
 {% set active = "agents" %}
+
+{% block top_right %}
+<a class="btnPrimary" href="/agents/new">+ New Agent</a>
+{% endblock %}
 
 {% block content %}
 <div class="card">
@@ -15,6 +20,7 @@
                     <th>ID</th>
                     <th>Username</th>
                     <th>Full Name</th>
+                    <th>Phone</th>
                     <th>Open</th>
                 </tr>
             </thead>
@@ -25,11 +31,12 @@
                     <td>{{ a.id }}</td>
                     <td>{{ a.username }}</td>
                     <td>{{ a.full_name or "-" }}</td>
+                    <td>{{ a.phone or "-" }}</td>
                     <td><a class="btnPrimary" href="/agents/{{ a.id }}">View</a></td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="4" class="muted">No agents.</td></tr>
+                <tr><td colspan="5" class="muted">No agents found.</td></tr>
                 {% endif %}
             </tbody>
         </table>

@@ -4,13 +4,9 @@
 {% block page_subtitle %}Add a new product to inventory.{% endblock %}
 {% set active = "items" %}
 
-{% block top_right %}
-<a class="btnGhost" href="/items">Back</a>
-{% endblock %}
-
 {% block content %}
 <div class="card">
-    <div class="badge b-blue">ITEM DETAILS</div>
+    <div class="badge b-blue">NEW ITEM</div>
 
     {% if error %}
     <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
@@ -20,41 +16,42 @@
         <div class="inputs">
             <div>
                 <label>Name</label>
-                <input name="name" required placeholder="e.g. Xemdem Tea" />
+                <input name="name" required>
             </div>
 
             <div>
-                <label>SKU (optional)</label>
-                <input name="sku" placeholder="e.g. XEM-TEA-01" />
+                <label>SKU</label>
+                <input name="sku">
             </div>
 
             <div>
-                <label>Category (optional)</label>
-                <input name="category" placeholder="e.g. Drinks" />
+                <label>Category</label>
+                <input name="category" placeholder="Merchant / Category">
             </div>
 
             <div>
                 <label>Unit</label>
-                <input name="unit" value="pcs" placeholder="pcs, pack, bottle..." />
+                <input name="unit" value="pcs">
             </div>
 
             <div>
                 <label>Reorder Level</label>
-                <input name="reorder_level" type="number" min="0" value="0" />
+                <input name="reorder_level" type="number" min="0" value="0">
             </div>
 
             <div>
                 <label>Cost Price</label>
-                <input name="cost_price" type="number" step="0.01" min="0" value="0" />
+                <input name="cost_price" type="number" step="0.01" min="0" value="0">
             </div>
 
             <div>
                 <label>Selling Price</label>
-                <input name="selling_price" type="number" step="0.01" min="0" value="0" />
+                <input name="selling_price" type="number" step="0.01" min="0" value="0">
             </div>
 
             <div>
-                <button class="btnPrimary" type="submit">Save Item</button>
+                <button class="btnPrimary" type="submit">Save</button>
+                <a class="btnGhost" href="/items">Cancel</a>
             </div>
         </div>
     </form>

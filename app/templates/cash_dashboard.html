@@ -15,10 +15,10 @@
                 <label>Quick Filter</label>
                 <select name="preset">
                     <option value="" {% if not preset %}selected{% endif %}>Custom</option>
-                    <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
-                    <option value="yesterday" {% if preset= ="yesterday" %}selected{% endif %}>Yesterday</option>
-                    <option value="7d" {% if preset= ="7d" %}selected{% endif %}>Last 7 days</option>
-                    <option value="30d" {% if preset= ="30d" %}selected{% endif %}>Last 30 days</option>
+                    <option value="today" {% if preset =="today" %}selected{% endif %}>Today</option>
+                    <option value="yesterday" {% if preset =="yesterday" %}selected{% endif %}>Yesterday</option>
+                    <option value="7d" {% if preset =="7d" %}selected{% endif %}>Last 7 days</option>
+                    <option value="30d" {% if preset =="30d" %}selected{% endif %}>Last 30 days</option>
                 </select>
             </div>
 
@@ -38,7 +38,7 @@
                 <select name="agent_id">
                     <option value="" {% if not agent_id %}selected{% endif %}>All</option>
                     {% for a in agents %}
-                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int= =a.id) %}selected{% endif %}>
+                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int==a.id) %}selected{% endif %}>
                         {{ a.username }}
                     </option>
                     {% endfor %}
@@ -130,3 +130,4 @@
 </div>
 
 {% endblock %}
+

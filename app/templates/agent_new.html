@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}New Agent{% endblock %}
+{% block page_title %}New Agent{% endblock %}
+{% block page_subtitle %}Create a new agent account.{% endblock %}
+{% set active = "agents" %}
+
+{% block content %}
+<div class="card">
+    <div class="badge b-blue">NEW AGENT</div>
+
+    {% if error %}
+    <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/agents/new" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Username</label>
+                <input name="username" required>
+            </div>
+
+            <div>
+                <label>Password</label>
+                <input name="password" type="password" required>
+            </div>
+
+            <div>
+                <label>Full name</label>
+                <input name="full_name">
+            </div>
+
+            <div>
+                <label>Phone</label>
+                <input name="phone">
+            </div>
+
+            <div>
+                <button class="btnPrimary" type="submit">Create</button>
+                <a class="btnGhost" href="/agents">Cancel</a>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}
