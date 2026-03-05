@@ -13,6 +13,12 @@
 <div class="card">
     <div class="badge b-blue">DETAILS</div>
 
+    <div style="margin-top:10px;">
+        <span class="badge b-green">
+            Total Collected: ₦ {{ '%.2f'|format(total_collected) }}
+        </span>
+    </div>
+
     <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
         <div>
             <div class="muted">Customer</div>
@@ -43,11 +49,11 @@
                     <div>
                         <label>Update status</label>
                         <select name="status">
-                            <option value="PENDING" {% if d.status=="PENDING" %}selected{% endif %}>PENDING</option>
-                            <option value="OUT_FOR_DELIVERY" {% if d.status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
-                            <option value="DELIVERED" {% if d.status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
-                            <option value="FAILED" {% if d.status=="FAILED" %}selected{% endif %}>FAILED</option>
-                            <option value="RETURNED" {% if d.status=="RETURNED" %}selected{% endif %}>RETURNED</option>
+                            <option value="PENDING" {% if d.status= ="PENDING" %}selected{% endif %}>PENDING</option>
+                            <option value="OUT_FOR_DELIVERY" {% if d.status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
+                            <option value="DELIVERED" {% if d.status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                            <option value="FAILED" {% if d.status= ="FAILED" %}selected{% endif %}>FAILED</option>
+                            <option value="RETURNED" {% if d.status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
                         </select>
                     </div>
 

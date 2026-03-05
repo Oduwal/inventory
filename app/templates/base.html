@@ -187,27 +187,56 @@
       </div>
 
       <nav class="nav">
-        <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Overview</span>
-        </a>
+        {# ---- ADMIN dashboard only ---- #}
+        {% if user and user.role == "ADMIN" %}
+          <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>Overview</span>
+          </a>
+        {% endif %}
 
-        <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Items</span>
-        </a>
+        {# ---- Items (ADMIN + STOREKEEPER + AGENT optional; keep visible for all logged-in users) ---- #}
+        {% if user %}
+          <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>Items</span>
+          </a>
+        {% endif %}
 
-        <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Transactions</span>
-        </a>
+        {# ---- Transactions (ADMIN + STOREKEEPER) ---- #}
+        {% if user and (user.role == "ADMIN" or user.role == "STOREKEEPER") %}
+          <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>Transactions</span>
+          </a>
+        {% endif %}
 
-        <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Deliveries</span>
-        </a>
-          <a href="/deliveries/new" class="navItem {% if active=='deliveries_new' %}active{% endif %}">New Order</a>
+        {# ---- Deliveries ---- #}
+        {% if user and user.role == "ADMIN" %}
+          <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>Deliveries</span>
+          </a>
 
-        <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Cash</span>
-        </a>
+          <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>New Order</span>
+          </a>
+        {% endif %}
 
+        {% if user and user.role == "AGENT" %}
+          <a href="/my-deliveries" data-active="{% if active == 'deliveries' or active == 'my_deliveries' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>My Deliveries</span>
+          </a>
+
+          <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>New Order</span>
+          </a>
+        {% endif %}
+
+        {# ---- Cash (ADMIN + AGENT + STOREKEEPER if you want storekeeper to record expenses) ---- #}
+        {% if user %}
+          <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
+            <span class="left"><span class="dot"></span>Cash</span>
+          </a>
+        {% endif %}
+
+        {# ---- Agents + Low Stock (ADMIN only) ---- #}
         {% if user and user.role == "ADMIN" %}
           <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
             <span class="left"><span class="dot"></span>Agents</span>

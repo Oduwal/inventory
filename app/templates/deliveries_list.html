@@ -1,4 +1,5 @@
-﻿{% extends "base.html" %}
+﻿<!-- app/templates/deliveries_list.html -->
+{% extends "base.html" %}
 {% block title %}Deliveries{% endblock %}
 {% block page_title %}Deliveries{% endblock %}
 {% block page_subtitle %}Track all delivery orders and filter by agent or status.{% endblock %}
@@ -13,16 +14,16 @@
     <div class="badge b-blue">FILTERS</div>
 
     <form method="get" action="/deliveries" style="margin-top:12px;">
-        <div class="inputs">
+        <div class="inputs" style="flex-wrap:wrap;">
             <div>
                 <label>Status</label>
                 <select name="status">
                     <option value="" {% if not status %}selected{% endif %}>All</option>
-                    <option value="PENDING" {% if status=="PENDING" %}selected{% endif %}>PENDING</option>
-                    <option value="OUT_FOR_DELIVERY" {% if status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
-                    <option value="DELIVERED" {% if status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
-                    <option value="FAILED" {% if status=="FAILED" %}selected{% endif %}>FAILED</option>
-                    <option value="RETURNED" {% if status=="RETURNED" %}selected{% endif %}>RETURNED</option>
+                    <option value="PENDING" {% if status= ="PENDING" %}selected{% endif %}>PENDING</option>
+                    <option value="OUT_FOR_DELIVERY" {% if status= ="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
+                    <option value="DELIVERED" {% if status= ="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+                    <option value="FAILED" {% if status= ="FAILED" %}selected{% endif %}>FAILED</option>
+                    <option value="RETURNED" {% if status= ="RETURNED" %}selected{% endif %}>RETURNED</option>
                 </select>
             </div>
 
@@ -31,7 +32,7 @@
                 <select name="agent_id">
                     <option value="" {% if not agent_id %}selected{% endif %}>All</option>
                     {% for a in agents %}
-                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int==a.id) %}selected{% endif %}>
+                    <option value="{{ a.id }}" {% if agent_id and (agent_id|int= =a.id) %}selected{% endif %}>
                         {{ a.username }}{% if a.full_name %} ({{ a.full_name }}){% endif %}
                     </option>
                     {% endfor %}
@@ -57,7 +58,6 @@
                     <th>Phone</th>
                     <th>Address</th>
                     <th>Agent</th>
-                    <th>Items</th>
                     <th>Status</th>
                     <th>Created</th>
                     <th>Open</th>
@@ -72,19 +72,6 @@
                     <td>{{ d.customer_phone or "-" }}</td>
                     <td>{{ d.address or "-" }}</td>
                     <td>{{ d.agent_id }}</td>
-
-                    <td style="max-width:340px;">
-                        {% set s = items_summary.get(d.id, "") %}
-                        {% if s %}
-                        <details>
-                            <summary class="muted">View items</summary>
-                            <div style="margin-top:6px;">{{ s }}</div>
-                        </details>
-                        {% else %}
-                        <span class="muted">-</span>
-                        {% endif %}
-                    </td>
-
                     <td>
                         {% if d.status == "DELIVERED" %}
                         <span class="badge b-green">{{ d.status }}</span>
@@ -96,17 +83,15 @@
                         <span class="badge b-red">{{ d.status }}</span>
                         {% endif %}
                     </td>
-
                     <td>{{ d.created_at or "-" }}</td>
                     <td><a class="btnPrimary" href="/deliveries/{{ d.id }}">View</a></td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="9" class="muted">No deliveries found.</td></tr>
+                <tr><td colspan="8" class="muted">No deliveries found.</td></tr>
                 {% endif %}
             </tbody>
         </table>
     </div>
 </div>
 {% endblock %}
-

@@ -3,7 +3,7 @@
 {% block title %}New Delivery{% endblock %}
 {% block page_title %}New Delivery{% endblock %}
 {% block page_subtitle %}Create an order for delivery. Stock subtracts only when delivered.{% endblock %}
-{% set active = 'deliveries' %}
+{% set active = 'deliveries_new' %}
 
 {% block content %}
 <style>
@@ -65,6 +65,14 @@
         .btnDanger:hover {
             background: rgba(251,113,133,.14);
         }
+
+    .totalsBox {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+    }
 </style>
 
 <div class="card">
@@ -136,14 +144,18 @@
                     </div>
 
                     <div>
-                        <label>Amount Collected (â‚¦)</label>
-                        <input name="line_amount" type="number" step="0.01" min="0" value="0" />
+                        <label>Amount Collected (₦)</label>
+                        <input class="amountInput" name="line_amount" type="number" step="0.01" min="0" value="0" />
                     </div>
 
                     <div>
                         <button class="btnDanger" type="button" onclick="removeLine(this)">Remove</button>
                     </div>
                 </div>
+            </div>
+
+            <div class="totalsBox">
+                <span class="badge b-blue">Total Collected: ₦ <span id="totalCollected">0.00</span></span>
             </div>
         </div>
 
@@ -157,21 +169,51 @@
 <script>
     const lines = document.getElementById("lines");
     const addRowBtn = document.getElementById("addRowBtn");
+    const totalCollectedEl = document.getElementById("totalCollected");
+
+    function parseNum(v) {
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? n : 0;
+    }
+
+    function recalcTotal() {
+        let total = 0;
+        lines.querySelectorAll('input[name="line_amount"]').forEach(inp => {
+            total += parseNum(inp.value);
+        });
+        totalCollectedEl.textContent = total.toFixed(2);
+    }
 
     function removeLine(btn) {
         const all = lines.querySelectorAll(".line");
         if (all.length <= 1) return;
         btn.closest(".line").remove();
+        recalcTotal();
+    }
+
+    function hookAmountInput(container) {
+        container.querySelectorAll('input[name="line_amount"]').forEach(inp => {
+            inp.addEventListener("input", recalcTotal);
+            inp.addEventListener("change", recalcTotal);
+        });
     }
 
     function addLine() {
         const first = lines.querySelector(".line");
         const clone = first.cloneNode(true);
+
         clone.querySelector('input[name="quantity"]').value = 1;
         clone.querySelector('input[name="line_amount"]').value = 0;
+
         lines.appendChild(clone);
+        hookAmountInput(clone);
+        recalcTotal();
     }
 
     addRowBtn.addEventListener("click", addLine);
+
+    // Init
+    hookAmountInput(lines);
+    recalcTotal();
 </script>
 {% endblock %}

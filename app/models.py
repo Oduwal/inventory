@@ -1,3 +1,4 @@
+# app/models.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -21,7 +22,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    role: Mapped[str] = mapped_column(String(10), default="AGENT", nullable=False)
+    # "ADMIN" or "AGENT" or "STOREKEEPER"
+    role: Mapped[str] = mapped_column(String(20), default="AGENT", nullable=False)
 
     full_name: Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -48,15 +50,9 @@ class Item(Base):
     selling_price: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    transactions: Mapped[list["Transaction"]] = relationship(
-        back_populates="item",
-        cascade="all, delete-orphan",
-    )
-
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="item", cascade="all, delete-orphan")
     delivery_items: Mapped[list["DeliveryItem"]] = relationship(back_populates="item")
 
 
@@ -72,7 +68,6 @@ class Delivery(Base):
     address: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
-
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -80,11 +75,7 @@ class Delivery(Base):
 
     agent: Mapped[User] = relationship(back_populates="deliveries")
 
-    items: Mapped[list["DeliveryItem"]] = relationship(
-        back_populates="delivery",
-        cascade="all, delete-orphan",
-    )
-
+    items: Mapped[list["DeliveryItem"]] = relationship(back_populates="delivery", cascade="all, delete-orphan")
     cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="delivery")
 
     __table_args__ = (
@@ -146,11 +137,13 @@ class CashEntry(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    # "COLLECTION" | "EXPENSE" | "OPERATING_CASH" | "OFFICE_EXPENSE"
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Optional link to stock movement (Transaction)
+    transaction_id: Mapped[int | None] = mapped_column(ForeignKey("transactions.id"), nullable=True)
+
+    # "COLLECTION" or "EXPENSE" or "OPERATING_CASH" or "OFFICE_EXPENSE"
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
 
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
     agent: Mapped[User] = relationship(back_populates="cash_entries")
