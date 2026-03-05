@@ -648,6 +648,7 @@ def agent_create(
     password: str = Form(...),
     full_name: str = Form(""),
     phone: str = Form(""),
+    role: str = Form("AGENT"),   # ✅ NEW
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -669,11 +670,15 @@ def agent_create(
     if len(password or "") < 4:
         return redirect("/agents/new?error=Password+too+short")
 
+    role_clean = (role or "").strip().upper()
+    if role_clean not in {"AGENT", "STOREKEEPER"}:
+        return redirect("/agents/new?error=Invalid+role")
+
     db.add(
         User(
             username=uname,
             password_hash=hash_password(password),
-            role="AGENT",
+            role=role_clean,  # ✅ AGENT or STOREKEEPER
             full_name=(full_name or "").strip() or None,
             phone=(phone or "").strip() or None,
         )

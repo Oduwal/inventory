@@ -1,12 +1,16 @@
 ﻿{% extends "base.html" %}
-{% block title %}New Agent{% endblock %}
-{% block page_title %}New Agent{% endblock %}
-{% block page_subtitle %}Create a new agent account.{% endblock %}
-{% set active = "agents" %}
+{% block title %}New Staff{% endblock %}
+{% block page_title %}New Staff{% endblock %}
+{% block page_subtitle %}Create an Agent or a Storekeeper account.{% endblock %}
+{% set active = 'agents' %}
+
+{% block top_right %}
+<a class="btnGhost" href="/agents">Back</a>
+{% endblock %}
 
 {% block content %}
 <div class="card">
-    <div class="badge b-blue">NEW AGENT</div>
+    <div class="badge b-blue">CREATE STAFF</div>
 
     {% if error %}
     <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
@@ -15,28 +19,35 @@
     <form method="post" action="/agents/new" style="margin-top:12px;">
         <div class="inputs">
             <div>
+                <label>Role</label>
+                <select name="role" required>
+                    <option value="AGENT">AGENT</option>
+                    <option value="STOREKEEPER">STOREKEEPER</option>
+                </select>
+            </div>
+
+            <div>
                 <label>Username</label>
-                <input name="username" required>
+                <input name="username" required placeholder="e.g. storekeeper1" />
             </div>
 
             <div>
                 <label>Password</label>
-                <input name="password" type="password" required>
+                <input name="password" type="password" required placeholder="Minimum 4 characters" />
             </div>
 
             <div>
-                <label>Full name</label>
-                <input name="full_name">
+                <label>Full Name (optional)</label>
+                <input name="full_name" placeholder="Optional" />
             </div>
 
             <div>
-                <label>Phone</label>
-                <input name="phone">
+                <label>Phone (optional)</label>
+                <input name="phone" placeholder="Optional" />
             </div>
 
             <div>
                 <button class="btnPrimary" type="submit">Create</button>
-                <a class="btnGhost" href="/agents">Cancel</a>
             </div>
         </div>
     </form>
