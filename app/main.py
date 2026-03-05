@@ -53,8 +53,6 @@ app.add_middleware(
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
-# ---------------- Helpers ----------------
-
 def redirect(path: str) -> RedirectResponse:
     return RedirectResponse(url=path, status_code=303)
 
@@ -70,7 +68,10 @@ def is_agent(user: User | None) -> bool:
 def verify_password(plain_password: str, password_hash: str) -> bool:
     if (password_hash or "").startswith("$2"):
         try:
-            return bcrypt_lib.checkpw(plain_password.encode("utf-8"), password_hash.encode("utf-8"))
+            return bcrypt_lib.checkpw(
+                plain_password.encode("utf-8"),
+                password_hash.encode("utf-8"),
+            )
         except Exception:
             return False
     try:
@@ -178,8 +179,8 @@ def seed_admin_if_missing() -> None:
         if existing_admin:
             return
 
-        username_taken = db.scalar(select(User).where(User.username == admin_user))
-        if username_taken:
+        username_exists = db.scalar(select(User).where(User.username == admin_user))
+        if username_exists:
             return
 
         db.add(
@@ -202,7 +203,9 @@ def _startup() -> None:
 
 
 def _range_dates_from_inputs(
-    preset: str | None, start_date: str | None, end_date: str | None
+    preset: str | None,
+    start_date: str | None,
+    end_date: str | None,
 ) -> tuple[date | None, date | None, str]:
     p = (preset or "").strip().lower()
     today = date.today()
@@ -222,22 +225,6 @@ def _range_dates_from_inputs(
     return sd, ed, ""
 
 
-def _dt_range_from_dates(preset: str, start_date: str, end_date: str):
-    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
-
-    start_dt = None
-    end_dt = None
-    if preset_norm:
-        start_dt, end_dt = cash_range_from_preset(preset_norm)
-    else:
-        if sd:
-            start_dt = datetime.combine(sd, datetime.min.time())
-        if ed:
-            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
-
-    return sd, ed, preset_norm, start_dt, end_dt
-
-
 def _parse_iso_date(d: str | None) -> date | None:
     if not d:
         return None
@@ -252,6 +239,22 @@ def _ngn(n: float) -> str:
         return f"₦{float(n):,.0f}"
     except Exception:
         return "₦0"
+
+
+def _dt_range_from_dates(preset: str, start_date: str, end_date: str):
+    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
+
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd:
+            start_dt = datetime.combine(sd, datetime.min.time())
+        if ed:
+            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
+
+    return sd, ed, preset_norm, start_dt, end_dt
 
 
 # ---------------- Auth ----------------
@@ -366,10 +369,7 @@ def item_new_form(request: Request, db: Session = Depends(get_db)):
         return forbid
 
     error = request.query_params.get("error")
-    return templates.TemplateResponse(
-        "item_new.html",
-        {"request": request, "user": user, "error": error, "active": "items"},
-    )
+    return templates.TemplateResponse("item_new.html", {"request": request, "user": user, "error": error, "active": "items"})
 
 
 @app.post("/items/new")
@@ -429,7 +429,10 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
 
     item, stock = row
     txs = db.scalars(
-        select(Transaction).where(Transaction.item_id == item_id).order_by(desc(Transaction.created_at)).limit(200)
+        select(Transaction)
+        .where(Transaction.item_id == item_id)
+        .order_by(desc(Transaction.created_at))
+        .limit(200)
     ).all()
 
     return templates.TemplateResponse(
@@ -438,7 +441,106 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
     )
 
 
-# ---------------- Transactions ----------------
+@app.get("/items/{item_id}/edit", response_class=HTMLResponse)
+def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    item = db.get(Item, item_id)
+    if not item:
+        return HTMLResponse("Item not found", status_code=404)
+
+    error = request.query_params.get("error")
+    return templates.TemplateResponse(
+        "item_edit.html",
+        {"request": request, "item": item, "user": user, "error": error, "active": "items"},
+    )
+
+
+@app.post("/items/{item_id}/edit")
+def item_edit_save(
+    request: Request,
+    item_id: int,
+    name: str = Form(...),
+    sku: str = Form(""),
+    category: str = Form(""),
+    unit: str = Form("pcs"),
+    reorder_level: int = Form(0),
+    cost_price: float = Form(0),
+    selling_price: float = Form(0),
+    # Stock adjustment (quantity update) via transactions
+    adjust_type: str = Form(""),   # "IN" or "OUT" or ""
+    adjust_qty: int = Form(0),     # number to add/remove
+    adjust_note: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    item = db.get(Item, item_id)
+    if not item:
+        return HTMLResponse("Item not found", status_code=404)
+
+    name_clean = (name or "").strip()
+    if not name_clean:
+        return redirect(f"/items/{item_id}/edit?error=Name+is+required")
+
+    sku_clean = (sku or "").strip() or None
+    if sku_clean:
+        other = db.scalar(select(Item).where(Item.sku == sku_clean).where(Item.id != item_id))
+        if other:
+            return redirect(f"/items/{item_id}/edit?error=SKU+already+exists")
+
+    item.name = name_clean
+    item.sku = sku_clean
+    item.category = (category or "").strip() or None
+    item.unit = (unit or "pcs").strip() or "pcs"
+    item.reorder_level = int(reorder_level or 0)
+    item.cost_price = float(cost_price or 0)
+    item.selling_price = float(selling_price or 0)
+
+    at = (adjust_type or "").strip().upper()
+    aq = int(adjust_qty or 0)
+
+    if aq < 0:
+        return redirect(f"/items/{item_id}/edit?error=Adjust+quantity+must+be+positive")
+    if aq > 0:
+        if at not in {"IN", "OUT"}:
+            return redirect(f"/items/{item_id}/edit?error=Adjust+type+must+be+IN+or+OUT")
+
+        if at == "OUT":
+            row = get_item_with_stock(db, item_id)
+            current_stock = int(row[1]) if row else 0
+            if current_stock < aq:
+                return redirect(f"/items/{item_id}/edit?error=Insufficient+stock+for+OUT+adjustment")
+
+        db.add(
+            Transaction(
+                item_id=item_id,
+                type=at,
+                quantity=aq,
+                reference=f"MANUAL ADJUST #{item_id}",
+                note=(adjust_note or "").strip() or f"Manual stock adjust by {user.username}",
+            )
+        )
+
+    db.commit()
+    return redirect(f"/items/{item_id}")
+
+
+# ---------------- Transactions (ADMIN) ----------------
 
 @app.get("/transactions", response_class=HTMLResponse)
 def transactions_list(request: Request, db: Session = Depends(get_db)):
@@ -448,10 +550,7 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     txs = get_recent_transactions(db, limit=300)
-    return templates.TemplateResponse(
-        "transactions_list.html",
-        {"request": request, "txs": txs, "user": user, "active": "transactions"},
-    )
+    return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user, "active": "transactions"})
 
 
 @app.get("/transactions/new", response_class=HTMLResponse)
@@ -468,10 +567,7 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
     rows = get_items_with_stock(db)
     items = [i for (i, _s) in rows]
     error = request.query_params.get("error")
-    return templates.TemplateResponse(
-        "tx_form.html",
-        {"request": request, "items": items, "error": error, "user": user, "active": "transactions"},
-    )
+    return templates.TemplateResponse("tx_form.html", {"request": request, "items": items, "error": error, "user": user, "active": "transactions"})
 
 
 @app.post("/transactions/new")
@@ -480,8 +576,8 @@ def tx_create(
     item_id: int = Form(...),
     tx_type: str = Form(...),
     quantity: int = Form(...),
-    reference: str = Form(default=""),
-    note: str = Form(default=""),
+    reference: str = Form(""),
+    note: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -532,13 +628,10 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     rows = get_low_stock(db)
-    return templates.TemplateResponse(
-        "low_stock.html",
-        {"request": request, "rows": rows, "user": user, "active": "low"},
-    )
+    return templates.TemplateResponse("low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"})
 
 
-# ---------------- Agents ----------------
+# ---------------- Agents (ADMIN) ----------------
 
 @app.get("/agents", response_class=HTMLResponse)
 def agents_list(request: Request, db: Session = Depends(get_db)):
@@ -552,10 +645,7 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
         return forbid
 
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    return templates.TemplateResponse(
-        "agents_list.html",
-        {"request": request, "agents": agents, "user": user, "active": "agents"},
-    )
+    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user, "active": "agents"})
 
 
 @app.get("/agents/new", response_class=HTMLResponse)
@@ -570,10 +660,7 @@ def agent_new_form(request: Request, db: Session = Depends(get_db)):
         return forbid
 
     error = request.query_params.get("error")
-    return templates.TemplateResponse(
-        "agent_new.html",
-        {"request": request, "user": user, "error": error, "active": "agents"},
-    )
+    return templates.TemplateResponse("agent_new.html", {"request": request, "user": user, "error": error, "active": "agents"})
 
 
 @app.post("/agents/new")
@@ -667,6 +754,7 @@ def agent_detail(
 
     delivery_ids = [d.id for d in deliveries]
     items_summary: dict[int, str] = {}
+
     if delivery_ids:
         lines = db.execute(
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
@@ -678,6 +766,7 @@ def agent_detail(
         grouped: dict[int, list[str]] = {}
         for did, name, qty in lines:
             grouped.setdefault(int(did), []).append(f"{name} ×{int(qty)}")
+
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 
     cash_stmt = select(CashEntry).order_by(desc(CashEntry.created_at))
@@ -740,15 +829,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(
         "deliveries_list.html",
-        {
-            "request": request,
-            "rows": rows,
-            "agents": agents,
-            "status": status,
-            "agent_id": agent_id,
-            "user": user,
-            "active": "deliveries",
-        },
+        {"request": request, "rows": rows, "agents": agents, "status": status, "agent_id": agent_id, "user": user, "active": "deliveries"},
     )
 
 
@@ -836,13 +917,13 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
     user = user_or
 
     rows = db.execute(
-        select(Delivery).where(Delivery.agent_id == user.id).order_by(desc(Delivery.created_at)).limit(300)
+        select(Delivery)
+        .where(Delivery.agent_id == user.id)
+        .order_by(desc(Delivery.created_at))
+        .limit(300)
     ).scalars().all()
 
-    return templates.TemplateResponse(
-        "my_deliveries.html",
-        {"request": request, "rows": rows, "user": user, "active": "deliveries"},
-    )
+    return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user, "active": "deliveries"})
 
 
 @app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
@@ -1073,7 +1154,7 @@ def cash_new(
     return redirect("/cash")
 
 
-# ---------------- Reports (TXT download) ----------------
+# ---------------- Reports (TXT) ----------------
 
 @app.get("/reports", response_class=HTMLResponse)
 def reports_form(request: Request, db: Session = Depends(get_db)):
@@ -1146,7 +1227,7 @@ def reports_txt(
     target_agent_id: int | None = None
     if is_agent(user):
         target_agent_id = int(user.id)
-    if is_admin(user) and (agent_id or "").isdigit():
+    elif is_admin(user) and (agent_id or "").isdigit():
         target_agent_id = int(agent_id)
 
     filters = [
@@ -1157,7 +1238,9 @@ def reports_txt(
     if target_agent_id is not None:
         filters.append(Delivery.agent_id == target_agent_id)
 
-    deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
+    deliveries = db.execute(
+        select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())
+    ).scalars().all()
 
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list[tuple[str, float, float]]] = {}
@@ -1174,7 +1257,6 @@ def reports_txt(
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
-
         for did, name, qty, line_amt, selling_price in rows:
             q = float(qty or 0)
             la = float(line_amt or 0)
@@ -1198,8 +1280,7 @@ def reports_txt(
             .where(CashEntry.kind == "OFFICE_EXPENSE")
             .where(CashEntry.created_at >= start_dt)
             .where(CashEntry.created_at <= end_dt)
-        )
-        or 0
+        ) or 0
     )
 
     waybill_total = float(
@@ -1209,8 +1290,7 @@ def reports_txt(
             .where(CashEntry.created_at >= start_dt)
             .where(CashEntry.created_at <= end_dt)
             .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
-        )
-        or 0
+        ) or 0
     )
 
     other_office_total = office_total - waybill_total
@@ -1223,6 +1303,7 @@ def reports_txt(
     lines.append("")
 
     grand_total = 0.0
+
     for idx, d in enumerate(deliveries, start=1):
         d_items = items_by_delivery.get(int(d.id), [])
         total_qty = sum(q for _name, q, _amt in d_items)
@@ -1234,6 +1315,7 @@ def reports_txt(
 
         items_txt = " + ".join(parts) if parts else "No items"
         grand_total += delivery_total
+
         lines.append(f"({idx})\t{total_qty:g}\t{items_txt}\t{_ngn(delivery_total)}")
 
     lines.append("")
@@ -1273,6 +1355,7 @@ def reports_txt(
 
     filename = f"report_{d1.isoformat()}_{d2.isoformat()}.txt"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+
     return PlainTextResponse(body, headers=headers, media_type="text/plain; charset=utf-8")
 
 
