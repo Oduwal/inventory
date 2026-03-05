@@ -779,7 +779,6 @@ def agent_detail(
 
 # ---------------- Deliveries ----------------
 
-@app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
 def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
@@ -906,7 +905,6 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user})
 
 
-@app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
 def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
