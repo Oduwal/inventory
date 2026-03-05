@@ -1,0 +1,85 @@
+﻿{% extends "base.html" %}
+{% block title %}Sales Report{% endblock %}
+{% block page_title %}Sales Report (TXT){% endblock %}
+{% block page_subtitle %}Select a date range and download as .txt{% endblock %}
+{% set active = 'reports' %}
+
+{% block content %}
+<div class="card">
+  <div class="badge b-blue">DOWNLOAD</div>
+
+  <form method="get" action="/reports/sales.txt" style="margin-top:12px;">
+    <div class="inputs">
+      <div>
+        <label
+
+
+
+
+
+
+
+>Start date</label>
+        <input type="date" name="start_date" value="{{ start_date or '' }}">
+      </div>
+
+      <div>
+        <label>End date</label>
+        <input type="date" name="end_date" value="{{ end_date or '' }}">
+      </div>
+
+      {% if user and (user.role|string|upper) == 'ADMIN' %}
+   
+
+
+
+
+
+
+
+
+
+   <div>
+        <label>Agent (optional)</label>
+        <select name="agent_id">
+          <option value="">All agents</option>
+          {% for a in agents %}
+            <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+ 
+
+
+
+
+
+         {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+
+      <div style="align-self:end;">
+        <button class="btnPrimary" type="submit">Download TXT</button>
+      </div>
+ 
+
+
+
+
+
+
+
+   </div>
+  </form>
+
+  <div class="muted" style="margin-top:10px;">
+    Delivered orders are used for the report.
+  </div>
+</div>
+{% endblock %}
+
+
+
+
+
+
+
+
