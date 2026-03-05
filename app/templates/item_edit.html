@@ -50,6 +50,24 @@
             </div>
 
             <div>
+                <div>
+                    <label>Adjust Stock Type</label>
+                    <select name="adjust_type">
+                        <option value="">No change</option>
+                        <option value="IN">IN (Add)</option>
+                        <option value="OUT">OUT (Remove)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Adjust Quantity</label>
+                    <input name="adjust_qty" type="number" min="0" value="0">
+                </div>
+
+                <div>
+                    <label>Adjustment Note</label>
+                    <input name="adjust_note" placeholder="Reason for adjustment">
+                </div>
                 <button class="btnPrimary" type="submit">Save</button>
                 <a class="btnGhost" href="/items/{{ item.id }}">Cancel</a>
             </div>
