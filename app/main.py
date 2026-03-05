@@ -1,9 +1,9 @@
-# app/main.py
+﻿# app/main.py
 import os
 from datetime import datetime, date, timedelta
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, desc, func, case
+from sqlalchemy import select, text, func, and_, desc, func, case
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -228,7 +228,7 @@ def build_items_summary_for_deliveries(db: Session, delivery_ids: list[int]) -> 
                 """
                 SELECT
                     di.delivery_id AS delivery_id,
-                    string_agg(i.name || ' ×' || di.quantity::text, ', ' ORDER BY i.name) AS summary
+                    string_agg(i.name || ' Ã—' || di.quantity::text, ', ' ORDER BY i.name) AS summary
                 FROM delivery_items di
                 JOIN items i ON i.id = di.item_id
                 WHERE di.delivery_id = ANY(:ids)
@@ -249,7 +249,7 @@ def build_items_summary_for_deliveries(db: Session, delivery_ids: list[int]) -> 
 
         grouped: dict[int, list[str]] = {}
         for d_id, name, qty in rows2:
-            grouped.setdefault(int(d_id), []).append(f"{name} ×{int(qty)}")
+            grouped.setdefault(int(d_id), []).append(f"{name} Ã—{int(qty)}")
 
         return {k: ", ".join(v) for k, v in grouped.items()}
 
@@ -700,7 +700,7 @@ def agent_detail(
 
     deliveries = db.execute(d_stmt).scalars().all()
 
-    # Items summary per delivery: "Item ×Qty, Item ×Qty"
+    # Items summary per delivery: "Item Ã—Qty, Item Ã—Qty"
     delivery_ids = [d.id for d in deliveries]
     items_summary: dict[int, str] = {}
 
@@ -714,7 +714,7 @@ def agent_detail(
 
         grouped: dict[int, list[str]] = {}
         for did, name, qty in lines:
-            grouped.setdefault(int(did), []).append(f"{name} ×{int(qty)}")
+            grouped.setdefault(int(did), []).append(f"{name} Ã—{int(qty)}")
 
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
@@ -1119,3 +1119,279 @@ def reset_system(db: Session = Depends(get_db)):
     db.execute(text("TRUNCATE TABLE transactions RESTART IDENTITY CASCADE"))
     db.commit()
     return {"status": "Database reset complete"}
+
+
+# ---------------- Reports (TXT) ----------------
+
+def _parse_iso_date(d: str | None):
+    if not d:
+        r
+eturn None
+    try:
+        return date.fromisoformat(d.strip())
+    except Exception:
+        return None
+
+def _ngn(n: float) -> str:
+    try:
+        return f"₦{float(n):,.0f}"
+    except Exception:
+        return "₦0"
+
+@app.get("/reports
+
+
+
+
+
+
+
+
+
+
+
+/deliveries", response_class=HTMLResponse)
+def deliveries_report_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_agent(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    # Agents can only report on their own deliveries
+    agents = []
+    if is_admin(user):
+        agents = db.execute(
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+           select(User).where(User.role == "AGENT").order_by(User.username.asc())
+        ).scalars().all()
+
+    return templates.TemplateResponse(
+        "deliveries_report.html",
+        {"request": request, "user": user, "agents": agents, "active": "reports"},
+    )
+
+@app.get("/reports/deliveries.txt")
+def deliveries_report_txt(
+    request: Request,
+
+
+
+
+
+
+
+
+
+
+    start_date: str | None = None,
+    end_date: str | None = None,
+    agent_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_o
+
+
+
+
+
+
+r, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_agent(user)):
+        return PlainTextResponse("Forbidden", status_code=403)
+
+ 
+
+
+
+
+
+
+   d1 = _parse_iso_date(start_date)
+    d2 = _parse_iso_date(end_date)
+
+    # Default range = today
+    if not d1 and not d2:
+        d1 = date.today()
+ 
+
+
+
+
+
+       d2 = date.today()
+
+    if d1 and not d2:
+        d2 = d1
+    if d2 and not d1:
+ 
+
+
+
+
+       d1 = d2
+
+    start_dt = datetime.combine(d1, datetime.min.time())
+    end_dt   = datetime.combine(d2, datetime.max.time())
+
+
+
+
+
+    # Agent scoping
+    target_agent_id = None
+    if is_agent(user):
+ 
+
+
+
+       target_agent_id = user.id
+    elif is_admin(user) and (agent_id or "").isdigit():
+        target_agent_id = int(agent_id)
+
+
+
+
+    filters = [
+        Delivery.created_at >= start_dt,
+        Delivery.creat
+
+
+ed_at <= end_dt,
+        Delivery.status == "DELIVERED",
+    ]
+ 
+
+
+   if target_agent_id is not None:
+        filters.append(Delivery.agent_id == target_agent_id)
+
+ 
+
+
+   deliveries = db.execute(
+        select(Delivery)
+        .where(and_(*filters))
+ 
+
+
+       .order_by(Delivery.created_at.asc())
+    ).scalars().all()
+
+ 
+
+
+   lines = []
+    title_day = d1.strftime("%A %d %b %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
+ 
+
+   lines.append(f"REPORT FOR {title_day}.")
+    lines.append(f"TOTAL DELIVERY = {len(deliveries)}")
+ 
+
+   lines.append("")
+
+    grand_total = 0.0
+
+
+
+
+    for idx, d in enumerate(deliveries, start=1):
+        d_items = db.execute(
+ 
+
+
+           select(DeliveryItem, Item)
+            .join(Item, Item.id == DeliveryItem.item_id)
+        
+
+    .where(DeliveryItem.delivery_id == d.id)
+            .order_by(Item.name.asc())
+ 
+
+       ).all()
+
+ 
+
+       # Build a compact one-line summary: "2x Item A + 1x Item B"
+        parts = []
+ 
+
+       delivery_total = 0.0
+        total_qty = 0.0
+
+
+
+        for (di, it) in d_items:
+ 
+
+           qty = float(di.quantity or 0)
+            price = float(it.selling_price or 0)
+ 
+
+           total_qty += qty
+            delivery_total += qty * price
+ 
+
+           parts.append(f"{qty:g}x {it.name}")
+
+ 
+
+       grand_total += delivery_total
+
+ 
+
+       customer = (d.customer_name or "").strip()
+ 
+       customer_txt = f" ({customer})" if customer else ""
+        items_txt = " + ".join(parts) if parts else "No items"
+
+
+
+        # Example line:
+ 
+
+       # (1)  3  2x Item A + 1x Item B (Customer)  ₦50,000
+        lines.append(f"({idx})\t{total_qty:g}\t{items_t
+xt}{customer_txt}\t{_ngn(delivery_total)}")
+
+ 
+
+   lines.append("")
+    lines.append(f"Grand total: {_ngn(grand_total)}")
+ 
+
+   lines.append("")
+
+ 
+
+   body = "\n".join(lines)
+
+ 
+
+   filename = f"deliveries_{d1.isoformat()}_{d2.isoformat()}.txt"
+    headers = {"Content-D
+isposition": f'attachment; filename="{filename}"'}
+ 
+   return PlainTextResponse(body, headers=headers, media_type="text/plain; charset=utf-8")
+
+

@@ -1,0 +1,50 @@
+# --- Create deliveries_report.html ---
+$tplPath = ".\app\templates\deliveries_report.html"
+
+@'
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block page_title %}Delivery Report (TXT){% endblock %}
+{% block page_subtitle %}Select a date range and download a .txt summary.{% endblock %}
+{% set active = 'reports' %}
+
+{% block content %}
+<div class="card">
+    <div class="badge b-blue">DOWNLOAD</div>
+
+    <form method="get" action="/reports/deliveries.txt" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Start Date</label>
+                <input type="date" name="start_date" required>
+            </div>
+
+            <div>
+                <label>End Date</label>
+                <input type="date" name="end_date" required>
+            </div>
+
+            {% if user.role == 'ADMIN' %}
+            <div>
+                <label>Agent (optional)</label>
+                <select name="agent_id">
+                    <option value="">All Agents</option>
+                    {% for a in agents %}
+                    <option value="{{ a.id }}">{{ a.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <div>
+                <button class="btnPrimary" type="submit">Download TXT</button>
+            </div>
+        </div>
+    </form>
+
+    <div class="muted" style="margin-top:10px;">
+        Delivered deliveries only get included. Amounts use item selling price × quantity.
+    </div>
+</div>
+{% endblock %}
+'@ | Set-Content $tplPath -Encoding UTF8
