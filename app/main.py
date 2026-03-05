@@ -783,6 +783,127 @@ t = datetime.combine(sd, datetime.min.time())
        },
     )
 
+# ---------------- Agent detail (ADMIN) ----------------
+
+def _dt_range_from_dates(preset: str, start_date: str, end_date: str):
+    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
+
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd:
+            start_dt = datetime.combine(sd, datetime.min.time())
+        if ed:
+            end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
+
+    return sd, ed, preset_norm, start_dt, end_dt
+
+
+@app.get("/agents/{agent_id}", response_class=HTMLResponse)
+def agent_detail(
+    request: Request,
+    agent_id: int,
+    preset: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+
+    agent = db.get(User, agent_id)
+    if not agent or (agent.role or "").upper() != "AGENT":
+        return HTMLResponse("Agent not found", status_code=404)
+
+    sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
+
+    # Summary numbers (includes office expenses total as 5th return)
+    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(
+        db=db,
+        agent_id=agent_id,
+        start=start_dt,
+        end=end_dt,
+    )
+
+    operating_balance = float(total_operating) - float(total_expenses)
+    remittance = float(total_collections) - float(total_office_expenses)
+    net_position = remittance + operating_balance
+
+    # Deliveries list for this agent in range
+    d_stmt = (
+        select(Delivery)
+        .where(Delivery.agent_id == agent_id)
+        .order_by(desc(Delivery.created_at))
+        .limit(300)
+    )
+    if start_dt:
+        d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
+    if end_dt:
+        d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+
+    deliveries = db.execute(d_stmt).scalars().all()
+
+    # Items summary per delivery: "Item ×Qty, Item ×Qty"
+    delivery_ids = [d.id for d in deliveries]
+    items_summary: dict[int, str] = {}
+
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+
+        grouped: dict[int, list[str]] = {}
+        for did, name, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{name} ×{int(qty)}")
+        items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
+
+    # Cash entries audit (agent entries + office expenses), in range
+    cash_stmt = select(CashEntry).order_by(desc(CashEntry.created_at))
+    if start_dt:
+        cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt:
+        cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
+
+    cash_stmt = cash_stmt.where(
+        (CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE")
+    )
+
+    cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
+
+    return templates.TemplateResponse(
+        "agent_detail.html",
+        {
+            "request": request,
+            "user": user,
+            "agent": agent,
+            "rows": rows,
+            "deliveries": deliveries,
+            "items_summary": items_summary,
+            "cash_entries": cash_entries,
+            "total_collections": float(total_collections),
+            "total_expenses": float(total_expenses),
+            "total_operating_cash": float(total_operating),
+            "operating_balance": float(operating_balance),
+            "total_office_expenses": float(total_office_expenses),
+            "remittance": float(remittance),
+            "net_position": float(net_position),
+            "preset": preset_norm or (preset or ""),
+            "start_date": sd.isoformat() if sd else "",
+            "end_date": ed.isoformat() if ed else "",
+            "active": "agents",
+        },
+    )
 
 
 # ---------------- Deliveries ----------------
