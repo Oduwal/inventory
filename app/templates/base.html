@@ -191,8 +191,6 @@
           <span class="left"><span class="dot"></span>Overview</span>
         </a>
 
-        <a href="/reports/sales" class="{% if active=='reports' %}active{% endif %}">Reports</a>
-
         <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
           <span class="left"><span class="dot"></span>Items</span>
         </a>
@@ -204,12 +202,17 @@
         <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
           <span class="left"><span class="dot"></span>Deliveries</span>
         </a>
-          <a href="/deliveries/new" class="navItem {% if active=='deliveries_new' %}active{% endif %}">New Order</a>
+
+        <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+          <span class="left"><span class="dot"></span>New Order</span>
+        </a>
 
         <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
-        <a href="/reports" class="{% if active == 'reports' %}active{% endif %}">Reports</a>
-        <a href="/reports" class="{% if active == 'reports' %}active{% endif %}">Reports</a>
           <span class="left"><span class="dot"></span>Cash</span>
+        </a>
+
+        <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+          <span class="left"><span class="dot"></span>Reports</span>
         </a>
 
         {% if user and user.role == "ADMIN" %}
