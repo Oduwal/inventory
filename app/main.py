@@ -825,11 +825,42 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         stmt = stmt.where(Delivery.agent_id == int(agent_id))
 
     rows = db.execute(stmt).scalars().all()
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+
+    agents = db.execute(
+        select(User).where(User.role == "AGENT").order_by(User.username.asc())
+    ).scalars().all()
+
+    # Build items_summary: {delivery_id: "Item ×Qty, Item ×Qty"}
+    delivery_ids = [d.id for d in rows]
+    items_summary: dict[int, str] = {}
+
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+
+        grouped: dict[int, list[str]] = {}
+        for did, name, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{name} ×{int(qty)}")
+
+        for did, parts in grouped.items():
+            items_summary[did] = ", ".join(parts)
 
     return templates.TemplateResponse(
         "deliveries_list.html",
-        {"request": request, "rows": rows, "agents": agents, "status": status, "agent_id": agent_id, "user": user, "active": "deliveries"},
+        {
+            "request": request,
+            "rows": rows,
+            "agents": agents,
+            "status": status,
+            "agent_id": agent_id,
+            "items_summary": items_summary,  # ✅ this fixes the crash
+            "user": user,
+            "active": "deliveries",
+        },
     )
 
 
