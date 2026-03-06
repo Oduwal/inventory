@@ -161,5 +161,5 @@ class CashEntry(Base):
     "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING')",
     name="ck_cash_kind",
 ),
-        CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
+        CheckConstraint("amount <> 0", name="ck_cash_amount_positive"),
     )
