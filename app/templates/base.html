@@ -164,10 +164,44 @@
     .inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
     .inputs > div{min-width:180px;flex:1}
     .muted{color:var(--muted)}
-    @media(max-width: 980px){
-      .layout{grid-template-columns: 1fr}
-      .sidebar{position:sticky;top:0;z-index:2}
-    }
+    @media (max-width: 980px){
+  .layout{
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* Stop the sidebar from overlaying the content */
+  .sidebar{
+    position: relative;   /* was sticky */
+    top: auto;
+    z-index: 1;
+  }
+
+  .content{
+    padding: 16px 14px;
+  }
+
+  /* Prevent topbar buttons from overlapping */
+  .topbar{
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .topbar > div{
+    width: 100%;
+  }
+
+  /* Make button rows wrap nicely on phones */
+  .inputs{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .inputs > div{
+    min-width: 0;
+    width: 100%;
+  }
+}
   </style>
 </head>
 <body>
