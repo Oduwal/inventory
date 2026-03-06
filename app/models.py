@@ -158,8 +158,8 @@ class CashEntry(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE')",
-            name="ck_cash_kind",
-        ),
+    "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING')",
+    name="ck_cash_kind",
+),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
     )
