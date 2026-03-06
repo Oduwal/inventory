@@ -1111,7 +1111,6 @@ def cash_new(
     note: str = Form(""),
     delivery_id: str = Form(""),
     agent_id: str = Form(""),
-    direction: str = Form("ADD"),  # ADD or RETURN (only used for OPERATING_CASH)
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -1129,10 +1128,6 @@ def cash_new(
     amt = float(amount or 0)
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
-
-    dir_clean = (direction or "ADD").strip().upper()
-    if k == "OPERATING_CASH" and dir_clean == "RETURN":
-        amt = -amt  # returning cash reduces operating cash
 
     target_agent_id = user.id
     if is_admin(user) and (agent_id or "").isdigit():
