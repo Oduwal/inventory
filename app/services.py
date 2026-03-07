@@ -128,6 +128,16 @@ def top_items_by_stock(db: Session, limit: int = 5):
 
 
 def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int, performed_by: str):
+    # Lock the delivery row first so two users cannot process the same delivery at once
+    delivery = db.execute(
+        select(Delivery)
+        .where(Delivery.id == delivery_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not delivery:
+        raise ValueError("Delivery not found")
+
     existing_out = db.scalar(
         select(func.count(Transaction.id))
         .where(Transaction.delivery_id == delivery_id)
@@ -137,22 +147,38 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     if int(existing_out) > 0:
         return
 
-    delivery = db.get(Delivery, delivery_id)
-    if not delivery:
-        raise ValueError("Delivery not found")
+    lines = db.execute(
+        select(DeliveryItem)
+        .where(DeliveryItem.delivery_id == delivery_id)
+        .order_by(DeliveryItem.item_id.asc())
+    ).scalars().all()
 
-    lines = db.execute(select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)).scalars().all()
     if not lines:
         raise ValueError("Order has no items")
 
+    # Lock all item rows involved in this delivery
+    item_ids = sorted({int(li.item_id) for li in lines})
+    locked_items = db.execute(
+        select(Item)
+        .where(Item.id.in_(item_ids))
+        .order_by(Item.id.asc())
+        .with_for_update()
+    ).scalars().all()
+
+    if len(locked_items) != len(item_ids):
+        raise ValueError("One or more items are missing")
+
+    # Re-check stock AFTER locking
     for li in lines:
         row = get_item_with_stock(db, li.item_id)
         if not row:
             raise ValueError("Item missing")
+
         _it, stock = row
         if int(stock) < int(li.quantity):
             raise ValueError("Insufficient stock for one or more items")
 
+    # Create OUT transactions only after the lock + re-check
     for li in lines:
         db.add(
             Transaction(

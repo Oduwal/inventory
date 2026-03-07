@@ -165,6 +165,53 @@ def ensure_schema() -> None:
             except Exception:
                 pass
 
+            # prevent duplicate OUT transactions for same delivery + item
+        try:
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_delivery_item_out
+                    ON transactions (delivery_id, item_id, type)
+                    WHERE delivery_id IS NOT NULL AND type = 'OUT'
+                    """
+                )
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+        # indexes for faster reports and dashboards
+        try:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_deliveries_created_at ON deliveries (created_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_deliveries_status ON deliveries (status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_deliveries_agent_id ON deliveries (agent_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_delivery_items_delivery_id ON delivery_items (delivery_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_cash_entries_created_at ON cash_entries (created_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_cash_entries_kind ON cash_entries (kind)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_transactions_item_id ON transactions (item_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_transactions_delivery_id ON transactions (delivery_id)"
+            ))
+            conn.commit()
+        except Exception:
+            pass
 
 def seed_admin_if_missing() -> None:
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
@@ -964,7 +1011,12 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         return user_or
     user = user_or
 
-    d = db.get(Delivery, delivery_id)
+    d = db.execute(
+       select(Delivery)
+       .where(Delivery.id == delivery_id)
+       .with_for_update()
+   ).scalar_one_or_none()
+
     if not d:
         return HTMLResponse("Not found", status_code=404)
 
