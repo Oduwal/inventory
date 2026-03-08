@@ -185,206 +185,103 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
     return None
 
 
+def _ddl(conn, sql: str) -> None:
+    """Execute a single DDL statement, rolling back on error so the connection stays usable."""
+    try:
+        conn.execute(text(sql))
+        conn.execute(text("COMMIT"))
+    except Exception:
+        try:
+            conn.execute(text("ROLLBACK"))
+        except Exception:
+            pass
+
+
 def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
-    with engine.connect() as conn:
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+
+    # Use AUTOCOMMIT so every statement is its own transaction.
+    # On PostgreSQL a failed SELECT inside a regular transaction poisons the
+    # whole connection, causing subsequent ALTER TABLE commits to silently
+    # do nothing.  AUTOCOMMIT avoids that entirely.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+
         # branches table
-        try:
-            conn.execute(text("SELECT id FROM branches LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(
-                    text(
-                        """
-                        CREATE TABLE IF NOT EXISTS branches (
-                            id SERIAL PRIMARY KEY,
-                            name VARCHAR(120) NOT NULL UNIQUE,
-                            code VARCHAR(20) NULL UNIQUE,
-                            address VARCHAR(200) NULL,
-                            created_at TIMESTAMP DEFAULT NOW()
-                        )
-                        """
-                    )
-                )
-                conn.commit()
-            except Exception:
-                pass
+        _ddl(conn, """
+            CREATE TABLE IF NOT EXISTS branches (
+                id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+                name VARCHAR(120) NOT NULL UNIQUE,
+                code VARCHAR(20) NULL UNIQUE,
+                address VARCHAR(200) NULL,
+                created_at TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+            )
+        """)
 
-        # users.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM users LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER NULL"))
-                conn.commit()
-            except Exception:
-                pass
-
-        # users.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM users LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER NULL"))
-                conn.commit()
-            except Exception:
-                pass
+        # users – new columns
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(140) NULL")
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(40) NULL")
 
         # items.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM items LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE items ADD COLUMN branch_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
+        _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
 
-        # deliveries.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM deliveries LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE deliveries ADD COLUMN branch_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
+        # deliveries
+        _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
+        _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP NULL")
 
-        # transactions.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM transactions LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE transactions ADD COLUMN branch_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
+        # transactions
+        _ddl(conn, "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
+        _ddl(conn, "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS delivery_id INTEGER NULL")
 
-        # cash_entries.branch_id
-        try:
-            conn.execute(text("SELECT branch_id FROM cash_entries LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE cash_entries ADD COLUMN branch_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
-
-    with engine.connect() as conn:
-        # transactions.delivery_id
-        try:
-            conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE transactions ADD COLUMN delivery_id INTEGER"))
-                conn.commit()
-            except Exception:
-                pass
-
-        # deliveries.delivered_at
-        try:
-            conn.execute(text("SELECT delivered_at FROM deliveries LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE deliveries ADD COLUMN delivered_at TIMESTAMP"))
-                conn.commit()
-            except Exception:
-                pass
+        # cash_entries table + branch_id column
+        if is_sqlite:
+            _ddl(conn, """
+                CREATE TABLE IF NOT EXISTS cash_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    agent_id INTEGER NOT NULL,
+                    delivery_id INTEGER NULL,
+                    kind VARCHAR(20) NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    note VARCHAR(400) NULL
+                )
+            """)
+        else:
+            _ddl(conn, """
+                CREATE TABLE IF NOT EXISTS cash_entries (
+                    id SERIAL PRIMARY KEY,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    agent_id INTEGER NOT NULL,
+                    delivery_id INTEGER NULL,
+                    kind VARCHAR(20) NOT NULL,
+                    amount NUMERIC NOT NULL,
+                    note VARCHAR(400) NULL
+                )
+            """)
+        _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
 
         # delivery_items.line_amount
-        try:
-            conn.execute(text("SELECT line_amount FROM delivery_items LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE delivery_items ADD COLUMN line_amount NUMERIC DEFAULT 0"))
-                conn.commit()
-            except Exception:
-                pass
+        _ddl(conn, "ALTER TABLE delivery_items ADD COLUMN IF NOT EXISTS line_amount NUMERIC DEFAULT 0")
 
-        # cash_entries table
-        try:
-            conn.execute(text("SELECT id FROM cash_entries LIMIT 1"))
-        except Exception:
-            try:
-                conn.execute(
-                    text(
-                        """
-                        CREATE TABLE IF NOT EXISTS cash_entries (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            agent_id INTEGER NOT NULL,
-                            delivery_id INTEGER NULL,
-                            kind VARCHAR(20) NOT NULL,
-                            amount NUMERIC NOT NULL,
-                            note VARCHAR(400) NULL
-                        )
-                        """
-                        if DATABASE_URL.startswith("sqlite") else
-                        """
-                        CREATE TABLE IF NOT EXISTS cash_entries (
-                            id SERIAL PRIMARY KEY,
-                            created_at TIMESTAMP DEFAULT NOW(),
-                            agent_id INTEGER NOT NULL,
-                            delivery_id INTEGER NULL,
-                            kind VARCHAR(20) NOT NULL,
-                            amount NUMERIC NOT NULL,
-                            note VARCHAR(400) NULL
-                        )
-                        """
-                    )
-                )
-                conn.commit()
-            except Exception:
-                pass
+        # indexes
+        _ddl(conn, """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_delivery_item_out
+            ON transactions (delivery_id, item_id, type)
+            WHERE delivery_id IS NOT NULL AND type = 'OUT'
+        """)
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_deliveries_created_at ON deliveries (created_at)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_deliveries_status ON deliveries (status)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_deliveries_agent_id ON deliveries (agent_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_delivery_items_delivery_id ON delivery_items (delivery_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_created_at ON cash_entries (created_at)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_kind ON cash_entries (kind)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_item_id ON transactions (item_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_delivery_id ON transactions (delivery_id)")
 
-            # prevent duplicate OUT transactions for same delivery + item
-        try:
-            conn.execute(
-                text(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS ux_transactions_delivery_item_out
-                    ON transactions (delivery_id, item_id, type)
-                    WHERE delivery_id IS NOT NULL AND type = 'OUT'
-                    """
-                )
-            )
-            conn.commit()
-        except Exception:
-            pass
 
-        # indexes for faster reports and dashboards
-        try:
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_deliveries_created_at ON deliveries (created_at)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_deliveries_status ON deliveries (status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_deliveries_agent_id ON deliveries (agent_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_delivery_items_delivery_id ON delivery_items (delivery_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_cash_entries_created_at ON cash_entries (created_at)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_cash_entries_kind ON cash_entries (kind)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_transactions_item_id ON transactions (item_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_transactions_delivery_id ON transactions (delivery_id)"
-            ))
-            conn.commit()
-        except Exception:
-            pass
 
 def seed_admin_if_missing() -> None:
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
@@ -513,8 +410,8 @@ def seed_default_branch_if_missing() -> None:
 @app.on_event("startup")
 def _startup() -> None:
     ensure_schema()
-    seed_admin_if_missing()
     seed_default_branch_if_missing()
+    seed_admin_if_missing()
 
 
 def _range_dates_from_inputs(
