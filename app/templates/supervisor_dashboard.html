@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Supervisor Dashboard{% endblock %}
+{% block page_title %}Supervisor Dashboard{% endblock %}
+{% block page_subtitle %}Analytics across all branches.{% endblock %}
+{% set active = "supervisor" %}
+
+{% block content %}
+
+<div class="card">
+  <div class="badge b-blue">OVERALL TOTALS</div>
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+    <span class="badge b-purple">Branches: {{ rows|length }}</span>
+    <span class="badge b-blue">Deliveries: {{ grand_total_deliveries }}</span>
+    <span class="badge b-green">Delivered: {{ grand_delivered }}</span>
+    <span class="badge b-yellow">Pending: {{ grand_pending }}</span>
+    <span class="badge b-blue">Out for Delivery: {{ grand_out_for_delivery }}</span>
+    <span class="badge b-green">Collections: {{ '%.2f'|format(grand_collections) }}</span>
+    <span class="badge b-red">Agent Expenses: {{ '%.2f'|format(grand_agent_expenses) }}</span>
+    <span class="badge b-red">Office Expenses: {{ '%.2f'|format(grand_office_expenses) }}</span>
+    <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(grand_operating_cash) }}</span>
+    <span class="badge b-yellow">Returned Operating: {{ '%.2f'|format(grand_returned_operating_cash) }}</span>
+    <span class="badge b-green">Operating Balance: {{ '%.2f'|format(grand_operating_balance) }}</span>
+    <span class="badge b-green">Remittance: {{ '%.2f'|format(grand_remittance) }}</span>
+  </div>
+</div>
+
+<div class="card" style="margin-top:14px;">
+  <div class="badge b-purple">BRANCH ANALYTICS</div>
+
+  <div style="margin-top:12px; overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Branch</th>
+          <th>Total Deliveries</th>
+          <th>Delivered</th>
+          <th>Pending</th>
+          <th>Out for Delivery</th>
+          <th>Collections</th>
+          <th>Agent Expenses</th>
+          <th>Office Expenses</th>
+          <th>Operating Cash</th>
+          <th>Returned Operating</th>
+          <th>Operating Balance</th>
+          <th>Remittance</th>
+          <th>Open</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if rows and rows|length > 0 %}
+          {% for r in rows %}
+          <tr>
+            <td><strong>{{ r.branch.name }}</strong></td>
+            <td>{{ r.total_deliveries }}</td>
+            <td>{{ r.delivered_count }}</td>
+            <td>{{ r.pending_count }}</td>
+            <td>{{ r.out_for_delivery_count }}</td>
+            <td>{{ '%.2f'|format(r.collections) }}</td>
+            <td>{{ '%.2f'|format(r.agent_expenses) }}</td>
+            <td>{{ '%.2f'|format(r.office_expenses) }}</td>
+            <td>{{ '%.2f'|format(r.operating_cash) }}</td>
+            <td>{{ '%.2f'|format(r.returned_operating_cash) }}</td>
+            <td>{{ '%.2f'|format(r.operating_balance) }}</td>
+            <td>{{ '%.2f'|format(r.remittance) }}</td>
+            <td>
+              <a class="btnPrimary" href="/?branch_id={{ r.branch.id }}">View Branch</a>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="13" class="muted">No branches found.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

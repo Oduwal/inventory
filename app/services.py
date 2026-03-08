@@ -7,35 +7,42 @@ from sqlalchemy.orm import Session
 from .models import Item, Transaction, Delivery, DeliveryItem, CashEntry
 
 
-def stock_subquery():
+def stock_subquery(branch_id: int | None = None):
+    """
+    Returns a subquery of (item_id, stock).
+    When branch_id is provided, only transactions for that branch are included.
+    """
     signed_qty = case(
         (Transaction.type == "IN", Transaction.quantity),
         (Transaction.type == "OUT", -Transaction.quantity),
         else_=0,
     )
 
-    return (
-        select(
-            Transaction.item_id.label("item_id"),
-            func.coalesce(func.sum(signed_qty), 0).label("stock"),
-        )
-        .group_by(Transaction.item_id)
-        .subquery()
+    stmt = select(
+        Transaction.item_id.label("item_id"),
+        func.coalesce(func.sum(signed_qty), 0).label("stock"),
     )
 
+    if branch_id is not None:
+        stmt = stmt.where(Transaction.branch_id == branch_id)
 
-def get_items_with_stock(db: Session):
-    sq = stock_subquery()
+    return stmt.group_by(Transaction.item_id).subquery()
+
+
+def get_items_with_stock(db: Session, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .outerjoin(sq, sq.c.item_id == Item.id)
         .order_by(Item.name.asc())
     )
+    if branch_id is not None:
+        stmt = stmt.where(Item.branch_id == branch_id)
     return db.execute(stmt).all()
 
 
-def get_item_with_stock(db: Session, item_id: int):
-    sq = stock_subquery()
+def get_item_with_stock(db: Session, item_id: int, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .outerjoin(sq, sq.c.item_id == Item.id)
@@ -44,26 +51,33 @@ def get_item_with_stock(db: Session, item_id: int):
     return db.execute(stmt).first()
 
 
-def get_low_stock(db: Session):
-    sq = stock_subquery()
+def get_low_stock(db: Session, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .outerjoin(sq, sq.c.item_id == Item.id)
         .where(func.coalesce(sq.c.stock, 0) <= Item.reorder_level)
         .order_by((func.coalesce(sq.c.stock, 0) - Item.reorder_level).asc(), Item.name.asc())
     )
+    if branch_id is not None:
+        stmt = stmt.where(Item.branch_id == branch_id)
     return db.execute(stmt).all()
 
 
-def get_recent_transactions(db: Session, limit: int = 20):
+def get_recent_transactions(db: Session, limit: int = 20, branch_id: int | None = None):
     stmt = select(Transaction).order_by(desc(Transaction.created_at)).limit(limit)
+    if branch_id is not None:
+        stmt = stmt.where(Transaction.branch_id == branch_id)
     return db.scalars(stmt).all()
 
 
-def dashboard_stats(db: Session):
-    items_count = db.scalar(select(func.count(Item.id))) or 0
-    low_stock_count = len(get_low_stock(db))
-    recent = get_recent_transactions(db, limit=10)
+def dashboard_stats(db: Session, branch_id: int | None = None):
+    items_stmt = select(func.count(Item.id))
+    if branch_id is not None:
+        items_stmt = items_stmt.where(Item.branch_id == branch_id)
+    items_count = db.scalar(items_stmt) or 0
+    low_stock_count = len(get_low_stock(db, branch_id=branch_id))
+    recent = get_recent_transactions(db, limit=10, branch_id=branch_id)
     return {
         "items_count": items_count,
         "low_stock_count": low_stock_count,
@@ -71,8 +85,8 @@ def dashboard_stats(db: Session):
     }
 
 
-def dashboard_kpis(db: Session):
-    sq = stock_subquery()
+def dashboard_kpis(db: Session, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
 
     total_stock_stmt = select(func.coalesce(func.sum(sq.c.stock), 0))
     total_stock = db.scalar(total_stock_stmt) or 0
@@ -82,13 +96,15 @@ def dashboard_kpis(db: Session):
         .select_from(Item)
         .outerjoin(sq, sq.c.item_id == Item.id)
     )
+    if branch_id is not None:
+        value_stmt = value_stmt.where(Item.branch_id == branch_id)
     inventory_value = float(db.scalar(value_stmt) or 0)
 
     return int(total_stock), float(inventory_value)
 
 
-def stock_by_category(db: Session):
-    sq = stock_subquery()
+def stock_by_category(db: Session, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
     stmt = (
         select(
             func.coalesce(Item.category, "Uncategorized").label("category"),
@@ -99,24 +115,28 @@ def stock_by_category(db: Session):
         .group_by(func.coalesce(Item.category, "Uncategorized"))
         .order_by(func.sum(func.coalesce(sq.c.stock, 0)).desc())
     )
+    if branch_id is not None:
+        stmt = stmt.where(Item.branch_id == branch_id)
     return db.execute(stmt).all()
 
 
-def in_out_last_7_days(db: Session):
+def in_out_last_7_days(db: Session, branch_id: int | None = None):
     since = datetime.utcnow() - timedelta(days=7)
 
     in_sum = func.coalesce(func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=0)), 0)
     out_sum = func.coalesce(func.sum(case((Transaction.type == "OUT", Transaction.quantity), else_=0)), 0)
 
     stmt = select(in_sum.label("in_qty"), out_sum.label("out_qty")).where(Transaction.created_at >= since)
+    if branch_id is not None:
+        stmt = stmt.where(Transaction.branch_id == branch_id)
     row = db.execute(stmt).first()
     in_qty = int(row.in_qty) if row else 0
     out_qty = int(row.out_qty) if row else 0
     return in_qty, out_qty
 
 
-def top_items_by_stock(db: Session, limit: int = 5):
-    sq = stock_subquery()
+def top_items_by_stock(db: Session, limit: int = 5, branch_id: int | None = None):
+    sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .select_from(Item)
@@ -124,6 +144,8 @@ def top_items_by_stock(db: Session, limit: int = 5):
         .order_by(func.coalesce(sq.c.stock, 0).desc(), Item.name.asc())
         .limit(limit)
     )
+    if branch_id is not None:
+        stmt = stmt.where(Item.branch_id == branch_id)
     return db.execute(stmt).all()
 
 
@@ -178,10 +200,12 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
         if int(stock) < int(li.quantity):
             raise ValueError("Insufficient stock for one or more items")
 
-    # Create OUT transactions only after the lock + re-check
+    # Create OUT transactions only after the lock + re-check.
+    # branch_id is inherited from the delivery itself.
     for li in lines:
         db.add(
             Transaction(
+                branch_id=delivery.branch_id,  # FIX: was missing, caused NOT NULL violation
                 item_id=li.item_id,
                 delivery_id=delivery_id,
                 type="OUT",

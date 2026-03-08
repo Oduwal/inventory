@@ -14,6 +14,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
 
+class Branch(Base):
+    __tablename__ = "branches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    code: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True)
+    address: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    users: Mapped[list["User"]] = relationship(back_populates="branch")
+    items: Mapped[list["Item"]] = relationship(back_populates="branch")
+    deliveries: Mapped[list["Delivery"]] = relationship(back_populates="branch")
+    transactions: Mapped[list["Transaction"]] = relationship(back_populates="branch")
+    cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="branch")
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -21,15 +38,28 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    role: Mapped[str] = mapped_column(String(10), default="AGENT", nullable=False)
+    # ADMIN = branch admin
+    # AGENT = branch agent
+    # SUPERVISOR = read-only across branches
+    role: Mapped[str] = mapped_column(String(20), default="AGENT", nullable=False)
+
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
 
     full_name: Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+    branch: Mapped["Branch | None"] = relationship(back_populates="users")
     deliveries: Mapped[list["Delivery"]] = relationship(back_populates="agent")
     cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="agent")
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('ADMIN','AGENT','SUPERVISOR')",
+            name="ck_user_role",
+        ),
+    )
 
 
 class Item(Base):
@@ -37,7 +67,9 @@ class Item(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    sku: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
+
+    sku: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
@@ -52,6 +84,8 @@ class Item(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
+    branch: Mapped["Branch"] = relationship(back_populates="items")
+
     transactions: Mapped[list["Transaction"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
@@ -59,12 +93,17 @@ class Item(Base):
 
     delivery_items: Mapped[list["DeliveryItem"]] = relationship(back_populates="item")
 
+    __table_args__ = (
+        CheckConstraint("reorder_level >= 0", name="ck_item_reorder_nonneg"),
+    )
+
 
 class Delivery(Base):
     __tablename__ = "deliveries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
 
     customer_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -78,7 +117,8 @@ class Delivery(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    agent: Mapped[User] = relationship(back_populates="deliveries")
+    branch: Mapped["Branch"] = relationship(back_populates="deliveries")
+    agent: Mapped["User"] = relationship(back_populates="deliveries")
 
     items: Mapped[list["DeliveryItem"]] = relationship(
         back_populates="delivery",
@@ -105,8 +145,8 @@ class DeliveryItem(Base):
 
     line_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
-    delivery: Mapped[Delivery] = relationship(back_populates="items")
-    item: Mapped[Item] = relationship(back_populates="delivery_items")
+    delivery: Mapped["Delivery"] = relationship(back_populates="items")
+    item: Mapped["Item"] = relationship(back_populates="delivery_items")
 
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_delivery_item_qty_positive"),
@@ -120,16 +160,18 @@ class Transaction(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
     item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    type: Mapped[str] = mapped_column(String(10), nullable=False)  # "IN" or "OUT"
+    type: Mapped[str] = mapped_column(String(10), nullable=False)  # IN or OUT
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
 
     reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    item: Mapped[Item] = relationship(back_populates="transactions")
+    branch: Mapped["Branch"] = relationship(back_populates="transactions")
+    item: Mapped["Item"] = relationship(back_populates="transactions")
 
     __table_args__ = (
         CheckConstraint("type IN ('IN','OUT')", name="ck_tx_type_in_out"),
@@ -143,23 +185,25 @@ class CashEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
     agent_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     delivery_id: Mapped[int | None] = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
-    # "COLLECTION" | "EXPENSE" | "OPERATING_CASH" | "OFFICE_EXPENSE"
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # COLLECTION | EXPENSE | OPERATING_CASH | OFFICE_EXPENSE | RETURN_OPERATING_CASH
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
 
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
 
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
-    agent: Mapped[User] = relationship(back_populates="cash_entries")
-    delivery: Mapped[Delivery | None] = relationship(back_populates="cash_entries")
+    branch: Mapped["Branch"] = relationship(back_populates="cash_entries")
+    agent: Mapped["User"] = relationship(back_populates="cash_entries")
+    delivery: Mapped["Delivery | None"] = relationship(back_populates="cash_entries")
 
     __table_args__ = (
         CheckConstraint(
-    "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE')",
-    name="ck_cash_kind",
-),
+            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH')",
+            name="ck_cash_kind",
+        ),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
     )

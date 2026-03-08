@@ -221,50 +221,78 @@
       </div>
 
       <nav class="nav">
-        <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Overview</span>
-        </a>
+  <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Overview</span>
+  </a>
 
-        <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Items</span>
-        </a>
+  {% if user and user.role == "SUPERVISOR" %}
+<a href="/supervisor" data-active="{% if active == 'supervisor' %}1{% else %}0{% endif %}">
+  <span class="left"><span class="dot"></span>Supervisor Analytics</span>
+</a>
+{% endif %}
 
-        <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Transactions</span>
-        </a>
+  {% if user and user.role == "SUPERVISOR" %}
+<a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
+  <span class="left"><span class="dot"></span>Branches</span>
+</a>
+{% endif %}
 
-        <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Deliveries</span>
-        </a>
+  {% if user and user.role == "SUPERVISOR" and branches %}
+  <div class="card" style="padding:10px; margin-top:6px;">
+    <div class="muted" style="font-size:12px; margin-bottom:8px;">Branches</div>
 
-        <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>New Order</span>
-        </a>
+    {% for b in branches %}
+      <a
+        href="/?branch_id={{ b.id }}"
+        data-active="{% if selected_branch_id == b.id %}1{% else %}0{% endif %}"
+        style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:10px 12px; border-radius:12px; background: rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.05);"
+      >
+        <span class="left"><span class="dot"></span>{{ b.name }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
 
-        <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Cash</span>
-        </a>
+  <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Items</span>
+  </a>
 
-        <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
-          <span class="left"><span class="dot"></span>Reports</span>
-        </a>
+  <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Transactions</span>
+  </a>
 
-        {% if user and user.role == "ADMIN" %}
-          <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
-            <span class="left"><span class="dot"></span>Agents</span>
-          </a>
+  <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Deliveries</span>
+  </a>
 
-          <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
-            <span class="left"><span class="dot"></span>Low Stock</span>
-          </a>
-        {% endif %}
+  <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>New Order</span>
+  </a>
 
-        {% if user %}
-          <form method="post" action="/logout" style="margin-top:10px;">
-            <button class="btnGhost" type="submit" style="width:100%;">Logout</button>
-          </form>
-        {% endif %}
-      </nav>
+  <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Cash</span>
+  </a>
+
+  <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Reports</span>
+  </a>
+
+  {% if user and user.role == "ADMIN" %}
+    <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
+      <span class="left"><span class="dot"></span>Agents</span>
+    </a>
+
+    <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
+      <span class="left"><span class="dot"></span>Low Stock</span>
+    </a>
+  {% endif %}
+
+  {% if user %}
+    <form method="post" action="/logout" style="margin-top:10px;">
+      <button class="btnGhost" type="submit" style="width:100%;">Logout</button>
+    </form>
+  {% endif %}
+</nav>
     </aside>
 
     <main class="content">

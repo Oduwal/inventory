@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}New Branch{% endblock %}
+{% block page_title %}New Branch{% endblock %}
+{% block page_subtitle %}Create a new branch for the system.{% endblock %}
+{% set active = "branches" %}
+
+{% block top_right %}
+<a class="btnGhost" href="/branches">Back</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="badge b-blue">CREATE BRANCH</div>
+
+    {% if error %}
+    <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/branches/new" style="margin-top:12px;">
+        <div class="inputs">
+            <div>
+                <label>Branch Name</label>
+                <input type="text" name="name" required placeholder="e.g. Lagos Branch">
+            </div>
+
+            <div>
+                <label>Branch Code</label>
+                <input type="text" name="code" placeholder="e.g. LAG">
+            </div>
+
+            <div>
+                <label>Address</label>
+                <input type="text" name="address" placeholder="Optional address">
+            </div>
+
+            <div>
+                <button class="btnPrimary" type="submit">Save Branch</button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}

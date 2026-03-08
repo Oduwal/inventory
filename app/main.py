@@ -14,8 +14,8 @@ import bcrypt as bcrypt_lib
 from sqlalchemy import select, text, func, and_, desc
 from sqlalchemy.orm import Session
 
-from .database import Base, engine, get_db
-from .models import Item, Transaction, User, Delivery, DeliveryItem, CashEntry
+from .database import Base, engine, get_db, DATABASE_URL
+from .models import Branch, Item, Transaction, User, Delivery, DeliveryItem, CashEntry
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -64,6 +64,84 @@ def is_admin(user: User | None) -> bool:
 def is_agent(user: User | None) -> bool:
     return bool(user) and (user.role or "").upper() == "AGENT"
 
+def is_supervisor(user: User | None) -> bool:
+    return bool(user) and (user.role or "").upper() == "SUPERVISOR"
+
+def require_same_branch(user: User | None, record_branch_id: int | None) -> None:
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if is_supervisor(user):
+        return
+
+    if getattr(user, "branch_id", None) != record_branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+def get_current_branch_id(request: Request) -> int | None:
+    branch_id = request.session.get("branch_id")
+    if not branch_id:
+        return None
+    try:
+        return int(branch_id)
+    except Exception:
+        return None
+
+
+def get_selected_branch_id(request: Request, user: User | None) -> int | None:
+    if not user:
+        return None
+
+    # Supervisor can switch branch with ?branch_id=...
+    if is_supervisor(user):
+        q_branch = request.query_params.get("branch_id", "").strip()
+        if q_branch.isdigit():
+            return int(q_branch)
+
+    # Normal users always use their assigned branch
+    return getattr(user, "branch_id", None)
+
+
+def can_access_branch(user: User | None, branch_id: int | None) -> bool:
+    if not user:
+        return False
+    if is_supervisor(user):
+        return True
+    return bool(branch_id) and getattr(user, "branch_id", None) == branch_id
+
+def require_branch_access(user: User | None, branch_id: int | None) -> None:
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if is_supervisor(user):
+        return
+    if not branch_id or getattr(user, "branch_id", None) != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_item_access(request: Request, user: User | None, item: Item | None) -> None:
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    branch_id = get_selected_branch_id(request, user)
+    require_branch_access(user, item.branch_id)
+    if not is_supervisor(user) and item.branch_id != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_delivery_access(request: Request, user: User | None, delivery: Delivery | None) -> None:
+    if not delivery:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    branch_id = get_selected_branch_id(request, user)
+    require_branch_access(user, delivery.branch_id)
+    if not is_supervisor(user) and delivery.branch_id != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def require_agent_access(request: Request, user: User | None, agent: User | None) -> None:
+    if not agent or (agent.role or "").upper() != "AGENT":
+        raise HTTPException(status_code=404, detail="Agent not found")
+    branch_id = get_selected_branch_id(request, user)
+    require_branch_access(user, agent.branch_id)
+    if not is_supervisor(user) and agent.branch_id != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
     if (password_hash or "").startswith("$2"):
@@ -111,6 +189,90 @@ def ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
     with engine.connect() as conn:
+        # branches table
+        try:
+            conn.execute(text("SELECT id FROM branches LIMIT 1"))
+        except Exception:
+            try:
+                # Use dialect-agnostic DDL; SQLAlchemy's create_all handles type mapping
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS branches (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name VARCHAR(120) NOT NULL UNIQUE,
+                            code VARCHAR(20) NULL UNIQUE,
+                            address VARCHAR(200) NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                        if DATABASE_URL.startswith("sqlite") else
+                        """
+                        CREATE TABLE IF NOT EXISTS branches (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(120) NOT NULL UNIQUE,
+                            code VARCHAR(20) NULL UNIQUE,
+                            address VARCHAR(200) NULL,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                        """
+                    )
+                )
+                conn.commit()
+            except Exception:
+                pass
+
+        # users.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM users LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER NULL"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # items.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM items LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE items ADD COLUMN branch_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # deliveries.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM deliveries LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE deliveries ADD COLUMN branch_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # transactions.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM transactions LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE transactions ADD COLUMN branch_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+        # cash_entries.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM cash_entries LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE cash_entries ADD COLUMN branch_id INTEGER"))
+                conn.commit()
+            except Exception:
+                pass
+
+    with engine.connect() as conn:
         # transactions.delivery_id
         try:
             conn.execute(text("SELECT delivery_id FROM transactions LIMIT 1"))
@@ -148,6 +310,18 @@ def ensure_schema() -> None:
             try:
                 conn.execute(
                     text(
+                        """
+                        CREATE TABLE IF NOT EXISTS cash_entries (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            agent_id INTEGER NOT NULL,
+                            delivery_id INTEGER NULL,
+                            kind VARCHAR(20) NOT NULL,
+                            amount NUMERIC NOT NULL,
+                            note VARCHAR(400) NULL
+                        )
+                        """
+                        if DATABASE_URL.startswith("sqlite") else
                         """
                         CREATE TABLE IF NOT EXISTS cash_entries (
                             id SERIAL PRIMARY KEY,
@@ -214,6 +388,7 @@ def ensure_schema() -> None:
             pass
 
 def seed_admin_if_missing() -> None:
+    """Seed an ADMIN user from env vars ADMIN_USERNAME / ADMIN_PASSWORD if none exists."""
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
     admin_pass = os.getenv("ADMIN_PASSWORD") or ""
     if not admin_user or not admin_pass:
@@ -243,10 +418,56 @@ def seed_admin_if_missing() -> None:
         gen.close()
 
 
+def seed_default_branch_if_missing() -> None:
+    """Ensure a default 'Main Branch' exists and assign it to any unassigned records."""
+    gen = get_db()
+    db = next(gen)
+    try:
+        branch = db.scalar(select(Branch).where(Branch.name == "Main Branch"))
+        if not branch:
+            branch = Branch(name="Main Branch", code="MAIN", address=None)
+            db.add(branch)
+            db.commit()
+            db.refresh(branch)
+
+        default_branch_id = branch.id
+
+        # Assign branch to existing users without branch
+        users = db.execute(select(User).where(User.branch_id.is_(None))).scalars().all()
+        for u in users:
+            if (u.role or "").upper() != "SUPERVISOR":
+                u.branch_id = default_branch_id
+
+        # Assign branch to existing items
+        items = db.execute(select(Item).where(Item.branch_id.is_(None))).scalars().all()
+        for x in items:
+            x.branch_id = default_branch_id
+
+        # Assign branch to existing deliveries
+        deliveries = db.execute(select(Delivery).where(Delivery.branch_id.is_(None))).scalars().all()
+        for x in deliveries:
+            x.branch_id = default_branch_id
+
+        # Assign branch to existing transactions
+        txs = db.execute(select(Transaction).where(Transaction.branch_id.is_(None))).scalars().all()
+        for x in txs:
+            x.branch_id = default_branch_id
+
+        # Assign branch to existing cash entries
+        cash_rows = db.execute(select(CashEntry).where(CashEntry.branch_id.is_(None))).scalars().all()
+        for x in cash_rows:
+            x.branch_id = default_branch_id
+
+        db.commit()
+    finally:
+        gen.close()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     ensure_schema()
     seed_admin_if_missing()
+    seed_default_branch_if_missing()
 
 
 def _range_dates_from_inputs(
@@ -324,6 +545,11 @@ def login(
 
     request.session["user_id"] = u.id
     request.session["role"] = u.role
+    # Only persist branch_id when actually assigned; absence is handled by get_current_branch_id
+    if u.branch_id is not None:
+        request.session["branch_id"] = u.branch_id
+    else:
+        request.session.pop("branch_id", None)
     return redirect("/")
 
 
@@ -342,15 +568,92 @@ def home(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    if not is_admin(user):
+    branch_id = get_selected_branch_id(request, user)
+
+    # Supervisor dashboard = overview for selected branch
+    if is_supervisor(user):
+        if not branch_id:
+            branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+            return templates.TemplateResponse(
+                "dashboard.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "active": "dashboard",
+                    "branches": branches,
+                    "selected_branch_id": None,
+                    "items_count": 0,
+                    "low_stock_count": 0,
+                    "recent_transactions": [],
+                    "total_stock": 0,
+                    "inventory_value": 0,
+                    "in7": 0,
+                    "out7": 0,
+                    "top_rows": [],
+                    "low_rows": [],
+                    "cat_rows": [],
+                },
+            )
+
+    if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
 
-    stats = dashboard_stats(db)
-    total_stock, inventory_value = dashboard_kpis(db)
-    cat_rows = stock_by_category(db)
-    in7, out7 = in_out_last_7_days(db)
-    top_rows = top_items_by_stock(db, limit=5)
-    low_rows = get_low_stock(db)[:5]
+    # Branch-filtered dashboard values
+    items_stmt = select(Item).where(Item.branch_id == branch_id)
+    items = db.execute(items_stmt).scalars().all()
+    item_ids = [i.id for i in items]
+
+    items_count = len(items)
+
+    low_rows_all = get_low_stock(db)
+    low_rows = [(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id][:5]
+    low_stock_count = len([(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id])
+
+    recent_transactions = db.scalars(
+        select(Transaction)
+        .where(Transaction.branch_id == branch_id)
+        .order_by(desc(Transaction.created_at))
+        .limit(10)
+    ).all()
+
+    top_rows_all = top_items_by_stock(db, limit=200)
+    top_rows = [(item, stock) for (item, stock) in top_rows_all if item.branch_id == branch_id][:5]
+
+    # Build category breakdown and compute stock totals in a single pass
+    all_items_with_stock = get_items_with_stock(db)
+    cat_map: dict[str, float] = {}
+    total_stock = 0
+    inventory_value = 0.0
+    for item, stock in all_items_with_stock:
+        if item.branch_id == branch_id:
+            s = float(stock or 0)
+            total_stock += int(s)
+            inventory_value += s * float(item.cost_price or 0)
+            cat = item.category or "Uncategorized"
+            cat_map[cat] = cat_map.get(cat, 0) + s
+    cat_rows = sorted(cat_map.items(), key=lambda x: x[1], reverse=True)
+
+    in7 = int(
+        db.scalar(
+            select(func.coalesce(func.sum(Transaction.quantity), 0))
+            .where(Transaction.branch_id == branch_id)
+            .where(Transaction.type == "IN")
+            .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        ) or 0
+    )
+
+    out7 = int(
+        db.scalar(
+            select(func.coalesce(func.sum(Transaction.quantity), 0))
+            .where(Transaction.branch_id == branch_id)
+            .where(Transaction.type == "OUT")
+            .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        ) or 0
+    )
+
+    branches = []
+    if is_supervisor(user):
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -358,7 +661,11 @@ def home(request: Request, db: Session = Depends(get_db)):
             "request": request,
             "user": user,
             "active": "dashboard",
-            **stats,
+            "branches": branches,
+            "selected_branch_id": branch_id,
+            "items_count": items_count,
+            "low_stock_count": low_stock_count,
+            "recent_transactions": recent_transactions,
             "total_stock": total_stock,
             "inventory_value": inventory_value,
             "in7": in7,
@@ -369,6 +676,254 @@ def home(request: Request, db: Session = Depends(get_db)):
         },
     )
 
+@app.get("/supervisor", response_class=HTMLResponse)
+def supervisor_dashboard(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branches = db.execute(
+        select(Branch).order_by(Branch.name.asc())
+    ).scalars().all()
+
+    rows = []
+
+    for branch in branches:
+        total_deliveries = int(
+            db.scalar(
+                select(func.count(Delivery.id))
+                .where(Delivery.branch_id == branch.id)
+            ) or 0
+        )
+
+        delivered_count = int(
+            db.scalar(
+                select(func.count(Delivery.id))
+                .where(Delivery.branch_id == branch.id)
+                .where(Delivery.status == "DELIVERED")
+            ) or 0
+        )
+
+        pending_count = int(
+            db.scalar(
+                select(func.count(Delivery.id))
+                .where(Delivery.branch_id == branch.id)
+                .where(Delivery.status == "PENDING")
+            ) or 0
+        )
+
+        out_for_delivery_count = int(
+            db.scalar(
+                select(func.count(Delivery.id))
+                .where(Delivery.branch_id == branch.id)
+                .where(Delivery.status == "OUT_FOR_DELIVERY")
+            ) or 0
+        )
+
+        collections = float(
+            db.scalar(
+                select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+                .select_from(Delivery)
+                .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+                .where(Delivery.branch_id == branch.id)
+                .where(Delivery.status == "DELIVERED")
+            ) or 0
+        )
+
+        extra_collections = float(
+            db.scalar(
+                select(func.coalesce(func.sum(CashEntry.amount), 0))
+                .where(CashEntry.branch_id == branch.id)
+                .where(CashEntry.kind == "COLLECTION")
+            ) or 0
+        )
+
+        total_collections = collections + extra_collections
+
+        agent_expenses = float(
+            db.scalar(
+                select(func.coalesce(func.sum(CashEntry.amount), 0))
+                .where(CashEntry.branch_id == branch.id)
+                .where(CashEntry.kind == "EXPENSE")
+            ) or 0
+        )
+
+        office_expenses = float(
+            db.scalar(
+                select(func.coalesce(func.sum(CashEntry.amount), 0))
+                .where(CashEntry.branch_id == branch.id)
+                .where(CashEntry.kind == "OFFICE_EXPENSE")
+            ) or 0
+        )
+
+        operating_cash = float(
+            db.scalar(
+                select(func.coalesce(func.sum(CashEntry.amount), 0))
+                .where(CashEntry.branch_id == branch.id)
+                .where(CashEntry.kind == "OPERATING_CASH")
+            ) or 0
+        )
+
+        returned_operating_cash = float(
+            db.scalar(
+                select(func.coalesce(func.sum(CashEntry.amount), 0))
+                .where(CashEntry.branch_id == branch.id)
+                .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+            ) or 0
+        )
+
+        operating_balance = operating_cash - agent_expenses - returned_operating_cash
+        remittance = total_collections - office_expenses
+
+        rows.append(
+            {
+                "branch": branch,
+                "total_deliveries": total_deliveries,
+                "delivered_count": delivered_count,
+                "pending_count": pending_count,
+                "out_for_delivery_count": out_for_delivery_count,
+                "collections": total_collections,
+                "agent_expenses": agent_expenses,
+                "office_expenses": office_expenses,
+                "operating_cash": operating_cash,
+                "returned_operating_cash": returned_operating_cash,
+                "operating_balance": operating_balance,
+                "remittance": remittance,
+            }
+        )
+
+    grand_total_deliveries = sum(r["total_deliveries"] for r in rows)
+    grand_delivered = sum(r["delivered_count"] for r in rows)
+    grand_pending = sum(r["pending_count"] for r in rows)
+    grand_out_for_delivery = sum(r["out_for_delivery_count"] for r in rows)
+    grand_collections = sum(r["collections"] for r in rows)
+    grand_agent_expenses = sum(r["agent_expenses"] for r in rows)
+    grand_office_expenses = sum(r["office_expenses"] for r in rows)
+    grand_operating_cash = sum(r["operating_cash"] for r in rows)
+    grand_returned_operating_cash = sum(r["returned_operating_cash"] for r in rows)
+    grand_operating_balance = sum(r["operating_balance"] for r in rows)
+    grand_remittance = sum(r["remittance"] for r in rows)
+
+    return templates.TemplateResponse(
+        "supervisor_dashboard.html",
+        {
+            "request": request,
+            "user": user,
+            "rows": rows,
+            "grand_total_deliveries": grand_total_deliveries,
+            "grand_delivered": grand_delivered,
+            "grand_pending": grand_pending,
+            "grand_out_for_delivery": grand_out_for_delivery,
+            "grand_collections": grand_collections,
+            "grand_agent_expenses": grand_agent_expenses,
+            "grand_office_expenses": grand_office_expenses,
+            "grand_operating_cash": grand_operating_cash,
+            "grand_returned_operating_cash": grand_returned_operating_cash,
+            "grand_operating_balance": grand_operating_balance,
+            "grand_remittance": grand_remittance,
+            "branches": branches,
+            "selected_branch_id": None,
+            "active": "supervisor",
+        },
+    )
+@app.get("/branches", response_class=HTMLResponse)
+def branches_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    rows = db.execute(
+        select(Branch).order_by(Branch.name.asc())
+    ).scalars().all()
+
+    return templates.TemplateResponse(
+        "branches_list.html",
+        {
+            "request": request,
+            "user": user,
+            "rows": rows,
+            "active": "branches",
+            "branches": rows,
+            "selected_branch_id": None,
+        },
+    )
+
+
+@app.get("/branches/new", response_class=HTMLResponse)
+def branch_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+    error = request.query_params.get("error")
+
+    return templates.TemplateResponse(
+        "branch_new.html",
+        {
+            "request": request,
+            "user": user,
+            "error": error,
+            "active": "branches",
+            "branches": branches,
+            "selected_branch_id": None,
+        },
+    )
+
+
+@app.post("/branches/new")
+def branch_create(
+    request: Request,
+    name: str = Form(...),
+    code: str = Form(""),
+    address: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    name_clean = (name or "").strip()
+    code_clean = (code or "").strip() or None
+    address_clean = (address or "").strip() or None
+
+    if not name_clean:
+        return redirect("/branches/new?error=Branch+name+is+required")
+
+    existing_name = db.scalar(select(Branch).where(Branch.name == name_clean))
+    if existing_name:
+        return redirect("/branches/new?error=Branch+name+already+exists")
+
+    if code_clean:
+        existing_code = db.scalar(select(Branch).where(Branch.code == code_clean))
+        if existing_code:
+            return redirect("/branches/new?error=Branch+code+already+exists")
+
+    db.add(
+        Branch(
+            name=name_clean,
+            code=code_clean,
+            address=address_clean,
+        )
+    )
+    db.commit()
+    return redirect("/branches")
 
 @app.get("/api/low-stock-count")
 def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
@@ -387,7 +942,8 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    rows = get_items_with_stock(db)
+    branch_id = get_selected_branch_id(request, user)
+    rows = [(item, stock) for (item, stock) in get_items_with_stock(db) if item.branch_id == branch_id]
     q_lower = q.strip().lower()
     if q_lower:
         rows = [
@@ -448,8 +1004,13 @@ def item_create(
     if sku_clean and db.scalar(select(Item).where(Item.sku == sku_clean)):
         return redirect("/items/new?error=SKU+already+exists")
 
+    branch_id = get_current_branch_id(request)
+    if not branch_id:
+        return redirect("/items/new?error=No+branch+assigned")
+
     db.add(
         Item(
+            branch_id=branch_id,
             name=name_clean,
             sku=sku_clean,
             category=(category or "").strip() or None,
@@ -475,9 +1036,12 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
         return HTMLResponse("Item not found", status_code=404)
 
     item, stock = row
+    require_item_access(request, user, item)
+
     txs = db.scalars(
         select(Transaction)
         .where(Transaction.item_id == item_id)
+        .where(Transaction.branch_id == item.branch_id)
         .order_by(desc(Transaction.created_at))
         .limit(200)
     ).all()
@@ -500,8 +1064,7 @@ def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)
         return forbid
 
     item = db.get(Item, item_id)
-    if not item:
-        return HTMLResponse("Item not found", status_code=404)
+    require_item_access(request, user, item)
 
     error = request.query_params.get("error")
     return templates.TemplateResponse(
@@ -537,8 +1100,7 @@ def item_edit_save(
         return forbid
 
     item = db.get(Item, item_id)
-    if not item:
-        return HTMLResponse("Item not found", status_code=404)
+    require_item_access(request, user, item)
 
     name_clean = (name or "").strip()
     if not name_clean:
@@ -575,6 +1137,7 @@ def item_edit_save(
 
         db.add(
             Transaction(
+                branch_id=item.branch_id,
                 item_id=item_id,
                 type=at,
                 quantity=aq,
@@ -596,7 +1159,13 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    txs = get_recent_transactions(db, limit=300)
+    branch_id = get_selected_branch_id(request, user)
+    txs = db.scalars(
+        select(Transaction)
+        .where(Transaction.branch_id == branch_id)
+        .order_by(desc(Transaction.created_at))
+        .limit(300)
+    ).all()
     return templates.TemplateResponse("transactions_list.html", {"request": request, "txs": txs, "user": user, "active": "transactions"})
 
 
@@ -611,10 +1180,33 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
 
-    rows = get_items_with_stock(db)
+    branch_id = get_selected_branch_id(request, user)
+
+    rows = [
+        (item, stock)
+        for (item, stock) in get_items_with_stock(db)
+        if item.branch_id == branch_id
+    ]
     items = [i for (i, _s) in rows]
+
     error = request.query_params.get("error")
-    return templates.TemplateResponse("tx_form.html", {"request": request, "items": items, "error": error, "user": user, "active": "transactions"})
+
+    branches = []
+    if is_supervisor(user):
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+
+    return templates.TemplateResponse(
+        "tx_form.html",
+        {
+            "request": request,
+            "items": items,
+            "error": error,
+            "user": user,
+            "active": "transactions",
+            "branches": branches,
+            "selected_branch_id": branch_id,
+        },
+    )
 
 
 @app.post("/transactions/new")
@@ -652,8 +1244,13 @@ def tx_create(
         if int(stock) < qty:
             return redirect("/transactions/new?error=Insufficient+stock")
 
+    branch_id = get_current_branch_id(request)
+    if not branch_id:
+        return redirect("/transactions/new?error=No+branch+assigned")
+
     db.add(
         Transaction(
+            branch_id=branch_id,
             item_id=item_id,
             type=tx_type_clean,
             quantity=qty,
@@ -674,7 +1271,8 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    rows = get_low_stock(db)
+    branch_id = get_selected_branch_id(request, user)
+    rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
     return templates.TemplateResponse("low_stock.html", {"request": request, "rows": rows, "user": user, "active": "low"})
 
 
@@ -691,8 +1289,19 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
 
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user, "active": "agents"})
+    branch_id = get_selected_branch_id(request, user)
+
+    agents = db.execute(
+        select(User)
+        .where(User.role == "AGENT")
+        .where(User.branch_id == branch_id)
+        .order_by(User.username.asc())
+    ).scalars().all()
+
+    return templates.TemplateResponse(
+        "agents_list.html",
+        {"request": request, "agents": agents, "user": user}
+    )
 
 
 @app.get("/agents/new", response_class=HTMLResponse)
@@ -738,11 +1347,15 @@ def agent_create(
     if len(password or "") < 4:
         return redirect("/agents/new?error=Password+too+short")
 
+    if not user.branch_id:
+        return redirect("/agents/new?error=Admin+has+no+branch+assigned")
+
     db.add(
         User(
             username=uname,
             password_hash=hash_password(password),
             role="AGENT",
+            branch_id=user.branch_id,
             full_name=(full_name or "").strip() or None,
             phone=(phone or "").strip() or None,
         )
@@ -770,8 +1383,7 @@ def agent_detail(
         return forbid
 
     agent = db.get(User, agent_id)
-    if not agent or (agent.role or "").upper() != "AGENT":
-        return HTMLResponse("Agent not found", status_code=404)
+    require_agent_access(request, user, agent)
 
     sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
 
@@ -859,13 +1471,21 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    if not is_admin(user):
+    if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
+
+    branch_id = get_selected_branch_id(request, user)
 
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
 
-    stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(300)
+    stmt = (
+        select(Delivery)
+        .where(Delivery.branch_id == branch_id)
+        .order_by(desc(Delivery.created_at))
+        .limit(300)
+    )
+
     if status:
         stmt = stmt.where(Delivery.status == status)
     if agent_id.isdigit():
@@ -874,10 +1494,12 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     rows = db.execute(stmt).scalars().all()
 
     agents = db.execute(
-        select(User).where(User.role == "AGENT").order_by(User.username.asc())
+        select(User)
+        .where(User.role == "AGENT")
+        .where(User.branch_id == branch_id)
+        .order_by(User.username.asc())
     ).scalars().all()
 
-    # Build items_summary: {delivery_id: "Item ×Qty, Item ×Qty"}
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
 
@@ -896,6 +1518,10 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
 
+    branches = []
+    if is_supervisor(user):
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+
     return templates.TemplateResponse(
         "deliveries_list.html",
         {
@@ -904,7 +1530,9 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
             "agents": agents,
             "status": status,
             "agent_id": agent_id,
-            "items_summary": items_summary,  # ✅ this fixes the crash
+            "items_summary": items_summary,
+            "branches": branches,
+            "selected_branch_id": branch_id,
             "user": user,
             "active": "deliveries",
         },
@@ -918,12 +1546,36 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
-    items = db.execute(select(Item).order_by(Item.name.asc())).scalars().all()
+    branch_id = get_selected_branch_id(request, user)
+
+    agents = db.execute(
+        select(User)
+        .where(User.role == "AGENT")
+        .where(User.branch_id == branch_id)
+        .order_by(User.username.asc())
+    ).scalars().all()
+
+    items = db.execute(
+        select(Item)
+        .where(Item.branch_id == branch_id)
+        .order_by(Item.name.asc())
+    ).scalars().all()
+
+    branches = []
+    if is_supervisor(user):
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
 
     return templates.TemplateResponse(
         "delivery_new.html",
-        {"request": request, "agents": agents, "items": items, "user": user, "active": "deliveries_new"},
+        {
+            "request": request,
+            "agents": agents,
+            "items": items,
+            "user": user,
+            "active": "deliveries_new",
+            "branches": branches,
+            "selected_branch_id": branch_id,
+        },
     )
 
 
@@ -956,7 +1608,12 @@ def delivery_create(
     if not cust:
         raise HTTPException(status_code=400, detail="Customer name required")
 
+    branch_id = get_current_branch_id(request)
+    if not branch_id:
+        raise HTTPException(status_code=400, detail="No branch assigned")
+
     d = Delivery(
+        branch_id=branch_id,
         agent_id=target_agent_id,
         customer_name=cust,
         customer_phone=(customer_phone or "").strip() or None,
@@ -994,9 +1651,12 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
 
+    branch_id = get_selected_branch_id(request, user)
+
     rows = db.execute(
         select(Delivery)
         .where(Delivery.agent_id == user.id)
+        .where(Delivery.branch_id == branch_id)
         .order_by(desc(Delivery.created_at))
         .limit(300)
     ).scalars().all()
@@ -1011,16 +1671,10 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         return user_or
     user = user_or
 
-    d = db.execute(
-       select(Delivery)
-       .where(Delivery.id == delivery_id)
-       .with_for_update()
-   ).scalar_one_or_none()
+    d = db.get(Delivery, delivery_id)
+    require_delivery_access(request, user, d)
 
-    if not d:
-        return HTMLResponse("Not found", status_code=404)
-
-    if not is_admin(user) and d.agent_id != user.id:
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
 
     d_items = db.execute(
@@ -1069,10 +1723,9 @@ def update_delivery_status(
     user = user_or
 
     d = db.get(Delivery, delivery_id)
-    if not d:
-        return HTMLResponse("Not found", status_code=404)
+    require_delivery_access(request, user, d)
 
-    if not is_admin(user) and d.agent_id != user.id:
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
 
     status_clean = (status or "").strip().upper()
@@ -1129,6 +1782,8 @@ def cash_dashboard(
         return user_or
     user = user_or
 
+    branch_id = get_selected_branch_id(request, user)
+
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
 
     start_dt = None
@@ -1155,13 +1810,41 @@ def cash_dashboard(
         end=end_dt,
     )
 
+    # Filter daily rows to selected branch using cash/delivery records
+    branch_delivery_days = set(
+        str(x) for x in db.execute(
+            select(func.date(Delivery.created_at))
+            .where(Delivery.branch_id == branch_id)
+        ).scalars().all() if x is not None
+    )
+
+    branch_cash_days = set(
+        str(x) for x in db.execute(
+            select(func.date(CashEntry.created_at))
+            .where(CashEntry.branch_id == branch_id)
+        ).scalars().all() if x is not None
+    )
+
+    allowed_days = branch_delivery_days | branch_cash_days
+    rows = [r for r in rows if r["day"] in allowed_days]
+
+    total_collections = float(sum(float(r["collections"]) for r in rows))
+    total_expenses = float(sum(float(r["expenses"]) for r in rows))
+    total_operating = float(sum(float(r["operating_cash"]) for r in rows))
+    total_office_expenses = float(sum(float(r["office_expenses"]) for r in rows))
+
     operating_balance = float(total_operating) - float(total_expenses)
     remittance = float(total_collections) - float(total_office_expenses)
     net_position = remittance + operating_balance
 
     agents = []
-    if is_admin(user):
-        agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
+    if is_admin(user) or is_supervisor(user):
+        agents = db.execute(
+            select(User)
+            .where(User.role == "AGENT")
+            .where(User.branch_id == branch_id)
+            .order_by(User.username.asc())
+        ).scalars().all()
 
     return templates.TemplateResponse(
         "cash_dashboard.html",
@@ -1221,8 +1904,12 @@ def cash_new(
 
     d_id = int(delivery_id) if (delivery_id or "").isdigit() else None
 
+    branch_id = get_current_branch_id(request)
+    if not branch_id:
+        raise HTTPException(status_code=400, detail="No branch assigned")
     db.add(
         CashEntry(
+            branch_id=branch_id,
             agent_id=target_agent_id,
             delivery_id=d_id,
             kind=k,
@@ -1455,9 +2142,15 @@ def reset_system(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
 
-    db.execute(text("TRUNCATE TABLE cash_entries RESTART IDENTITY CASCADE"))
-    db.execute(text("TRUNCATE TABLE delivery_items RESTART IDENTITY CASCADE"))
-    db.execute(text("TRUNCATE TABLE deliveries RESTART IDENTITY CASCADE"))
-    db.execute(text("TRUNCATE TABLE transactions RESTART IDENTITY CASCADE"))
+    if DATABASE_URL.startswith("sqlite"):
+        db.execute(text("DELETE FROM cash_entries"))
+        db.execute(text("DELETE FROM delivery_items"))
+        db.execute(text("DELETE FROM deliveries"))
+        db.execute(text("DELETE FROM transactions"))
+    else:
+        db.execute(text("TRUNCATE TABLE cash_entries RESTART IDENTITY CASCADE"))
+        db.execute(text("TRUNCATE TABLE delivery_items RESTART IDENTITY CASCADE"))
+        db.execute(text("TRUNCATE TABLE deliveries RESTART IDENTITY CASCADE"))
+        db.execute(text("TRUNCATE TABLE transactions RESTART IDENTITY CASCADE"))
     db.commit()
     return {"status": "Database reset complete"}
