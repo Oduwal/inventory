@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, func, and_, desc
+from sqlalchemy import select, text, func, and_, desc, case
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, DATABASE_URL
