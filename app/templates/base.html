@@ -6,314 +6,260 @@
   <title>{% block title %}Inventory Keeper{% endblock %}</title>
   <style>
     :root{
-      --bg:#0b1220;
-      --card:#0f1b33;
-      --card2:#0c172e;
-      --text:#e7eefc;
-      --muted:#a7b4d6;
-      --accent:#4f7cff;
-      --accent2:#22c55e;
-      --danger:#ef4444;
-      --warn:#f59e0b;
-      --shadow: 0 12px 30px rgba(0,0,0,.35);
-      --radius:16px;
+      --bg:#0b1220;--card:#0f1b33;--card2:#0c172e;--text:#e7eefc;
+      --muted:#a7b4d6;--accent:#4f7cff;--accent2:#22c55e;
+      --danger:#ef4444;--warn:#f59e0b;
+      --shadow:0 12px 30px rgba(0,0,0,.35);--radius:16px;--sidebar-w:230px;
     }
     *{box-sizing:border-box}
     body{
       margin:0;
-      font-family: ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      background: radial-gradient(1200px 700px at 20% 10%, #12204a, transparent),
-                  radial-gradient(900px 600px at 80% 20%, #1a2b63, transparent),
-                  var(--bg);
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      background:radial-gradient(1200px 700px at 20% 10%,#12204a,transparent),
+                 radial-gradient(900px 600px at 80% 20%,#1a2b63,transparent),var(--bg);
       color:var(--text);
     }
     a{color:inherit;text-decoration:none}
-    .layout{
-      display:grid;
-      grid-template-columns: 270px 1fr;
-      min-height:100vh;
-    }
+
+    /* Layout */
+    .layout{display:flex;min-height:100vh}
+
+    /* Fixed sidebar */
     .sidebar{
-      padding:18px 16px;
+      width:var(--sidebar-w);min-width:var(--sidebar-w);
+      position:fixed;top:0;left:0;height:100vh;
+      overflow-y:auto;overflow-x:hidden;
+      padding:14px 10px 24px;
       border-right:1px solid rgba(255,255,255,.06);
-      background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.01));
+      background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.01));
+      scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.1) transparent;
+      z-index:100;
     }
-    .brand{
-      display:flex;
-      gap:10px;
-      align-items:center;
-      padding:10px 10px 14px;
-    }
-    .logo{
-      width:38px;height:38px;border-radius:12px;
-      background: linear-gradient(135deg, var(--accent), #8b5cf6);
-      box-shadow: var(--shadow);
-    }
-    .brand h1{
-      margin:0;
-      font-size:16px;
-      letter-spacing:.4px;
-    }
-    .userbox{
-      margin-top:10px;
-      padding:12px;
-      border-radius:var(--radius);
-      background: rgba(255,255,255,.04);
-      border:1px solid rgba(255,255,255,.06);
-    }
-    .userbox .name{font-weight:700}
-    .userbox .role{color:var(--muted);font-size:12px;margin-top:2px}
-    .nav{
-      margin-top:14px;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
+    .sidebar::-webkit-scrollbar{width:4px}
+    .sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+
+    /* Content offset */
+    .content{margin-left:var(--sidebar-w);flex:1;padding:22px 24px;min-width:0}
+
+    /* Brand */
+    .brand{display:flex;gap:10px;align-items:center;padding:6px 6px 12px}
+    .logo{width:32px;height:32px;border-radius:10px;flex-shrink:0;
+          background:linear-gradient(135deg,var(--accent),#8b5cf6);box-shadow:var(--shadow)}
+    .brand h1{margin:0;font-size:13px;letter-spacing:.3px;line-height:1.3}
+
+    /* Userbox */
+    .userbox{margin-top:6px;padding:9px 10px;border-radius:14px;
+             background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)}
+    .userbox .name{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .userbox .role{color:var(--muted);font-size:11px;margin-top:2px}
+
+    /* Nav */
+    .nav{margin-top:10px;display:flex;flex-direction:column;gap:2px}
+    .nav-section{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.8px;
+                 text-transform:uppercase;padding:10px 8px 3px}
     .nav a{
-      padding:12px 12px;
-      border-radius:14px;
-      background: rgba(255,255,255,.03);
-      border:1px solid rgba(255,255,255,.05);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      transition:.15s ease;
-    }
-    .nav a:hover{transform: translateY(-1px); border-color: rgba(79,124,255,.5)}
-    .nav a[data-active="1"]{
-      background: rgba(79,124,255,.15);
-      border-color: rgba(79,124,255,.45);
-    }
-    .dot{
-      width:9px;height:9px;border-radius:99px;
-      background: rgba(255,255,255,.35);
-      margin-right:10px;
-      display:inline-block;
-    }
-    .nav .left{
+      padding:8px 10px;border-radius:11px;
+      background:transparent;border:1px solid transparent;
       display:flex;align-items:center;gap:8px;
+      font-size:13px;transition:.12s ease;white-space:nowrap;
     }
-    .content{
-      padding:22px 24px;
-    }
-    .topbar{
-      display:flex;
-      align-items:flex-end;
-      justify-content:space-between;
-      gap:12px;
-      margin-bottom:16px;
-    }
+    .nav a:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)}
+    .nav a[data-active="1"]{background:rgba(79,124,255,.15);border-color:rgba(79,124,255,.4);
+                             color:#7fa8ff;font-weight:600}
+    .nav-icon{width:18px;height:18px;flex-shrink:0;display:flex;
+              align-items:center;justify-content:center;font-size:14px}
+    .nav-divider{height:1px;background:rgba(255,255,255,.06);margin:5px 0}
+
+    /* Topbar */
+    .topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px}
     .title h2{margin:0;font-size:22px}
     .title p{margin:6px 0 0;color:var(--muted);font-size:13px}
-    .card{
-      background: rgba(255,255,255,.04);
-      border:1px solid rgba(255,255,255,.06);
-      border-radius:var(--radius);
-      padding:16px;
-      box-shadow: var(--shadow);
-    }
-    .badge{
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      font-size:12px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-    }
-    .b-blue{background: rgba(79,124,255,.18); border-color: rgba(79,124,255,.35)}
-    .b-green{background: rgba(34,197,94,.16); border-color: rgba(34,197,94,.35)}
-    .b-red{background: rgba(239,68,68,.16); border-color: rgba(239,68,68,.35)}
-    .b-yellow{background: rgba(245,158,11,.16); border-color: rgba(245,158,11,.35)}
-    .b-purple{background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.35)}
-    .btnPrimary{
-      appearance:none;
-      border:none;
-      cursor:pointer;
-      padding:10px 14px;
-      border-radius:14px;
-      color:white;
-      background: linear-gradient(135deg, var(--accent), #8b5cf6);
-      box-shadow: 0 8px 18px rgba(79,124,255,.28);
-      font-weight:700;
-    }
-    .btnGhost{
-      appearance:none;
-      border:1px solid rgba(255,255,255,.14);
-      cursor:pointer;
-      padding:10px 14px;
-      border-radius:14px;
-      color:var(--text);
-      background: rgba(255,255,255,.04);
-      font-weight:700;
-    }
+
+    /* Cards */
+    .card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);
+          border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+
+    /* Badges */
+    .badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;
+           padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);
+           background:rgba(255,255,255,.06)}
+    .b-blue  {background:rgba(79,124,255,.18);border-color:rgba(79,124,255,.35)}
+    .b-green {background:rgba(34,197,94,.16); border-color:rgba(34,197,94,.35)}
+    .b-red   {background:rgba(239,68,68,.16); border-color:rgba(239,68,68,.35)}
+    .b-yellow{background:rgba(245,158,11,.16);border-color:rgba(245,158,11,.35)}
+    .b-purple{background:rgba(139,92,246,.16);border-color:rgba(139,92,246,.35)}
+
+    /* Buttons */
+    .btnPrimary{appearance:none;border:none;cursor:pointer;padding:10px 14px;
+                border-radius:14px;color:white;font-weight:700;
+                background:linear-gradient(135deg,var(--accent),#8b5cf6);
+                box-shadow:0 8px 18px rgba(79,124,255,.28)}
+    .btnGhost{appearance:none;border:1px solid rgba(255,255,255,.14);cursor:pointer;
+              padding:10px 14px;border-radius:14px;color:var(--text);
+              background:rgba(255,255,255,.04);font-weight:700}
+
+    /* Table */
     table{width:100%;border-collapse:collapse}
     th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,.06);text-align:left;font-size:13px}
     th{color:var(--muted);font-weight:700}
-    input,select{
-      width:100%;
-      padding:10px 12px;
-      border-radius:12px;
-      border:1px solid rgba(255,255,255,.12);
-      background: rgba(0,0,0,.15);
-      color:var(--text);
-      outline:none;
-    }
+
+    /* Inputs */
+    input,select{width:100%;padding:10px 12px;border-radius:12px;
+                 border:1px solid rgba(255,255,255,.12);
+                 background:rgba(0,0,0,.15);color:var(--text);outline:none}
     label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
     .inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
     .inputs > div{min-width:180px;flex:1}
     .muted{color:var(--muted)}
-    @media (max-width: 980px){
-  .layout{
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-  }
 
-  /* Stop the sidebar from overlaying the content */
-  .sidebar{
-    position: relative;   /* was sticky */
-    top: auto;
-    z-index: 1;
-  }
-
-  .content{
-    padding: 16px 14px;
-  }
-
-  /* Prevent topbar buttons from overlapping */
-  .topbar{
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-  }
-
-  .topbar > div{
-    width: 100%;
-  }
-
-  /* Make button rows wrap nicely on phones */
-  .inputs{
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .inputs > div{
-    min-width: 0;
-    width: 100%;
-  }
-}
+    /* Mobile */
+    @media(max-width:860px){
+      .sidebar{position:relative;width:100%;height:auto;overflow:visible;
+               border-right:none;border-bottom:1px solid rgba(255,255,255,.06)}
+      .nav{flex-direction:row;flex-wrap:wrap;gap:4px}
+      .nav a{font-size:12px;padding:6px 9px}
+      .nav-section,.nav-divider{display:none}
+      .layout{flex-direction:column}
+      .content{margin-left:0;padding:16px 14px}
+      .topbar{flex-direction:column;align-items:flex-start;gap:10px}
+      .topbar > div{width:100%}
+      .inputs{flex-direction:column;align-items:stretch}
+      .inputs > div{min-width:0;width:100%}
+    }
   </style>
 </head>
 <body>
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="logo"></div>
-        <div>
-          <h1>Inventory Keeper</h1>
-          <div class="muted" style="font-size:12px">Logistics & stock</div>
-        </div>
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>Inventory<br>Keeper</h1>
+        <div class="muted" style="font-size:11px;margin-top:2px;">Logistics & stock</div>
       </div>
+    </div>
 
-      <div class="userbox">
-        <div class="name">{{ user.username if user else "Guest" }}</div>
-        <div class="role">{{ user.role if user else "" }}</div>
-      </div>
+    <div class="userbox">
+      <div class="name">{{ user.username if user else "Guest" }}</div>
+      <div class="role">{{ user.role if user else "" }}</div>
+    </div>
 
-      <nav class="nav">
-  <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Overview</span>
-  </a>
+    <nav class="nav">
+      {% set role = (user.role | upper) if user else "" %}
 
-  {% if user and user.role == "SUPERVISOR" %}
-<a href="/supervisor" data-active="{% if active == 'supervisor' %}1{% else %}0{% endif %}">
-  <span class="left"><span class="dot"></span>Supervisor Analytics</span>
-</a>
-{% endif %}
-
-  {% if user and user.role == "SUPERVISOR" %}
-<a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
-  <span class="left"><span class="dot"></span>Branches</span>
-</a>
-{% endif %}
-
-  {% if user and user.role == "SUPERVISOR" and branches %}
-  <div class="card" style="padding:10px; margin-top:6px;">
-    <div class="muted" style="font-size:12px; margin-bottom:8px;">Branches</div>
-
-    {% for b in branches %}
-      <a
-        href="/?branch_id={{ b.id }}"
-        data-active="{% if selected_branch_id == b.id %}1{% else %}0{% endif %}"
-        style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding:10px 12px; border-radius:12px; background: rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.05);"
-      >
-        <span class="left"><span class="dot"></span>{{ b.name }}</span>
+      <!-- Everyone -->
+      <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
       </a>
-    {% endfor %}
-  </div>
-  {% endif %}
 
-  <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Items</span>
-  </a>
+      <!-- Supervisor only -->
+      {% if role == "SUPERVISOR" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Analytics</div>
+      <a href="/supervisor" data-active="{% if active == 'supervisor' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📊</span>Supervisor Analytics
+      </a>
+      <a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏢</span>Branches
+      </a>
+      {% if branches %}
+        <div class="nav-section">Switch Branch</div>
+        {% for b in branches %}
+        <a href="/?branch_id={{ b.id }}"
+           data-active="{% if selected_branch_id == b.id %}1{% else %}0{% endif %}">
+          <span class="nav-icon">•</span>{{ b.name }}
+        </a>
+        {% endfor %}
+      {% endif %}
+      {% endif %}
 
-  <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Transactions</span>
-  </a>
+      <!-- Inventory: ADMIN & SUPERVISOR only -->
+      {% if role in ("ADMIN", "SUPERVISOR") %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Inventory</div>
+      <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📦</span>Items
+      </a>
+      <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🔄</span>Transactions
+      </a>
+      {% if role == "ADMIN" %}
+      <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">⚠️</span>Low Stock
+      </a>
+      {% endif %}
+      {% endif %}
 
-  <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Deliveries</span>
-  </a>
+      <!-- Deliveries: everyone -->
+      <div class="nav-divider"></div>
+      <div class="nav-section">Deliveries</div>
+      <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🚚</span>Deliveries
+      </a>
+      {% if role in ("ADMIN", "AGENT") %}
+      <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">➕</span>New Order
+      </a>
+      {% endif %}
 
-  <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>New Order</span>
-  </a>
+      <!-- Transfers: ADMIN & SUPERVISOR -->
+      {% if role in ("ADMIN", "SUPERVISOR") %}
+      <a href="/transfers" data-active="{% if active == 'transfers' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">↔️</span>Stock Transfers
+      </a>
+      {% endif %}
 
-  {% if user and user.role in ("ADMIN", "SUPERVISOR") %}
-  <a href="/transfers" data-active="{% if active == 'transfers' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Stock Transfers</span>
-  </a>
-  {% endif %}
+      <!-- Finance: ADMIN & AGENT -->
+      {% if role in ("ADMIN", "AGENT") %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Finance</div>
+      <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">💰</span>Cash
+      </a>
+      <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📄</span>Reports
+      </a>
+      {% endif %}
 
-  <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Cash</span>
-  </a>
+      <!-- Admin only -->
+      {% if role == "ADMIN" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Admin</div>
+      <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">👤</span>Agents
+      </a>
+      {% endif %}
 
-  <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
-    <span class="left"><span class="dot"></span>Reports</span>
-  </a>
+      <!-- Logout -->
+      {% if user %}
+      <div class="nav-divider"></div>
+      <form method="post" action="/logout">
+        <button class="btnGhost" type="submit"
+          style="width:100%;margin-top:2px;font-size:13px;padding:8px 10px;
+                 border-radius:11px;text-align:left;display:flex;align-items:center;gap:8px;
+                 background:transparent;border-color:rgba(255,255,255,.08);">
+          <span>🚪</span> Logout
+        </button>
+      </form>
+      {% endif %}
 
-  {% if user and user.role == "ADMIN" %}
-    <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
-      <span class="left"><span class="dot"></span>Agents</span>
-    </a>
+    </nav>
+  </aside>
 
-    <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
-      <span class="left"><span class="dot"></span>Low Stock</span>
-    </a>
-  {% endif %}
-
-  {% if user %}
-    <form method="post" action="/logout" style="margin-top:10px;">
-      <button class="btnGhost" type="submit" style="width:100%;">Logout</button>
-    </form>
-  {% endif %}
-</nav>
-    </aside>
-
-    <main class="content">
-      <div class="topbar">
-        <div class="title">
-          <h2>{% block page_title %}{% endblock %}</h2>
-          <p>{% block page_subtitle %}{% endblock %}</p>
-        </div>
-        <div>
-          {% block top_right %}{% endblock %}
-        </div>
+  <!-- MAIN CONTENT -->
+  <main class="content">
+    <div class="topbar">
+      <div class="title">
+        <h2>{% block page_title %}{% endblock %}</h2>
+        <p>{% block page_subtitle %}{% endblock %}</p>
       </div>
+      <div>{% block top_right %}{% endblock %}</div>
+    </div>
+    {% block content %}{% endblock %}
+  </main>
 
-      {% block content %}{% endblock %}
-    </main>
-  </div>
+</div>
 </body>
 </html>
