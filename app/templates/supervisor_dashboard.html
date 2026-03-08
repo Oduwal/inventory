@@ -82,9 +82,9 @@
     <table>
       <thead><tr><th>#</th><th>Item</th><th>Category</th><th style="text-align:right;">Units Out</th></tr></thead>
       <tbody>
-        {% for i, row in top_items | enumerate %}
+        {% for row in top_items %}
         <tr>
-          <td style="color:var(--muted);">{{ i+1 }}</td>
+          <td style="color:var(--muted);">{{ loop.index }}</td>
           <td>{{ row.name }}</td>
           <td><span class="badge b-blue">{{ row.category }}</span></td>
           <td style="text-align:right;font-weight:700;">{{ row.qty }}</td>
@@ -114,13 +114,13 @@
       </tr>
     </thead>
     <tbody>
-      {% for i, a in best_agents | enumerate %}
+      {% for a in best_agents %}
       <tr>
         <td>
-          {% if i == 0 %}<span style="font-size:18px;">🥇</span>
-          {% elif i == 1 %}<span style="font-size:18px;">🥈</span>
-          {% elif i == 2 %}<span style="font-size:18px;">🥉</span>
-          {% else %}<span style="color:var(--muted);">{{ i+1 }}</span>
+          {% if loop.index0 == 0 %}<span style="font-size:18px;">🥇</span>
+          {% elif loop.index0 == 1 %}<span style="font-size:18px;">🥈</span>
+          {% elif loop.index0 == 2 %}<span style="font-size:18px;">🥉</span>
+          {% else %}<span style="color:var(--muted);">{{ loop.index }}</span>
           {% endif %}
         </td>
         <td>
