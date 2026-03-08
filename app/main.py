@@ -2055,6 +2055,64 @@ def reset_system(request: Request, db: Session = Depends(get_db)):
     return {"status": "Database reset complete"}
 
 
+@app.get("/manifest.json")
+def pwa_manifest():
+    import json
+    manifest = {
+        "name": "Inventory Keeper",
+        "short_name": "InvKeeper",
+        "description": "Logistics & stock management",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0b1220",
+        "theme_color": "#4f7cff",
+        "orientation": "portrait-primary",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+        "shortcuts": [
+            {"name": "New Order",   "url": "/deliveries/new", "description": "Create a new delivery order"},
+            {"name": "Deliveries",  "url": "/deliveries",     "description": "View all deliveries"},
+        ],
+    }
+    return JSONResponse(content=manifest, headers={"Content-Type": "application/manifest+json"})
+
+
+@app.get("/sw.js", response_class=PlainTextResponse)
+def service_worker():
+    sw = """
+const CACHE = "invkeeper-v1";
+const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
+
+self.addEventListener("install", e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", e => {
+  e.waitUntil(caches.keys().then(keys =>
+    Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+  ));
+  self.clients.claim();
+});
+
+self.addEventListener("fetch", e => {
+  if (e.request.method !== "GET" || !e.request.url.startsWith("http")) return;
+  e.respondWith(
+    fetch(e.request).then(res => {
+      if (res.ok && e.request.destination === "document") {
+        const clone = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, clone));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
+  );
+});
+"""
+    return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
+
+
 @app.get("/debug-login")
 def debug_login(username: str, password: str, db: Session = Depends(get_db)):
     from sqlalchemy import select
