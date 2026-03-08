@@ -194,19 +194,8 @@ def ensure_schema() -> None:
             conn.execute(text("SELECT id FROM branches LIMIT 1"))
         except Exception:
             try:
-                # Use dialect-agnostic DDL; SQLAlchemy's create_all handles type mapping
                 conn.execute(
                     text(
-                        """
-                        CREATE TABLE IF NOT EXISTS branches (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            name VARCHAR(120) NOT NULL UNIQUE,
-                            code VARCHAR(20) NULL UNIQUE,
-                            address VARCHAR(200) NULL,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                        """
-                        if DATABASE_URL.startswith("sqlite") else
                         """
                         CREATE TABLE IF NOT EXISTS branches (
                             id SERIAL PRIMARY KEY,
@@ -218,6 +207,16 @@ def ensure_schema() -> None:
                         """
                     )
                 )
+                conn.commit()
+            except Exception:
+                pass
+
+        # users.branch_id
+        try:
+            conn.execute(text("SELECT branch_id FROM users LIMIT 1"))
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN branch_id INTEGER NULL"))
                 conn.commit()
             except Exception:
                 pass
@@ -388,7 +387,6 @@ def ensure_schema() -> None:
             pass
 
 def seed_admin_if_missing() -> None:
-    """Seed an ADMIN user from env vars ADMIN_USERNAME / ADMIN_PASSWORD if none exists."""
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
     admin_pass = os.getenv("ADMIN_PASSWORD") or ""
     if not admin_user or not admin_pass:
@@ -397,12 +395,17 @@ def seed_admin_if_missing() -> None:
     gen = get_db()
     db = next(gen)
     try:
-        existing_admin = db.scalar(select(User).where(User.role == "ADMIN"))
+        existing_admin = db.execute(
+            text("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1")
+        ).first()
         if existing_admin:
             return
 
-        username_exists = db.scalar(select(User).where(User.username == admin_user))
-        if username_exists:
+        existing_user = db.execute(
+            text("SELECT id FROM users WHERE username = :username LIMIT 1"),
+            {"username": admin_user},
+        ).first()
+        if existing_user:
             return
 
         db.add(
