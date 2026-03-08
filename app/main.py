@@ -15,7 +15,7 @@ from sqlalchemy import select, text, func, and_, desc
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, DATABASE_URL
-from .models import Branch, Item, Transaction, User, Delivery, DeliveryItem, CashEntry
+from .models import Branch, Item, Transaction, User, Delivery, DeliveryItem, CashEntry, StockTransfer, StockTransferItem
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -285,6 +285,37 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_item_id ON transactions (item_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_delivery_id ON transactions (delivery_id)")
+
+        # stock_transfers table
+        _ddl(conn, """
+            CREATE TABLE IF NOT EXISTS stock_transfers (
+                id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+                from_branch_id INTEGER NOT NULL REFERENCES branches(id),
+                to_branch_id   INTEGER NOT NULL REFERENCES branches(id),
+                status         VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+                note           VARCHAR(400) NULL,
+                created_by_id  INTEGER NOT NULL REFERENCES users(id),
+                received_by_id  INTEGER NULL REFERENCES users(id),
+                cancelled_by_id INTEGER NULL REFERENCES users(id),
+                created_at     TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """,
+                received_at    TIMESTAMP NULL,
+                cancelled_at   TIMESTAMP NULL
+            )
+        """)
+
+        # stock_transfer_items table
+        _ddl(conn, """
+            CREATE TABLE IF NOT EXISTS stock_transfer_items (
+                id          """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+                transfer_id INTEGER NOT NULL REFERENCES stock_transfers(id),
+                item_id     INTEGER NOT NULL REFERENCES items(id),
+                quantity    INTEGER NOT NULL
+            )
+        """)
+
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_from ON stock_transfers (from_branch_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_to ON stock_transfers (to_branch_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_status ON stock_transfers (status)")
 
 
 
@@ -2039,3 +2070,261 @@ def debug_login(username: str, password: str, db: Session = Depends(get_db)):
         "hash_prefix": starts_with,
         "verified": verified,
     }
+
+# ═══════════════════════════════════════════════════
+#  STOCK TRANSFERS
+# ═══════════════════════════════════════════════════
+
+@app.get("/transfers", response_class=HTMLResponse)
+def transfers_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    if is_supervisor(user):
+        transfers = db.execute(
+            select(StockTransfer).order_by(desc(StockTransfer.created_at))
+        ).scalars().all()
+    else:
+        transfers = db.execute(
+            select(StockTransfer)
+            .where(
+                (StockTransfer.from_branch_id == user.branch_id) |
+                (StockTransfer.to_branch_id == user.branch_id)
+            )
+            .order_by(desc(StockTransfer.created_at))
+        ).scalars().all()
+
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+
+    return templates.TemplateResponse("transfers_list.html", {
+        "request": request,
+        "user": user,
+        "transfers": transfers,
+        "branches": branches,
+        "active": "transfers",
+        "selected_branch_id": getattr(user, "branch_id", None),
+    })
+
+
+@app.get("/transfers/new", response_class=HTMLResponse)
+def transfer_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branches = db.execute(
+        select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)
+    ).scalars().all()
+
+    items = get_items_with_stock(db, branch_id=user.branch_id)
+    error = request.query_params.get("error")
+
+    return templates.TemplateResponse("transfer_new.html", {
+        "request": request,
+        "user": user,
+        "branches": branches,
+        "items": items,
+        "error": error,
+        "active": "transfers",
+        "selected_branch_id": user.branch_id,
+    })
+
+
+@app.post("/transfers/new")
+def transfer_create(
+    request: Request,
+    to_branch_id: int = Form(...),
+    note: str = Form(""),
+    item_ids: list[int] = Form(...),
+    quantities: list[int] = Form(...),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    if to_branch_id == user.branch_id:
+        return redirect("/transfers/new?error=Cannot+transfer+to+your+own+branch")
+
+    if not item_ids or not quantities or len(item_ids) != len(quantities):
+        return redirect("/transfers/new?error=Please+add+at+least+one+item")
+
+    # validate stock
+    for item_id, qty in zip(item_ids, quantities):
+        if qty <= 0:
+            return redirect("/transfers/new?error=Quantities+must+be+greater+than+zero")
+        row = get_item_with_stock(db, item_id, branch_id=user.branch_id)
+        if not row:
+            return redirect("/transfers/new?error=Item+not+found")
+        _item, stock = row
+        if int(stock) < qty:
+            return redirect(f"/transfers/new?error=Insufficient+stock+for+{_item.name}")
+
+    # create transfer record
+    transfer = StockTransfer(
+        from_branch_id=user.branch_id,
+        to_branch_id=to_branch_id,
+        status="PENDING",
+        note=(note or "").strip() or None,
+        created_by_id=user.id,
+    )
+    db.add(transfer)
+    db.flush()
+
+    # add line items
+    for item_id, qty in zip(item_ids, quantities):
+        db.add(StockTransferItem(
+            transfer_id=transfer.id,
+            item_id=item_id,
+            quantity=qty,
+        ))
+
+    # deduct stock from sender immediately (OUT transactions)
+    for item_id, qty in zip(item_ids, quantities):
+        db.add(Transaction(
+            branch_id=user.branch_id,
+            item_id=item_id,
+            type="OUT",
+            quantity=qty,
+            reference=f"TRANSFER #{transfer.id}",
+            note=f"Stock transfer to branch ID {to_branch_id}",
+        ))
+
+    db.commit()
+    return redirect(f"/transfers/{transfer.id}")
+
+
+@app.get("/transfers/{transfer_id}", response_class=HTMLResponse)
+def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+
+    if is_admin(user) and user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+
+    return templates.TemplateResponse("transfer_detail.html", {
+        "request": request,
+        "user": user,
+        "transfer": transfer,
+        "branches": branches,
+        "active": "transfers",
+        "selected_branch_id": getattr(user, "branch_id", None),
+    })
+
+
+@app.post("/transfers/{transfer_id}/receive")
+def transfer_receive(transfer_id: int, request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+
+    if transfer.to_branch_id != user.branch_id:
+        return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
+
+    if transfer.status != "PENDING":
+        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
+
+    # add stock to receiving branch (IN transactions)
+    for line in transfer.items:
+        # ensure item exists in receiving branch — if not, create it
+        dest_item = db.scalar(
+            select(Item).where(Item.branch_id == user.branch_id, Item.name == line.item.name)
+        )
+        if not dest_item:
+            dest_item = Item(
+                branch_id=user.branch_id,
+                name=line.item.name,
+                sku=line.item.sku,
+                category=line.item.category,
+                unit=line.item.unit,
+                reorder_level=line.item.reorder_level,
+                cost_price=line.item.cost_price,
+                selling_price=line.item.selling_price,
+            )
+            db.add(dest_item)
+            db.flush()
+
+        db.add(Transaction(
+            branch_id=user.branch_id,
+            item_id=dest_item.id,
+            type="IN",
+            quantity=line.quantity,
+            reference=f"TRANSFER #{transfer.id}",
+            note=f"Stock received from branch {transfer.from_branch.name}",
+        ))
+
+    transfer.status = "RECEIVED"
+    transfer.received_by_id = user.id
+    transfer.received_at = datetime.utcnow()
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
+
+
+@app.post("/transfers/{transfer_id}/cancel")
+def transfer_cancel(transfer_id: int, request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+
+    if user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    if transfer.status != "PENDING":
+        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
+
+    # reverse the OUT transactions — add stock back to sender
+    for line in transfer.items:
+        db.add(Transaction(
+            branch_id=transfer.from_branch_id,
+            item_id=line.item_id,
+            type="IN",
+            quantity=line.quantity,
+            reference=f"TRANSFER #{transfer.id} CANCELLED",
+            note="Stock returned — transfer cancelled",
+        ))
+
+    transfer.status = "CANCELLED"
+    transfer.cancelled_by_id = user.id
+    transfer.cancelled_at = datetime.utcnow()
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")

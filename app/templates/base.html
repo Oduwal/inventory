@@ -269,6 +269,12 @@
     <span class="left"><span class="dot"></span>New Order</span>
   </a>
 
+  {% if user and user.role in ("ADMIN", "SUPERVISOR") %}
+  <a href="/transfers" data-active="{% if active == 'transfers' %}1{% else %}0{% endif %}">
+    <span class="left"><span class="dot"></span>Stock Transfers</span>
+  </a>
+  {% endif %}
+
   <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
     <span class="left"><span class="dot"></span>Cash</span>
   </a>

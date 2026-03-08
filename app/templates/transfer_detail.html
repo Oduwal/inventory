@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Transfer #{{ transfer.id }}{% endblock %}
+{% block page_title %}Transfer #{{ transfer.id }}{% endblock %}
+{% block page_subtitle %}{{ transfer.from_branch.name }} → {{ transfer.to_branch.name }}{% endblock %}
+
+{% block content %}
+
+{% set error = request.query_params.get("error") %}
+{% if error %}
+<div class="card" style="border-color:rgba(239,68,68,.4);margin-bottom:16px;color:#ef4444;">
+    ⚠ {{ error }}
+</div>
+{% endif %}
+
+<!-- Status banner -->
+<div class="card" style="margin-bottom:20px;
+  {% if transfer.status == 'PENDING' %}border-color:rgba(245,158,11,.4);{% endif %}
+  {% if transfer.status == 'RECEIVED' %}border-color:rgba(34,197,94,.4);{% endif %}
+  {% if transfer.status == 'CANCELLED' %}border-color:rgba(239,68,68,.4);{% endif %}
+">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div>
+            {% if transfer.status == "PENDING" %}
+            <span class="badge b-yellow" style="font-size:14px;padding:8px 14px;">⏳ PENDING</span>
+            {% elif transfer.status == "RECEIVED" %}
+            <span class="badge b-green" style="font-size:14px;padding:8px 14px;">✓ RECEIVED</span>
+            {% else %}
+            <span class="badge b-red" style="font-size:14px;padding:8px 14px;">✕ CANCELLED</span>
+            {% endif %}
+        </div>
+
+        {% if transfer.status == "PENDING" and user.role == "ADMIN" %}
+        <div style="display:flex;gap:10px;">
+            {% if user.branch_id == transfer.to_branch_id %}
+            <form method="post" action="/transfers/{{ transfer.id }}/receive">
+                <button class="btnPrimary" type="submit">✓ Confirm Receipt</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/transfers/{{ transfer.id }}/cancel"
+                  onsubmit="return confirm('Cancel this transfer? Stock will be returned to the sender.')">
+                <button class="btnGhost" type="submit" style="border-color:rgba(239,68,68,.4);color:#ef4444;">✕ Cancel</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Transfer info grid -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+    <div class="card">
+        <div style="color:var(--muted);font-size:12px;margin-bottom:8px;">FROM BRANCH</div>
+        <div style="font-size:18px;font-weight:700;">{{ transfer.from_branch.name }}</div>
+        <div style="color:var(--muted);font-size:12px;margin-top:6px;">Sent by {{ transfer.created_by.full_name or transfer.created_by.username }}</div>
+        <div style="color:var(--muted);font-size:12px;">{{ transfer.created_at.strftime("%d %B %Y at %H:%M") }}</div>
+    </div>
+    <div class="card">
+        <div style="color:var(--muted);font-size:12px;margin-bottom:8px;">TO BRANCH</div>
+        <div style="font-size:18px;font-weight:700;">{{ transfer.to_branch.name }}</div>
+        {% if transfer.status == "RECEIVED" %}
+        <div style="color:var(--muted);font-size:12px;margin-top:6px;">Received by {{ transfer.received_by.full_name or transfer.received_by.username }}</div>
+        <div style="color:var(--muted);font-size:12px;">{{ transfer.received_at.strftime("%d %B %Y at %H:%M") }}</div>
+        {% elif transfer.status == "CANCELLED" %}
+        <div style="color:#ef4444;font-size:12px;margin-top:6px;">Cancelled by {{ transfer.cancelled_by.full_name or transfer.cancelled_by.username }}</div>
+        <div style="color:var(--muted);font-size:12px;">{{ transfer.cancelled_at.strftime("%d %B %Y at %H:%M") }}</div>
+        {% else %}
+        <div style="color:#f59e0b;font-size:12px;margin-top:6px;">Awaiting receipt</div>
+        {% endif %}
+    </div>
+</div>
+
+{% if transfer.note %}
+<div class="card" style="margin-bottom:20px;">
+    <div style="color:var(--muted);font-size:12px;margin-bottom:6px;">NOTE</div>
+    <div>{{ transfer.note }}</div>
+</div>
+{% endif %}
+
+<!-- Items -->
+<div class="card">
+    <div style="font-weight:700;margin-bottom:12px;">📦 Items</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Category</th>
+                <th style="text-align:right;">Quantity</th>
+                <th style="text-align:right;">Unit</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for line in transfer.items %}
+            <tr>
+                <td style="font-weight:600;">{{ line.item.name }}</td>
+                <td><span class="badge b-blue">{{ line.item.category or "—" }}</span></td>
+                <td style="text-align:right;font-weight:700;font-size:16px;">{{ line.quantity }}</td>
+                <td style="text-align:right;color:var(--muted);">{{ line.item.unit }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div style="margin-top:16px;">
+    <a href="/transfers" class="btnGhost">← Back to Transfers</a>
+</div>
+
+{% endblock %}

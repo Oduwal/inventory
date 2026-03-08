@@ -29,6 +29,8 @@ class Branch(Base):
     deliveries: Mapped[list["Delivery"]] = relationship(back_populates="branch")
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="branch")
     cash_entries: Mapped[list["CashEntry"]] = relationship(back_populates="branch")
+    transfers_out: Mapped[list["StockTransfer"]] = relationship(back_populates="from_branch", foreign_keys="StockTransfer.from_branch_id")
+    transfers_in: Mapped[list["StockTransfer"]] = relationship(back_populates="to_branch", foreign_keys="StockTransfer.to_branch_id")
 
 
 class User(Base):
@@ -206,4 +208,58 @@ class CashEntry(Base):
             name="ck_cash_kind",
         ),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
+    )
+
+class StockTransfer(Base):
+    __tablename__ = "stock_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    from_branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    to_branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
+
+    # PENDING → RECEIVED or CANCELLED
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
+
+    note: Mapped[str | None] = mapped_column(String(400), nullable=True)
+
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    received_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancelled_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    from_branch: Mapped["Branch"] = relationship(back_populates="transfers_out", foreign_keys=[from_branch_id])
+    to_branch: Mapped["Branch"] = relationship(back_populates="transfers_in", foreign_keys=[to_branch_id])
+    created_by: Mapped["User"] = relationship(foreign_keys=[created_by_id])
+    received_by: Mapped["User | None"] = relationship(foreign_keys=[received_by_id])
+    cancelled_by: Mapped["User | None"] = relationship(foreign_keys=[cancelled_by_id])
+
+    items: Mapped[list["StockTransferItem"]] = relationship(
+        back_populates="transfer", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING','RECEIVED','CANCELLED')",
+            name="ck_transfer_status",
+        ),
+    )
+
+
+class StockTransferItem(Base):
+    __tablename__ = "stock_transfer_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transfer_id: Mapped[int] = mapped_column(ForeignKey("stock_transfers.id"), nullable=False)
+    item_id: Mapped[int] = mapped_column(ForeignKey("items.id"), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    transfer: Mapped["StockTransfer"] = relationship(back_populates="items")
+    item: Mapped["Item"] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_transfer_item_qty_positive"),
     )
