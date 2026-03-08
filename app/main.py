@@ -45,6 +45,21 @@ static_dir = os.path.join(BASE_DIR, "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+@app.get("/sw.js", response_class=PlainTextResponse)
+def service_worker_root():
+    sw_path = os.path.join(BASE_DIR, "static", "sw.js")
+    try:
+        content = open(sw_path).read()
+    except FileNotFoundError:
+        content = ""
+    return PlainTextResponse(
+        content,
+        headers={
+            "Content-Type": "application/javascript",
+            "Service-Worker-Allowed": "/",
+        }
+    )
+
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
 HTTPS_ONLY = os.getenv("HTTPS_ONLY", "1") not in {"0", "false", "False", "no", "NO"}
 
