@@ -2127,23 +2127,6 @@ self.addEventListener("fetch", e => {
 """
     return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
 
-
-@app.get("/debug-login")
-def debug_login(username: str, password: str, db: Session = Depends(get_db)):
-    from sqlalchemy import select
-    u = db.scalar(select(User).where(User.username == username.strip()))
-    if not u:
-        return {"error": "user not found", "username": username}
-    stored = u.password_hash or ""
-    starts_with = stored[:20]
-    verified = verify_password(password, stored)
-    return {
-        "user_found": True,
-        "role": u.role,
-        "hash_prefix": starts_with,
-        "verified": verified,
-    }
-
 # ═══════════════════════════════════════════════════
 #  STOCK TRANSFERS
 # ═══════════════════════════════════════════════════
