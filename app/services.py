@@ -379,3 +379,180 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
         float(total_operating),
         float(total_office_expenses),
     )
+
+
+# ─────────────────────────────────────────────
+#  Supervisor analytics helpers
+# ─────────────────────────────────────────────
+
+from .models import Branch, User  # noqa: E402  (already imported via models above)
+from sqlalchemy import case as sa_case
+
+
+def supervisor_date_range(preset: str | None, start_str: str | None, end_str: str | None):
+    """Return (start_dt, end_dt) datetimes or (None, None) for all-time."""
+    from datetime import date as _date
+    today = datetime.utcnow().date()
+
+    if preset == "today":
+        s = datetime.combine(today, datetime.min.time())
+        return s, s + timedelta(days=1)
+    if preset == "yesterday":
+        s = datetime.combine(today - timedelta(days=1), datetime.min.time())
+        return s, s + timedelta(days=1)
+    if preset == "7d":
+        return datetime.combine(today - timedelta(days=6), datetime.min.time()), datetime.combine(today + timedelta(days=1), datetime.min.time())
+    if preset == "30d":
+        return datetime.combine(today - timedelta(days=29), datetime.min.time()), datetime.combine(today + timedelta(days=1), datetime.min.time())
+    if preset == "this_month":
+        s = datetime.combine(today.replace(day=1), datetime.min.time())
+        return s, datetime.combine(today + timedelta(days=1), datetime.min.time())
+
+    # custom range
+    try:
+        s = datetime.combine(_date.fromisoformat(start_str), datetime.min.time()) if start_str else None
+        e = datetime.combine(_date.fromisoformat(end_str) + timedelta(days=1), datetime.min.time()) if end_str else None
+        return s, e
+    except Exception:
+        return None, None
+
+
+def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime | None):
+    """Per-branch delivery & cash summary for supervisor dashboard."""
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+    rows = []
+
+    for branch in branches:
+        def _delivery_q(extra=None):
+            q = select(func.count(Delivery.id)).where(Delivery.branch_id == branch.id)
+            if extra is not None:
+                q = q.where(extra)
+            if start:
+                q = q.where(Delivery.created_at >= start)
+            if end:
+                q = q.where(Delivery.created_at < end)
+            return q
+
+        total_deliveries = int(db.scalar(_delivery_q()) or 0)
+        delivered_count  = int(db.scalar(_delivery_q(Delivery.status == "DELIVERED")) or 0)
+        pending_count    = int(db.scalar(_delivery_q(Delivery.status == "PENDING")) or 0)
+        out_count        = int(db.scalar(_delivery_q(Delivery.status == "OUT_FOR_DELIVERY")) or 0)
+        failed_count     = int(db.scalar(_delivery_q(Delivery.status == "FAILED")) or 0)
+
+        # Collections from delivered waybills
+        col_q = (
+            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+            .select_from(Delivery)
+            .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+            .where(Delivery.branch_id == branch.id)
+            .where(Delivery.status == "DELIVERED")
+        )
+        if start:
+            col_q = col_q.where(Delivery.created_at >= start)
+        if end:
+            col_q = col_q.where(Delivery.created_at < end)
+        collections = float(db.scalar(col_q) or 0)
+
+        def _cash_q(kind):
+            q = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
+                CashEntry.branch_id == branch.id, CashEntry.kind == kind
+            )
+            if start:
+                q = q.where(CashEntry.created_at >= start)
+            if end:
+                q = q.where(CashEntry.created_at < end)
+            return q
+
+        extra_col       = float(db.scalar(_cash_q("COLLECTION")) or 0)
+        agent_expenses  = float(db.scalar(_cash_q("EXPENSE")) or 0)
+        office_expenses = float(db.scalar(_cash_q("OFFICE_EXPENSE")) or 0)
+        operating_cash  = float(db.scalar(_cash_q("OPERATING_CASH")) or 0)
+        returned_op     = float(db.scalar(_cash_q("RETURN_OPERATING_CASH")) or 0)
+
+        total_collections  = collections + extra_col
+        operating_balance  = operating_cash - agent_expenses - returned_op
+        remittance         = total_collections - office_expenses
+
+        rows.append({
+            "branch": branch,
+            "total_deliveries": total_deliveries,
+            "delivered_count":  delivered_count,
+            "pending_count":    pending_count,
+            "out_for_delivery_count": out_count,
+            "failed_count":     failed_count,
+            "collections":      total_collections,
+            "agent_expenses":   agent_expenses,
+            "office_expenses":  office_expenses,
+            "operating_cash":   operating_cash,
+            "returned_operating_cash": returned_op,
+            "operating_balance": operating_balance,
+            "remittance":       remittance,
+        })
+
+    return branches, rows
+
+
+def supervisor_top_items(db: Session, start: datetime | None, end: datetime | None, limit: int = 8):
+    """Top items by OUT quantity across all branches in the date range."""
+    q = (
+        select(
+            Item.name.label("name"),
+            func.coalesce(Item.category, "Uncategorised").label("category"),
+            func.sum(Transaction.quantity).label("qty"),
+        )
+        .select_from(Transaction)
+        .join(Item, Item.id == Transaction.item_id)
+        .where(Transaction.type == "OUT")
+        .group_by(Item.id, Item.name, Item.category)
+        .order_by(func.sum(Transaction.quantity).desc())
+        .limit(limit)
+    )
+    if start:
+        q = q.where(Transaction.created_at >= start)
+    if end:
+        q = q.where(Transaction.created_at < end)
+    return db.execute(q).all()
+
+
+def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | None, limit: int = 8):
+    """Top agents by number of DELIVERED deliveries."""
+    q = (
+        select(
+            User.username.label("username"),
+            func.coalesce(User.full_name, User.username).label("full_name"),
+            Branch.name.label("branch_name"),
+            func.count(Delivery.id).label("delivered"),
+            func.coalesce(
+                func.sum(DeliveryItem.line_amount), 0
+            ).label("collections"),
+        )
+        .select_from(Delivery)
+        .join(User, User.id == Delivery.agent_id)
+        .join(Branch, Branch.id == Delivery.branch_id)
+        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+        .where(Delivery.status == "DELIVERED")
+        .group_by(User.id, User.username, User.full_name, Branch.name)
+        .order_by(func.count(Delivery.id).desc())
+        .limit(limit)
+    )
+    if start:
+        q = q.where(Delivery.created_at >= start)
+    if end:
+        q = q.where(Delivery.created_at < end)
+    return db.execute(q).all()
+
+
+def supervisor_daily_deliveries(db: Session, start: datetime | None, end: datetime | None):
+    """Daily delivered count across all branches — for the chart."""
+    day_col = func.date(Delivery.created_at).label("day")
+    q = (
+        select(day_col, func.count(Delivery.id).label("cnt"))
+        .where(Delivery.status == "DELIVERED")
+        .group_by(day_col)
+        .order_by(day_col.asc())
+    )
+    if start:
+        q = q.where(Delivery.created_at >= start)
+    if end:
+        q = q.where(Delivery.created_at < end)
+    return db.execute(q).all()

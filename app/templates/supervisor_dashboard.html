@@ -1,81 +1,232 @@
 {% extends "base.html" %}
-{% block title %}Supervisor Dashboard{% endblock %}
-{% block page_title %}Supervisor Dashboard{% endblock %}
-{% block page_subtitle %}Analytics across all branches.{% endblock %}
-{% set active = "supervisor" %}
+{% block title %}Supervisor Analytics{% endblock %}
+{% block page_title %}Supervisor Analytics{% endblock %}
+{% block page_subtitle %}Cross-branch performance overview{% endblock %}
+
+{% block top_right %}
+<form method="get" action="/supervisor" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+  <div>
+    <label>Quick filter</label>
+    <select name="preset" onchange="this.form.submit()" style="width:auto;padding:8px 12px;">
+      <option value="" {% if not preset %}selected{% endif %}>All time</option>
+      <option value="today"      {% if preset=='today'      %}selected{% endif %}>Today</option>
+      <option value="yesterday"  {% if preset=='yesterday'  %}selected{% endif %}>Yesterday</option>
+      <option value="7d"         {% if preset=='7d'         %}selected{% endif %}>Last 7 days</option>
+      <option value="30d"        {% if preset=='30d'        %}selected{% endif %}>Last 30 days</option>
+      <option value="this_month" {% if preset=='this_month' %}selected{% endif %}>This month</option>
+    </select>
+  </div>
+  <div>
+    <label>From</label>
+    <input type="date" name="start_date" value="{{ start_date }}" style="width:auto;padding:8px 12px;">
+  </div>
+  <div>
+    <label>To</label>
+    <input type="date" name="end_date" value="{{ end_date }}" style="width:auto;padding:8px 12px;">
+  </div>
+  <button class="btnPrimary" type="submit">Apply</button>
+</form>
+{% endblock %}
 
 {% block content %}
 
-<div class="card">
-  <div class="badge b-blue">OVERALL TOTALS</div>
+<!-- ── Grand KPI strip ─────────────────────────────── -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
 
-  <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-    <span class="badge b-purple">Branches: {{ rows|length }}</span>
-    <span class="badge b-blue">Deliveries: {{ grand_total_deliveries }}</span>
-    <span class="badge b-green">Delivered: {{ grand_delivered }}</span>
-    <span class="badge b-yellow">Pending: {{ grand_pending }}</span>
-    <span class="badge b-blue">Out for Delivery: {{ grand_out_for_delivery }}</span>
-    <span class="badge b-green">Collections: {{ '%.2f'|format(grand_collections) }}</span>
-    <span class="badge b-red">Agent Expenses: {{ '%.2f'|format(grand_agent_expenses) }}</span>
-    <span class="badge b-red">Office Expenses: {{ '%.2f'|format(grand_office_expenses) }}</span>
-    <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(grand_operating_cash) }}</span>
-    <span class="badge b-yellow">Returned Operating: {{ '%.2f'|format(grand_returned_operating_cash) }}</span>
-    <span class="badge b-green">Operating Balance: {{ '%.2f'|format(grand_operating_balance) }}</span>
-    <span class="badge b-green">Remittance: {{ '%.2f'|format(grand_remittance) }}</span>
+  {% set kpis = [
+    ("Total Orders",   grand_total_deliveries, "#4f7cff"),
+    ("Delivered",      grand_delivered,         "#22c55e"),
+    ("Pending",        grand_pending,           "#f59e0b"),
+    ("Out for Delivery", grand_out_for_delivery,"#8b5cf6"),
+    ("Failed",         grand_failed,            "#ef4444"),
+  ] %}
+  {% for label, val, color in kpis %}
+  <div class="card" style="text-align:center;border-top:3px solid {{ color }};">
+    <div style="font-size:26px;font-weight:800;color:{{ color }};">{{ val }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">{{ label }}</div>
   </div>
+  {% endfor %}
+
+  <div class="card" style="text-align:center;border-top:3px solid #22c55e;">
+    <div style="font-size:22px;font-weight:800;color:#22c55e;">₦{{ "{:,.0f}".format(grand_collections) }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Total Collections</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;">
+    <div style="font-size:22px;font-weight:800;color:#4f7cff;">₦{{ "{:,.0f}".format(grand_remittance) }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Net Remittance</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #ef4444;">
+    <div style="font-size:22px;font-weight:800;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses + grand_office_expenses) }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Total Expenses</div>
+  </div>
+
 </div>
 
-<div class="card" style="margin-top:14px;">
-  <div class="badge b-purple">BRANCH ANALYTICS</div>
+<!-- ── Delivery trend chart + Top items ───────────── -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
 
-  <div style="margin-top:12px; overflow:auto;">
+  <!-- Chart -->
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:12px;">📈 Deliveries Over Time</div>
+    {% if chart_labels %}
+    <canvas id="deliveryChart" height="200"></canvas>
+    {% else %}
+    <div style="color:var(--muted);padding:40px 0;text-align:center;">No delivery data in this period.</div>
+    {% endif %}
+  </div>
+
+  <!-- Top items -->
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:12px;">🏆 Top Items by Volume</div>
+    {% if top_items %}
     <table>
-      <thead>
-        <tr>
-          <th>Branch</th>
-          <th>Total Deliveries</th>
-          <th>Delivered</th>
-          <th>Pending</th>
-          <th>Out for Delivery</th>
-          <th>Collections</th>
-          <th>Agent Expenses</th>
-          <th>Office Expenses</th>
-          <th>Operating Cash</th>
-          <th>Returned Operating</th>
-          <th>Operating Balance</th>
-          <th>Remittance</th>
-          <th>Open</th>
-        </tr>
-      </thead>
+      <thead><tr><th>#</th><th>Item</th><th>Category</th><th style="text-align:right;">Units Out</th></tr></thead>
       <tbody>
-        {% if rows and rows|length > 0 %}
-          {% for r in rows %}
-          <tr>
-            <td><strong>{{ r.branch.name }}</strong></td>
-            <td>{{ r.total_deliveries }}</td>
-            <td>{{ r.delivered_count }}</td>
-            <td>{{ r.pending_count }}</td>
-            <td>{{ r.out_for_delivery_count }}</td>
-            <td>{{ '%.2f'|format(r.collections) }}</td>
-            <td>{{ '%.2f'|format(r.agent_expenses) }}</td>
-            <td>{{ '%.2f'|format(r.office_expenses) }}</td>
-            <td>{{ '%.2f'|format(r.operating_cash) }}</td>
-            <td>{{ '%.2f'|format(r.returned_operating_cash) }}</td>
-            <td>{{ '%.2f'|format(r.operating_balance) }}</td>
-            <td>{{ '%.2f'|format(r.remittance) }}</td>
-            <td>
-              <a class="btnPrimary" href="/?branch_id={{ r.branch.id }}">View Branch</a>
-            </td>
-          </tr>
-          {% endfor %}
-        {% else %}
-          <tr>
-            <td colspan="13" class="muted">No branches found.</td>
-          </tr>
-        {% endif %}
+        {% for i, row in top_items | enumerate %}
+        <tr>
+          <td style="color:var(--muted);">{{ i+1 }}</td>
+          <td>{{ row.name }}</td>
+          <td><span class="badge b-blue">{{ row.category }}</span></td>
+          <td style="text-align:right;font-weight:700;">{{ row.qty }}</td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
+    {% else %}
+    <div style="color:var(--muted);padding:40px 0;text-align:center;">No data in this period.</div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- ── Best agents ─────────────────────────────────── -->
+<div class="card" style="margin-bottom:20px;">
+  <div style="font-weight:700;margin-bottom:12px;">⭐ Best Performing Agents</div>
+  {% if best_agents %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Agent</th>
+        <th>Branch</th>
+        <th style="text-align:right;">Deliveries</th>
+        <th style="text-align:right;">Collections</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i, a in best_agents | enumerate %}
+      <tr>
+        <td>
+          {% if i == 0 %}<span style="font-size:18px;">🥇</span>
+          {% elif i == 1 %}<span style="font-size:18px;">🥈</span>
+          {% elif i == 2 %}<span style="font-size:18px;">🥉</span>
+          {% else %}<span style="color:var(--muted);">{{ i+1 }}</span>
+          {% endif %}
+        </td>
+        <td>
+          <div style="font-weight:700;">{{ a.full_name }}</div>
+          <div style="color:var(--muted);font-size:12px;">@{{ a.username }}</div>
+        </td>
+        <td><span class="badge b-purple">{{ a.branch_name }}</span></td>
+        <td style="text-align:right;font-weight:700;color:#22c55e;">{{ a.delivered }}</td>
+        <td style="text-align:right;font-weight:700;">₦{{ "{:,.0f}".format(a.collections) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="color:var(--muted);padding:30px 0;text-align:center;">No delivery data in this period.</div>
+  {% endif %}
+</div>
+
+<!-- ── Branch breakdown table ─────────────────────── -->
+<div class="card">
+  <div style="font-weight:700;margin-bottom:12px;">🏢 Branch Breakdown</div>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Branch</th>
+        <th style="text-align:right;">Orders</th>
+        <th style="text-align:right;">Delivered</th>
+        <th style="text-align:right;">Pending</th>
+        <th style="text-align:right;">Failed</th>
+        <th style="text-align:right;">Collections</th>
+        <th style="text-align:right;">Agent Exp.</th>
+        <th style="text-align:right;">Office Exp.</th>
+        <th style="text-align:right;">Op. Cash</th>
+        <th style="text-align:right;">Op. Balance</th>
+        <th style="text-align:right;">Remittance</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td style="font-weight:700;">{{ r.branch.name }}</td>
+        <td style="text-align:right;">{{ r.total_deliveries }}</td>
+        <td style="text-align:right;color:#22c55e;">{{ r.delivered_count }}</td>
+        <td style="text-align:right;color:#f59e0b;">{{ r.pending_count }}</td>
+        <td style="text-align:right;color:#ef4444;">{{ r.failed_count }}</td>
+        <td style="text-align:right;">₦{{ "{:,.0f}".format(r.collections) }}</td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.agent_expenses) }}</td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.office_expenses) }}</td>
+        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(r.operating_cash) }}</td>
+        <td style="text-align:right;color:{% if r.operating_balance >= 0 %}#22c55e{% else %}#ef4444{% endif %};">
+          ₦{{ "{:,.0f}".format(r.operating_balance) }}
+        </td>
+        <td style="text-align:right;font-weight:700;color:#22c55e;">₦{{ "{:,.0f}".format(r.remittance) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr style="border-top:2px solid rgba(255,255,255,.15);font-weight:800;">
+        <td>TOTAL</td>
+        <td style="text-align:right;">{{ grand_total_deliveries }}</td>
+        <td style="text-align:right;color:#22c55e;">{{ grand_delivered }}</td>
+        <td style="text-align:right;color:#f59e0b;">{{ grand_pending }}</td>
+        <td style="text-align:right;color:#ef4444;">{{ grand_failed }}</td>
+        <td style="text-align:right;">₦{{ "{:,.0f}".format(grand_collections) }}</td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses) }}</td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_office_expenses) }}</td>
+        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(grand_operating_cash) }}</td>
+        <td style="text-align:right;">₦{{ "{:,.0f}".format(grand_operating_balance) }}</td>
+        <td style="text-align:right;color:#22c55e;">₦{{ "{:,.0f}".format(grand_remittance) }}</td>
+      </tr>
+    </tfoot>
+  </table>
   </div>
 </div>
+
+<!-- ── Chart.js ───────────────────────────────────── -->
+{% if chart_labels %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const ctx = document.getElementById('deliveryChart').getContext('2d');
+new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: {{ chart_labels | tojson }},
+    datasets: [{
+      label: 'Deliveries',
+      data: {{ chart_data | tojson }},
+      borderColor: '#4f7cff',
+      backgroundColor: 'rgba(79,124,255,0.12)',
+      borderWidth: 2,
+      pointBackgroundColor: '#4f7cff',
+      tension: 0.4,
+      fill: true,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#a7b4d6', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+      y: { ticks: { color: '#a7b4d6' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+    }
+  }
+});
+</script>
+{% endif %}
 
 {% endblock %}

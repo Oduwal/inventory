@@ -29,6 +29,11 @@ from .services import (
     create_out_transactions_for_delivery_if_needed,
     cash_range_from_preset,
     get_cash_summary,
+    supervisor_date_range,
+    supervisor_branch_stats,
+    supervisor_top_items,
+    supervisor_best_agents,
+    supervisor_daily_deliveries,
 )
 
 app = FastAPI()
@@ -621,7 +626,13 @@ def home(request: Request, db: Session = Depends(get_db)):
     )
 
 @app.get("/supervisor", response_class=HTMLResponse)
-def supervisor_dashboard(request: Request, db: Session = Depends(get_db)):
+def supervisor_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+    preset: str = "",
+    start_date: str = "",
+    end_date: str = "",
+):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -630,127 +641,32 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db)):
     if not is_supervisor(user):
         return HTMLResponse("Forbidden", status_code=403)
 
-    branches = db.execute(
-        select(Branch).order_by(Branch.name.asc())
-    ).scalars().all()
+    preset = preset.strip() or None
+    start_date = start_date.strip() or None
+    end_date = end_date.strip() or None
 
-    rows = []
+    start_dt, end_dt = supervisor_date_range(preset, start_date, end_date)
 
-    for branch in branches:
-        total_deliveries = int(
-            db.scalar(
-                select(func.count(Delivery.id))
-                .where(Delivery.branch_id == branch.id)
-            ) or 0
-        )
+    branches, rows = supervisor_branch_stats(db, start_dt, end_dt)
+    top_items     = supervisor_top_items(db, start_dt, end_dt)
+    best_agents   = supervisor_best_agents(db, start_dt, end_dt)
+    daily_chart   = supervisor_daily_deliveries(db, start_dt, end_dt)
 
-        delivered_count = int(
-            db.scalar(
-                select(func.count(Delivery.id))
-                .where(Delivery.branch_id == branch.id)
-                .where(Delivery.status == "DELIVERED")
-            ) or 0
-        )
-
-        pending_count = int(
-            db.scalar(
-                select(func.count(Delivery.id))
-                .where(Delivery.branch_id == branch.id)
-                .where(Delivery.status == "PENDING")
-            ) or 0
-        )
-
-        out_for_delivery_count = int(
-            db.scalar(
-                select(func.count(Delivery.id))
-                .where(Delivery.branch_id == branch.id)
-                .where(Delivery.status == "OUT_FOR_DELIVERY")
-            ) or 0
-        )
-
-        collections = float(
-            db.scalar(
-                select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
-                .select_from(Delivery)
-                .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
-                .where(Delivery.branch_id == branch.id)
-                .where(Delivery.status == "DELIVERED")
-            ) or 0
-        )
-
-        extra_collections = float(
-            db.scalar(
-                select(func.coalesce(func.sum(CashEntry.amount), 0))
-                .where(CashEntry.branch_id == branch.id)
-                .where(CashEntry.kind == "COLLECTION")
-            ) or 0
-        )
-
-        total_collections = collections + extra_collections
-
-        agent_expenses = float(
-            db.scalar(
-                select(func.coalesce(func.sum(CashEntry.amount), 0))
-                .where(CashEntry.branch_id == branch.id)
-                .where(CashEntry.kind == "EXPENSE")
-            ) or 0
-        )
-
-        office_expenses = float(
-            db.scalar(
-                select(func.coalesce(func.sum(CashEntry.amount), 0))
-                .where(CashEntry.branch_id == branch.id)
-                .where(CashEntry.kind == "OFFICE_EXPENSE")
-            ) or 0
-        )
-
-        operating_cash = float(
-            db.scalar(
-                select(func.coalesce(func.sum(CashEntry.amount), 0))
-                .where(CashEntry.branch_id == branch.id)
-                .where(CashEntry.kind == "OPERATING_CASH")
-            ) or 0
-        )
-
-        returned_operating_cash = float(
-            db.scalar(
-                select(func.coalesce(func.sum(CashEntry.amount), 0))
-                .where(CashEntry.branch_id == branch.id)
-                .where(CashEntry.kind == "RETURN_OPERATING_CASH")
-            ) or 0
-        )
-
-        operating_balance = operating_cash - agent_expenses - returned_operating_cash
-        remittance = total_collections - office_expenses
-
-        rows.append(
-            {
-                "branch": branch,
-                "total_deliveries": total_deliveries,
-                "delivered_count": delivered_count,
-                "pending_count": pending_count,
-                "out_for_delivery_count": out_for_delivery_count,
-                "collections": total_collections,
-                "agent_expenses": agent_expenses,
-                "office_expenses": office_expenses,
-                "operating_cash": operating_cash,
-                "returned_operating_cash": returned_operating_cash,
-                "operating_balance": operating_balance,
-                "remittance": remittance,
-            }
-        )
-
-    grand_total_deliveries = sum(r["total_deliveries"] for r in rows)
-    grand_delivered = sum(r["delivered_count"] for r in rows)
-    grand_pending = sum(r["pending_count"] for r in rows)
-    grand_out_for_delivery = sum(r["out_for_delivery_count"] for r in rows)
-    grand_collections = sum(r["collections"] for r in rows)
-    grand_agent_expenses = sum(r["agent_expenses"] for r in rows)
-    grand_office_expenses = sum(r["office_expenses"] for r in rows)
-    grand_operating_cash = sum(r["operating_cash"] for r in rows)
+    grand_total_deliveries       = sum(r["total_deliveries"] for r in rows)
+    grand_delivered              = sum(r["delivered_count"] for r in rows)
+    grand_pending                = sum(r["pending_count"] for r in rows)
+    grand_out_for_delivery       = sum(r["out_for_delivery_count"] for r in rows)
+    grand_failed                 = sum(r["failed_count"] for r in rows)
+    grand_collections            = sum(r["collections"] for r in rows)
+    grand_agent_expenses         = sum(r["agent_expenses"] for r in rows)
+    grand_office_expenses        = sum(r["office_expenses"] for r in rows)
+    grand_operating_cash         = sum(r["operating_cash"] for r in rows)
     grand_returned_operating_cash = sum(r["returned_operating_cash"] for r in rows)
-    grand_operating_balance = sum(r["operating_balance"] for r in rows)
-    grand_remittance = sum(r["remittance"] for r in rows)
+    grand_operating_balance      = sum(r["operating_balance"] for r in rows)
+    grand_remittance             = sum(r["remittance"] for r in rows)
+
+    chart_labels = [str(r.day) for r in daily_chart]
+    chart_data   = [int(r.cnt) for r in daily_chart]
 
     return templates.TemplateResponse(
         "supervisor_dashboard.html",
@@ -758,10 +674,15 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db)):
             "request": request,
             "user": user,
             "rows": rows,
+            "top_items": top_items,
+            "best_agents": best_agents,
+            "chart_labels": chart_labels,
+            "chart_data": chart_data,
             "grand_total_deliveries": grand_total_deliveries,
             "grand_delivered": grand_delivered,
             "grand_pending": grand_pending,
             "grand_out_for_delivery": grand_out_for_delivery,
+            "grand_failed": grand_failed,
             "grand_collections": grand_collections,
             "grand_agent_expenses": grand_agent_expenses,
             "grand_office_expenses": grand_office_expenses,
@@ -772,6 +693,9 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db)):
             "branches": branches,
             "selected_branch_id": None,
             "active": "supervisor",
+            "preset": preset or "",
+            "start_date": start_date or "",
+            "end_date": end_date or "",
         },
     )
 @app.get("/branches", response_class=HTMLResponse)
