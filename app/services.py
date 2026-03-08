@@ -471,7 +471,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
 
         total_collections  = collections + extra_col
         operating_balance  = operating_cash - agent_expenses - returned_op
-        remittance         = total_collections - office_expenses
+        remittance         = total_collections - agent_expenses - office_expenses
 
         rows.append({
             "branch": branch,

@@ -154,8 +154,7 @@
         <th style="text-align:right;">Collections</th>
         <th style="text-align:right;">Agent Exp.</th>
         <th style="text-align:right;">Office Exp.</th>
-        <th style="text-align:right;">Op. Cash</th>
-        <th style="text-align:right;">Op. Balance</th>
+        <th style="text-align:right;">Total Exp.</th>
         <th style="text-align:right;">Remittance</th>
       </tr>
     </thead>
@@ -170,10 +169,7 @@
         <td style="text-align:right;">₦{{ "{:,.0f}".format(r.collections) }}</td>
         <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.agent_expenses) }}</td>
         <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.office_expenses) }}</td>
-        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(r.operating_cash) }}</td>
-        <td style="text-align:right;color:{% if r.operating_balance >= 0 %}#22c55e{% else %}#ef4444{% endif %};">
-          ₦{{ "{:,.0f}".format(r.operating_balance) }}
-        </td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.agent_expenses + r.office_expenses) }}</td>
         <td style="text-align:right;font-weight:700;color:#22c55e;">₦{{ "{:,.0f}".format(r.remittance) }}</td>
       </tr>
       {% endfor %}
@@ -188,8 +184,7 @@
         <td style="text-align:right;">₦{{ "{:,.0f}".format(grand_collections) }}</td>
         <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses) }}</td>
         <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_office_expenses) }}</td>
-        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(grand_operating_cash) }}</td>
-        <td style="text-align:right;">₦{{ "{:,.0f}".format(grand_operating_balance) }}</td>
+        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses + grand_office_expenses) }}</td>
         <td style="text-align:right;color:#22c55e;">₦{{ "{:,.0f}".format(grand_remittance) }}</td>
       </tr>
     </tfoot>
