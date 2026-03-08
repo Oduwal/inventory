@@ -1,4 +1,4 @@
-﻿# app/main.py
+# app/main.py
 import os
 from datetime import datetime, date, timedelta
 
@@ -616,7 +616,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     for _item in stale_items:
         _stock = db.scalar(
             select(func.coalesce(
-                func.sum(case((Transaction.tx_type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0
+                func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0
             )).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id)
         ) or 0
         if _stock <= 0:
@@ -1327,7 +1327,7 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
     for item in all_items:
         stock = db.scalar(
             select(func.coalesce(
-                func.sum(case((Transaction.tx_type == "IN", Transaction.quantity), else_=-Transaction.quantity)),
+                func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)),
                 0
             )).where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id)
         ) or 0
@@ -2716,3 +2716,4 @@ def transfer_cancel(transfer_id: int, request: Request, db: Session = Depends(ge
     transfer.cancelled_at = datetime.utcnow()
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
+
