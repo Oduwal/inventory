@@ -1,4 +1,4 @@
-const CACHE = "invkeeper-v1";
+const CACHE = "invkeeper-v2";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 
 self.addEventListener("install", e => {
