@@ -2072,15 +2072,26 @@ def reset_system(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/manifest.json")
 def pwa_manifest():
-    manifest_path = os.path.join(BASE_DIR, "static", "manifest.json")
-    try:
-        content = open(manifest_path).read()
-    except FileNotFoundError:
-        content = "{}"
-    return PlainTextResponse(
-        content,
-        headers={"Content-Type": "application/manifest+json; charset=utf-8"}
-    )
+    import json
+    manifest = {
+        "name": "Inventory Keeper",
+        "short_name": "InvKeeper",
+        "description": "Logistics & stock management",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0b1220",
+        "theme_color": "#4f7cff",
+        "orientation": "portrait-primary",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+        "shortcuts": [
+            {"name": "New Order",   "url": "/deliveries/new", "description": "Create a new delivery order"},
+            {"name": "Deliveries",  "url": "/deliveries",     "description": "View all deliveries"},
+        ],
+    }
+    return JSONResponse(content=manifest, headers={"Content-Type": "application/manifest+json"})
 
 
 @app.get("/sw.js", response_class=PlainTextResponse)
