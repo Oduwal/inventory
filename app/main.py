@@ -284,6 +284,10 @@ def ensure_schema() -> None:
 
         # delivery_items.line_amount
         _ddl(conn, "ALTER TABLE delivery_items ADD COLUMN IF NOT EXISTS line_amount NUMERIC DEFAULT 0")
+        # delivery.delivery_date
+        _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivery_date TIMESTAMP")
+        # backfill existing rows
+        _ddl(conn, "UPDATE deliveries SET delivery_date = created_at WHERE delivery_date IS NULL")
 
         # indexes
         _ddl(conn, """
@@ -604,6 +608,23 @@ def home(request: Request, db: Session = Depends(get_db)):
     low_rows = [(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id][:5]
     low_stock_count = len([(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id])
 
+    # Stale stock count (items with stock > 0 not touched in 7 days)
+    from datetime import timedelta
+    stale_cutoff = datetime.utcnow() - timedelta(days=7)
+    stale_items = db.execute(select(Item).where(Item.branch_id == branch_id)).scalars().all()
+    stale_count = 0
+    for _item in stale_items:
+        _stock = db.scalar(
+            select(func.coalesce(
+                func.sum(case((Transaction.tx_type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0
+            )).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id)
+        ) or 0
+        if _stock <= 0:
+            continue
+        _last = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id))
+        if _last is None or _last < stale_cutoff:
+            stale_count += 1
+
     recent_transactions = db.scalars(
         select(Transaction)
         .where(Transaction.branch_id == branch_id)
@@ -660,6 +681,7 @@ def home(request: Request, db: Session = Depends(get_db)):
             "selected_branch_id": branch_id,
             "items_count": items_count,
             "low_stock_count": low_stock_count,
+            "stale_count": stale_count,
             "recent_transactions": recent_transactions,
             "total_stock": total_stock,
             "inventory_value": inventory_value,
@@ -1283,6 +1305,62 @@ def tx_create(
 
 # ---------------- Low stock ----------------
 
+@app.get("/stale-stock", response_class=HTMLResponse)
+def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branch_id = get_selected_branch_id(request, user)
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    # Get all items with stock > 0 in this branch
+    all_items = db.execute(
+        select(Item).where(Item.branch_id == branch_id).order_by(Item.name)
+    ).scalars().all()
+
+    stale_rows = []
+    for item in all_items:
+        stock = db.scalar(
+            select(func.coalesce(
+                func.sum(case((Transaction.tx_type == "IN", Transaction.quantity), else_=-Transaction.quantity)),
+                0
+            )).where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id)
+        ) or 0
+
+        if stock <= 0:
+            continue
+
+        last_tx = db.scalar(
+            select(func.max(Transaction.created_at))
+            .where(Transaction.item_id == item.id)
+            .where(Transaction.branch_id == branch_id)
+        )
+
+        if last_tx is None or last_tx < cutoff:
+            days_since = (datetime.utcnow() - last_tx).days if last_tx else 9999
+            stale_rows.append({
+                "item": item,
+                "stock": int(stock),
+                "last_tx": last_tx,
+                "days_since": days_since,
+            })
+
+    stale_rows.sort(key=lambda r: r["days_since"], reverse=True)
+
+    return templates.TemplateResponse("stale_stock.html", {
+        "request": request,
+        "user": user,
+        "rows": stale_rows,
+        "days": days,
+        "active": "stale",
+    })
+
+
 @app.get("/low-stock", response_class=HTMLResponse)
 def low_stock(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -1606,6 +1684,7 @@ def delivery_create(
     customer_phone: str = Form(""),
     address: str = Form(""),
     note: str = Form(""),
+    delivery_date: str = Form(""),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
     line_amount: list[float] = Form(default=[]),
@@ -1631,6 +1710,12 @@ def delivery_create(
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
 
+    from datetime import date as _date
+    try:
+        d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.utcnow()
+    except ValueError:
+        d_date = datetime.utcnow()
+
     d = Delivery(
         branch_id=branch_id,
         agent_id=target_agent_id,
@@ -1639,6 +1724,7 @@ def delivery_create(
         address=(address or "").strip() or None,
         note=(note or "").strip() or None,
         status="PENDING",
+        delivery_date=d_date,
     )
     db.add(d)
     db.flush()
@@ -1728,6 +1814,33 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         },
     )
 
+
+
+@app.post("/deliveries/{delivery_id}/date")
+def update_delivery_date(
+    request: Request,
+    delivery_id: int,
+    delivery_date: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    d = db.get(Delivery, delivery_id)
+    require_delivery_access(request, user, d)
+
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+
+    try:
+        d.delivery_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d")
+        db.commit()
+    except ValueError:
+        pass
+
+    return redirect(f"/deliveries/{delivery_id}")
 
 @app.post("/deliveries/{delivery_id}/status")
 def update_delivery_status(
@@ -1946,7 +2059,7 @@ def cash_new(
 # ---------------- Reports (TXT) ----------------
 
 @app.get("/reports", response_class=HTMLResponse)
-def reports_form(request: Request, db: Session = Depends(get_db)):
+def reports_page(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -1960,26 +2073,135 @@ def reports_form(request: Request, db: Session = Depends(get_db)):
         agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all()
 
     today = date.today().isoformat()
+    return templates.TemplateResponse("reports_sales.html", {
+        "request": request,
+        "user": user,
+        "agents": agents,
+        "start_date": today,
+        "end_date": today,
+        "active": "reports",
+    })
 
-    html = [
-        "<html><head><meta charset='utf-8'><title>Reports</title></head><body>",
-        "<h2>Download TXT Report</h2>",
-        "<form method='get' action='/reports/txt'>",
-        f"<label>Start date</label><br><input name='start_date' type='date' value='{today}'><br><br>",
-        f"<label>End date</label><br><input name='end_date' type='date' value='{today}'><br><br>",
+@app.get("/reports/preview")
+def reports_preview(
+    request: Request,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    agent_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    user = user_or
+
+    if not (is_admin(user) or is_agent(user)):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+    d1 = _parse_iso_date(start_date)
+    d2 = _parse_iso_date(end_date)
+    if not d1 and not d2:
+        d1 = d2 = date.today()
+    if d1 and not d2: d2 = d1
+    if d2 and not d1: d1 = d2
+
+    start_dt = datetime.combine(d1, datetime.min.time())
+    end_dt   = datetime.combine(d2, datetime.max.time())
+
+    target_agent_id = None
+    if is_agent(user):
+        target_agent_id = int(user.id)
+    elif is_admin(user) and (agent_id or "").isdigit():
+        target_agent_id = int(agent_id)
+
+    filters = [
+        Delivery.delivery_date >= start_dt,
+        Delivery.delivery_date <= end_dt,
+        Delivery.status == "DELIVERED",
     ]
+    if target_agent_id:
+        filters.append(Delivery.agent_id == target_agent_id)
 
-    if is_admin(user):
-        html.append("<label>Agent (optional)</label><br><select name='agent_id'><option value=''>All agents</option>")
-        for a in agents:
-            html.append(f"<option value='{a.id}'>{a.username}</option>")
-        html.append("</select><br><br>")
+    deliveries = db.execute(
+        select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())
+    ).scalars().all()
 
-    html.append("<button type='submit'>Download TXT</button></form>")
-    html.append("<p>Waybills are counted inside Office Expenses when the note contains the word 'waybill'.</p>")
-    html.append("</body></html>")
+    delivery_ids = [d.id for d in deliveries]
+    items_by_delivery: dict[int, list] = {}
+    if delivery_ids:
+        rows = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.line_amount, Item.selling_price)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+        ).all()
+        for did, name, qty, line_amt, selling_price in rows:
+            q = float(qty or 0)
+            la = float(line_amt or 0)
+            sp = float(selling_price or 0)
+            items_by_delivery.setdefault(int(did), []).append({"name": str(name), "qty": q, "amount": la if la > 0 else q * sp})
 
-    return HTMLResponse("".join(html))
+    agent_exp_rows = db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+        .group_by(CashEntry.agent_id)
+    ).all()
+    agent_exp_map = {int(aid): float(t) for aid, t in agent_exp_rows}
+
+    office_total = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+    ) or 0)
+
+    waybill_total = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+        .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
+    ) or 0)
+
+    agent_ids = list(agent_exp_map.keys())
+    uname = {}
+    if agent_ids:
+        users = db.execute(select(User).where(User.id.in_(agent_ids))).scalars().all()
+        uname = {int(u.id): (u.full_name or u.username) for u in users}
+
+    delivery_rows = []
+    grand_total = 0.0
+    for idx, d in enumerate(deliveries, 1):
+        d_items = items_by_delivery.get(int(d.id), [])
+        total = sum(i["amount"] for i in d_items)
+        grand_total += total
+        delivery_rows.append({
+            "idx": idx,
+            "customer": d.customer_name,
+            "date": (d.delivery_date or d.created_at).strftime("%d %b %Y"),
+            "items": d_items,
+            "total": total,
+        })
+
+    agent_expenses = [{"name": uname.get(aid, f"Agent {aid}"), "amount": amt} for aid, amt in agent_exp_map.items()]
+    total_agent_exp = sum(a["amount"] for a in agent_expenses)
+    total_expenses = total_agent_exp + office_total
+    title = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
+
+    return JSONResponse({
+        "title": title,
+        "delivery_count": len(deliveries),
+        "deliveries": delivery_rows,
+        "grand_total": grand_total,
+        "agent_expenses": agent_expenses,
+        "total_agent_expenses": total_agent_exp,
+        "waybill_total": waybill_total,
+        "other_office_expenses": office_total - waybill_total,
+        "total_office_expenses": office_total,
+        "total_expenses": total_expenses,
+        "remittance": grand_total - total_expenses,
+    })
 
 
 @app.get("/reports/txt", response_class=PlainTextResponse)
@@ -2220,6 +2442,23 @@ self.addEventListener("fetch", e => {
 });
 """
     return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
+
+
+@app.get("/debug-login")
+def debug_login(username: str, password: str, db: Session = Depends(get_db)):
+    from sqlalchemy import select
+    u = db.scalar(select(User).where(User.username == username.strip()))
+    if not u:
+        return {"error": "user not found", "username": username}
+    stored = u.password_hash or ""
+    starts_with = stored[:20]
+    verified = verify_password(password, stored)
+    return {
+        "user_found": True,
+        "role": u.role,
+        "hash_prefix": starts_with,
+        "verified": verified,
+    }
 
 # ═══════════════════════════════════════════════════
 #  STOCK TRANSFERS

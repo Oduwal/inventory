@@ -108,6 +108,11 @@
                 <label>Note</label>
                 <input name="note" placeholder="Optional instructions" />
             </div>
+
+            <div>
+                <label>Delivery Date</label>
+                <input name="delivery_date" type="date" value="{{ today }}" />
+            </div>
         </div>
 
         <div class="card" style="margin-top:14px;">
@@ -125,7 +130,7 @@
                         <label>Item</label>
                         <select name="item_id" required>
                             {% for it in items %}
-                            <option value="{{ it.id }}">{{ it.name }}{% if it.sku %} ({{ it.sku }}){% endif %}</option>
+                            <option value="{{ it.id }}">{{ it.name }}</option>
                             {% endfor %}
                         </select>
                     </div>

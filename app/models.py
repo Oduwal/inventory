@@ -115,6 +115,7 @@ class Delivery(Base):
 
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
+    delivery_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

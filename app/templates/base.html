@@ -198,6 +198,12 @@
       <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
         <span class="nav-icon">⚠️</span>Low Stock
       </a>
+      <a href="/stale-stock" data-active="{% if active == 'stale' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🕰️</span>Stale Stock
+        {% if stale_count and stale_count > 0 %}
+        <span style="margin-left:auto;background:#ef4444;color:white;border-radius:20px;padding:1px 7px;font-size:10px;font-weight:700;">{{ stale_count }}</span>
+        {% endif %}
+      </a>
       {% endif %}
       {% endif %}
 
