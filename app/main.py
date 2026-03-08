@@ -422,44 +422,88 @@ def seed_admin_if_missing() -> None:
 
 
 def seed_default_branch_if_missing() -> None:
-    """Ensure a default 'Main Branch' exists and assign it to any unassigned records."""
     gen = get_db()
     db = next(gen)
     try:
-        branch = db.scalar(select(Branch).where(Branch.name == "Main Branch"))
-        if not branch:
-            branch = Branch(name="Main Branch", code="MAIN", address=None)
-            db.add(branch)
+        # Ensure default branch exists
+        row = db.execute(
+            text("SELECT id FROM branches WHERE name = 'Main Branch' LIMIT 1")
+        ).first()
+
+        if row:
+            default_branch_id = int(row[0])
+        else:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO branches (name, code, address, created_at)
+                    VALUES ('Main Branch', 'MAIN', NULL, NOW())
+                    """
+                )
+            )
             db.commit()
-            db.refresh(branch)
 
-        default_branch_id = branch.id
+            row = db.execute(
+                text("SELECT id FROM branches WHERE name = 'Main Branch' LIMIT 1")
+            ).first()
+            default_branch_id = int(row[0])
 
-        # Assign branch to existing users without branch
-        users = db.execute(select(User).where(User.branch_id.is_(None))).scalars().all()
-        for u in users:
-            if (u.role or "").upper() != "SUPERVISOR":
-                u.branch_id = default_branch_id
+        # Update old rows with no branch_id using raw SQL
+        db.execute(
+            text(
+                """
+                UPDATE users
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+                  AND role <> 'SUPERVISOR'
+                """
+            ),
+            {"branch_id": default_branch_id},
+        )
 
-        # Assign branch to existing items
-        items = db.execute(select(Item).where(Item.branch_id.is_(None))).scalars().all()
-        for x in items:
-            x.branch_id = default_branch_id
+        db.execute(
+            text(
+                """
+                UPDATE items
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+                """
+            ),
+            {"branch_id": default_branch_id},
+        )
 
-        # Assign branch to existing deliveries
-        deliveries = db.execute(select(Delivery).where(Delivery.branch_id.is_(None))).scalars().all()
-        for x in deliveries:
-            x.branch_id = default_branch_id
+        db.execute(
+            text(
+                """
+                UPDATE deliveries
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+                """
+            ),
+            {"branch_id": default_branch_id},
+        )
 
-        # Assign branch to existing transactions
-        txs = db.execute(select(Transaction).where(Transaction.branch_id.is_(None))).scalars().all()
-        for x in txs:
-            x.branch_id = default_branch_id
+        db.execute(
+            text(
+                """
+                UPDATE transactions
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+                """
+            ),
+            {"branch_id": default_branch_id},
+        )
 
-        # Assign branch to existing cash entries
-        cash_rows = db.execute(select(CashEntry).where(CashEntry.branch_id.is_(None))).scalars().all()
-        for x in cash_rows:
-            x.branch_id = default_branch_id
+        db.execute(
+            text(
+                """
+                UPDATE cash_entries
+                SET branch_id = :branch_id
+                WHERE branch_id IS NULL
+                """
+            ),
+            {"branch_id": default_branch_id},
+        )
 
         db.commit()
     finally:
