@@ -21,6 +21,22 @@
       "purpose": "any"
     }
   ],
+  "screenshots": [
+    {
+      "src": "/static/screenshot-narrow.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Inventory Keeper on mobile"
+    },
+    {
+      "src": "/static/screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Inventory Keeper on desktop"
+    }
+  ],
   "shortcuts": [
     {
       "name": "New Order",
