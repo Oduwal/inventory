@@ -863,8 +863,7 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
         rows = [
             (item, stock)
             for (item, stock) in rows
-            if q_lower in ((item.sku or "").lower())
-            or q_lower in ((item.name or "").lower())
+            if q_lower in ((item.name or "").lower())
             or q_lower in ((item.category or "").lower())
         ]
 
@@ -893,7 +892,6 @@ def item_new_form(request: Request, db: Session = Depends(get_db)):
 def item_create(
     request: Request,
     name: str = Form(...),
-    sku: str = Form(""),
     category: str = Form(""),
     unit: str = Form("pcs"),
     reorder_level: int = Form(0),
@@ -914,10 +912,6 @@ def item_create(
     if not name_clean:
         return redirect("/items/new?error=Name+is+required")
 
-    sku_clean = (sku or "").strip() or None
-    if sku_clean and db.scalar(select(Item).where(Item.sku == sku_clean)):
-        return redirect("/items/new?error=SKU+already+exists")
-
     branch_id = get_current_branch_id(request)
     if not branch_id:
         return redirect("/items/new?error=No+branch+assigned")
@@ -926,7 +920,6 @@ def item_create(
         Item(
             branch_id=branch_id,
             name=name_clean,
-            sku=sku_clean,
             category=(category or "").strip() or None,
             unit=(unit or "pcs").strip() or "pcs",
             reorder_level=int(reorder_level or 0),
@@ -937,6 +930,126 @@ def item_create(
     db.commit()
     return redirect("/items")
 
+
+# ═══════════════════════════════════════════════════
+#  ITEMS CSV IMPORT
+# ═══════════════════════════════════════════════════
+
+@app.get("/items/import", response_class=HTMLResponse)
+def items_import_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    error = request.query_params.get("error")
+    success = request.query_params.get("success")
+
+    return templates.TemplateResponse("items_import.html", {
+        "request": request,
+        "user": user,
+        "branches": branches,
+        "active": "items",
+        "selected_branch_id": getattr(user, "branch_id", None),
+        "error": error,
+        "success": success,
+    })
+
+
+@app.post("/items/import")
+async def items_import_upload(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from fastapi import UploadFile, File
+    import csv, io
+
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    form = await request.form()
+    file = form.get("csv_file")
+    target = (form.get("target_branch") or "").strip()  # "all" or branch id
+
+    if not file or not file.filename:
+        return redirect("/items/import?error=Please+select+a+CSV+file")
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")  # handle BOM
+    except Exception:
+        return redirect("/items/import?error=Could+not+read+file")
+
+    reader = csv.DictReader(io.StringIO(text))
+    headers = [h.strip().lower() for h in (reader.fieldnames or [])]
+
+    if "name" not in headers:
+        return redirect("/items/import?error=CSV+must+have+a+Name+column")
+
+    # Determine target branches
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    if is_supervisor(user) and target == "all":
+        target_branches = branches
+    elif is_supervisor(user) and target.isdigit():
+        b = db.get(Branch, int(target))
+        target_branches = [b] if b else []
+    else:
+        # Admin — only their branch
+        b = db.get(Branch, user.branch_id)
+        target_branches = [b] if b else []
+
+    if not target_branches:
+        return redirect("/items/import?error=No+valid+branch+selected")
+
+    rows = list(reader)
+    if not rows:
+        return redirect("/items/import?error=CSV+file+is+empty")
+
+    created = 0
+    skipped = 0
+
+    for branch in target_branches:
+        for row in rows:
+            name = (row.get("name") or row.get("Name") or "").strip()
+            if not name:
+                skipped += 1
+                continue
+
+            category = (row.get("category") or row.get("Category") or "").strip() or None
+
+            # Skip if item with same name already exists in this branch
+            existing = db.scalar(
+                select(Item).where(
+                    Item.branch_id == branch.id,
+                    func.lower(Item.name) == name.lower()
+                )
+            )
+            if existing:
+                skipped += 1
+                continue
+
+            db.add(Item(
+                branch_id=branch.id,
+                name=name,
+                category=category,
+                unit="pcs",
+                reorder_level=0,
+                cost_price=0,
+                selling_price=0,
+            ))
+            created += 1
+
+    db.commit()
+    return redirect(f"/items/import?success=Imported+{created}+items+({skipped}+skipped)")
 
 @app.get("/items/{item_id}", response_class=HTMLResponse)
 def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
@@ -992,7 +1105,6 @@ def item_edit_save(
     request: Request,
     item_id: int,
     name: str = Form(...),
-    sku: str = Form(""),
     category: str = Form(""),
     unit: str = Form("pcs"),
     reorder_level: int = Form(0),
@@ -1020,14 +1132,7 @@ def item_edit_save(
     if not name_clean:
         return redirect(f"/items/{item_id}/edit?error=Name+is+required")
 
-    sku_clean = (sku or "").strip() or None
-    if sku_clean:
-        other = db.scalar(select(Item).where(Item.sku == sku_clean).where(Item.id != item_id))
-        if other:
-            return redirect(f"/items/{item_id}/edit?error=SKU+already+exists")
-
     item.name = name_clean
-    item.sku = sku_clean
     item.category = (category or "").strip() or None
     item.unit = (unit or "pcs").strip() or "pcs"
     item.reorder_level = int(reorder_level or 0)
@@ -2072,26 +2177,15 @@ def reset_system(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/manifest.json")
 def pwa_manifest():
-    import json
-    manifest = {
-        "name": "Inventory Keeper",
-        "short_name": "InvKeeper",
-        "description": "Logistics & stock management",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#0b1220",
-        "theme_color": "#4f7cff",
-        "orientation": "portrait-primary",
-        "icons": [
-            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
-        ],
-        "shortcuts": [
-            {"name": "New Order",   "url": "/deliveries/new", "description": "Create a new delivery order"},
-            {"name": "Deliveries",  "url": "/deliveries",     "description": "View all deliveries"},
-        ],
-    }
-    return JSONResponse(content=manifest, headers={"Content-Type": "application/manifest+json"})
+    manifest_path = os.path.join(BASE_DIR, "static", "manifest.json")
+    try:
+        content = open(manifest_path).read()
+    except FileNotFoundError:
+        content = "{}"
+    return PlainTextResponse(
+        content,
+        headers={"Content-Type": "application/manifest+json; charset=utf-8"}
+    )
 
 
 @app.get("/sw.js", response_class=PlainTextResponse)
@@ -2322,7 +2416,6 @@ def transfer_receive(transfer_id: int, request: Request, db: Session = Depends(g
             dest_item = Item(
                 branch_id=user.branch_id,
                 name=line.item.name,
-                sku=line.item.sku,
                 category=line.item.category,
                 unit=line.item.unit,
                 reorder_level=line.item.reorder_level,

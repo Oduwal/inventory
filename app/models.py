@@ -71,7 +71,6 @@ class Item(Base):
 
     branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
 
-    sku: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
 

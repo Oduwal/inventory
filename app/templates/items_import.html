@@ -1,14 +1,84 @@
 ﻿{% extends "base.html" %}
 {% block title %}Import Items{% endblock %}
 {% block page_title %}Import Items{% endblock %}
-{% block page_subtitle %}CSV import placeholder endpoint.{% endblock %}
-{% set active = "items" %}
+{% block page_subtitle %}Bulk-add items from a CSV file{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="badge b-purple">IMPORT</div>
-    <div class="muted" style="margin-top:12px;">
-        Import endpoint exists. CSV upload can be added next.
-    </div>
+
+{% if error %}
+<div class="card" style="border-color:rgba(239,68,68,.4);margin-bottom:16px;color:#ef4444;">
+    ⚠ {{ error }}
 </div>
+{% endif %}
+
+{% if success %}
+<div class="card" style="border-color:rgba(34,197,94,.4);margin-bottom:16px;color:#22c55e;">
+    ✓ {{ success }}
+</div>
+{% endif %}
+
+<!-- Instructions -->
+<div class="card" style="margin-bottom:20px;">
+    <div style="font-weight:700;margin-bottom:10px;">📋 CSV Format</div>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 10px;">
+        Your CSV file must have a <strong style="color:var(--text);">Name</strong> column.
+        A <strong style="color:var(--text);">Category</strong> column is optional.
+        Items that already exist in the target branch will be skipped.
+    </p>
+    <div style="background:rgba(0,0,0,.2);border-radius:10px;padding:12px;font-family:monospace;font-size:13px;">
+        Name,Category<br>
+        Paracetamol,Medicine<br>
+        Ibuprofen,Medicine<br>
+        Rice 5kg,Food<br>
+        Bottled Water,Beverages
+    </div>
+    <a href="#" onclick="downloadSample()" class="btnGhost" style="display:inline-block;margin-top:12px;font-size:13px;padding:8px 14px;">
+        ⬇ Download Sample CSV
+    </a>
+</div>
+
+<!-- Upload form -->
+<div class="card">
+    <div style="font-weight:700;margin-bottom:14px;">Upload CSV</div>
+    <form method="post" action="/items/import" enctype="multipart/form-data">
+
+        {% if user.role == "SUPERVISOR" %}
+        <div style="margin-bottom:14px;">
+            <label>Target Branch</label>
+            <select name="target_branch" required>
+                <option value="all">All Branches (import to every branch)</option>
+                {% for b in branches %}
+                <option value="{{ b.id }}">{{ b.name }} only</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% else %}
+        <input type="hidden" name="target_branch" value="{{ user.branch_id }}">
+        {% endif %}
+
+        <div style="margin-bottom:14px;">
+            <label>CSV File</label>
+            <input type="file" name="csv_file" accept=".csv" required
+                   style="padding:10px;border:2px dashed rgba(79,124,255,.4);border-radius:12px;
+               background:rgba(79,124,255,.05);cursor:pointer;">
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center;">
+            <button class="btnPrimary" type="submit">⬆ Import Items</button>
+            <a href="/items" class="btnGhost">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function downloadSample() {
+  const csv = "Name,Category\nParacetamol,Medicine\nIbuprofen,Medicine\nRice 5kg,Food\nBottled Water,Beverages";
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'sample_items.csv';
+  a.click();
+}
+</script>
+
 {% endblock %}
