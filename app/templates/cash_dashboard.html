@@ -6,121 +6,40 @@
 
 {% block content %}
 <style>
-  .cash-kpi-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 22px;
-  }
-  .cash-kpi {
-    border-radius: 14px;
-    padding: 16px 18px;
-    position: relative;
-    overflow: hidden;
-  }
-  .cash-kpi::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    opacity: .08;
-    border-radius: 14px;
-  }
-  .cash-kpi .kpi-icon { font-size: 22px; margin-bottom: 6px; display: block; }
-  .cash-kpi .kpi-val  { font-size: 18px; font-weight: 800; line-height: 1.1; }
-  .cash-kpi .kpi-lbl  { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
-
-  .kpi-green  { background: rgba(34,197,94,.12);  border: 1px solid rgba(34,197,94,.25); }
-  .kpi-green .kpi-val  { color: #22c55e; }
-  .kpi-blue   { background: rgba(79,124,255,.12); border: 1px solid rgba(79,124,255,.25); }
-  .kpi-blue .kpi-val   { color: #4f7cff; }
-  .kpi-red    { background: rgba(239,68,68,.12);  border: 1px solid rgba(239,68,68,.25); }
-  .kpi-red .kpi-val    { color: #ef4444; }
-  .kpi-teal   { background: rgba(20,184,166,.12); border: 1px solid rgba(20,184,166,.25); }
-  .kpi-teal .kpi-val   { color: #14b8a6; }
-  .kpi-amber  { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.25); }
-  .kpi-amber .kpi-val  { color: #f59e0b; }
-  .kpi-purple { background: rgba(139,92,246,.12); border: 1px solid rgba(139,92,246,.25); }
-  .kpi-purple .kpi-val { color: #8b5cf6; }
-
-  .entry-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-bottom: 20px;
-  }
-  @media (max-width: 640px) { .entry-grid { grid-template-columns: 1fr; } }
-
-  .entry-card {
-    border-radius: 14px;
-    padding: 16px;
-    border: 1px solid rgba(255,255,255,.08);
-    background: var(--card-bg, rgba(255,255,255,.04));
-  }
-  .entry-card .ec-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    margin-bottom: 12px;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-  }
-  .entry-card .ec-dot {
-    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-  }
-  .ec-collection { border-top: 3px solid #22c55e; }
-  .ec-expense    { border-top: 3px solid #ef4444; }
-  .ec-opcash     { border-top: 3px solid #4f7cff; }
-  .ec-return     { border-top: 3px solid #14b8a6; background: rgba(20,184,166,.04) !important; }
-  .ec-office     { border-top: 3px solid #f59e0b; }
-
-  .ec-btn { width: 100%; margin-top: 10px; border-radius: 8px; padding: 9px; font-size: 13px; font-weight: 700; border: none; cursor: pointer; }
-  .ec-btn-green  { background: #22c55e; color: #000; }
-  .ec-btn-red    { background: #ef4444; color: #fff; }
-  .ec-btn-blue   { background: #4f7cff; color: #fff; }
-  .ec-btn-teal   { background: #14b8a6; color: #fff; }
-  .ec-btn-amber  { background: #f59e0b; color: #000; }
-
-  .filter-bar {
-    background: var(--card-bg, rgba(255,255,255,.04));
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 14px;
-    padding: 14px 16px;
-    margin-bottom: 18px;
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: flex-end;
-  }
-  .filter-bar label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .05em; }
-  .filter-bar select, .filter-bar input[type=date] { padding: 7px 10px; font-size: 13px; width: auto; }
-
-  .remit-banner {
-    background: linear-gradient(135deg, rgba(79,124,255,.18), rgba(139,92,246,.18));
-    border: 1px solid rgba(79,124,255,.3);
-    border-radius: 14px;
-    padding: 18px 22px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  .remit-banner .rb-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
-  .remit-banner .rb-val   { font-size: 28px; font-weight: 800; color: #4f7cff; }
-  .remit-banner .rb-formula { font-size: 12px; color: var(--muted); margin-top: 2px; }
-
-  .daily-table th, .daily-table td { font-size: 13px; }
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:22px;}
+  .kpi{border-radius:14px;padding:16px 18px;position:relative;overflow:hidden;}
+  .kpi .kv{font-size:20px;font-weight:800;line-height:1.1;margin-top:4px;}
+  .kpi .kl{font-size:10.5px;color:var(--muted);margin-top:5px;text-transform:uppercase;letter-spacing:.06em;}
+  .kpi-g{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.22);}  .kpi-g .kv{color:#4ade80;}
+  .kpi-b{background:rgba(79,124,255,.1);border:1px solid rgba(79,124,255,.22);}  .kpi-b .kv{color:#7fa8ff;}
+  .kpi-r{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.22);}  .kpi-r .kv{color:#f87171;}
+  .kpi-t{background:rgba(20,184,166,.1);border:1px solid rgba(20,184,166,.22);}  .kpi-t .kv{color:#2dd4bf;}
+  .kpi-a{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.22);}  .kpi-a .kv{color:#fbbf24;}
+  .entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;}
+  @media(max-width:640px){.entry-grid{grid-template-columns:1fr;}}
+  .ec{border-radius:14px;padding:16px;border:1px solid var(--border);background:rgba(255,255,255,.03);}
+  .ec-hd{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+  .ec-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .ec-col{border-top:3px solid #22c55e;} .ec-exp{border-top:3px solid #ef4444;}
+  .ec-op{border-top:3px solid #4f7cff;} .ec-ret{border-top:3px solid #14b8a6;}
+  .ec-off{border-top:3px solid #f59e0b;}
+  .ec-btn{width:100%;margin-top:10px;border-radius:10px;padding:10px;font-size:13px;font-weight:700;border:none;cursor:pointer;transition:opacity .15s;}
+  .ec-btn:hover{opacity:.85;}
+  .ec-g{background:#22c55e;color:#000;} .ec-r{background:#ef4444;color:#fff;}
+  .ec-b{background:#4f7cff;color:#fff;} .ec-t{background:#14b8a6;color:#fff;}
+  .ec-a{background:#f59e0b;color:#000;}
+  .remit{background:linear-gradient(135deg,rgba(79,124,255,.15),rgba(139,92,246,.15));
+         border:1px solid rgba(79,124,255,.3);border-radius:14px;
+         padding:18px 22px;display:flex;justify-content:space-between;
+         align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
 </style>
 
-<!-- ── Filter bar ── -->
-<div class="filter-bar">
-  <form method="get" action="/cash" style="display:contents;">
+<!-- Filters -->
+<div class="card" style="margin-bottom:18px;">
+  <form method="get" action="/cash" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
     <div>
       <label>Quick Filter</label>
-      <select name="preset" id="preset-sel" onchange="this.form.submit()">
+      <select name="preset" id="preset-sel" onchange="this.form.submit()" style="width:auto;">
         <option value="">Custom</option>
         <option value="today">Today</option>
         <option value="yesterday">Yesterday</option>
@@ -131,16 +50,16 @@
     </div>
     <div>
       <label>From</label>
-      <input type="date" name="start_date" value="{{ start_date or '' }}">
+      <input type="date" name="start_date" value="{{ start_date or '' }}" style="width:auto;">
     </div>
     <div>
       <label>To</label>
-      <input type="date" name="end_date" value="{{ end_date or '' }}">
+      <input type="date" name="end_date" value="{{ end_date or '' }}" style="width:auto;">
     </div>
     {% if user and user.role == "ADMIN" %}
     <div>
       <label>Agent</label>
-      <select name="agent_id">
+      <select name="agent_id" style="width:auto;">
         <option value="" {% if not agent_id %}selected{% endif %}>All</option>
         {% for a in agents %}
         <option value="{{ a.id }}" {% if agent_id and (agent_id|int == a.id) %}selected{% endif %}>{{ a.username }}</option>
@@ -148,197 +67,135 @@
       </select>
     </div>
     {% endif %}
-    <div>
-      <label>&nbsp;</label>
-      <button class="btnPrimary" type="submit">Apply</button>
-    </div>
+    <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Apply</button></div>
   </form>
 </div>
 <script>
-const ps = document.getElementById('preset-sel');
-const cur = "{{ preset }}";
-if (cur) { for (let o of ps.options) { if (o.value === cur) { o.selected = true; break; } } }
+const ps=document.getElementById('preset-sel');
+const cur="{{ preset }}";
+if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
 </script>
 
-<!-- ── KPI Strip ── -->
-<div class="cash-kpi-grid">
-  <div class="cash-kpi kpi-green">
-    <span class="kpi-icon">💰</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(total_collections) }}</div>
-    <div class="kpi-lbl">Total Collections</div>
-  </div>
-  <div class="cash-kpi kpi-blue">
-    <span class="kpi-icon">🏦</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(total_operating_cash) }}</div>
-    <div class="kpi-lbl">Op. Cash Given</div>
-  </div>
-  <div class="cash-kpi kpi-red">
-    <span class="kpi-icon">📤</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(total_expenses) }}</div>
-    <div class="kpi-lbl">Agent Expenses</div>
-  </div>
-  <div class="cash-kpi kpi-teal">
-    <span class="kpi-icon">↩️</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div>
-    <div class="kpi-lbl">Op. Cash Returned</div>
-  </div>
-  <div class="cash-kpi {% if operating_balance >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
-    <span class="kpi-icon">⚖️</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(operating_balance) }}</div>
-    <div class="kpi-lbl">Op. Balance Outstanding</div>
-  </div>
+<!-- KPIs -->
+<div class="kpi-grid">
+  <div class="kpi kpi-g"><span style="font-size:20px;">💰</span><div class="kv">₦{{ "{:,.0f}".format(total_collections) }}</div><div class="kl">Collections</div></div>
+  <div class="kpi kpi-b"><span style="font-size:20px;">🏦</span><div class="kv">₦{{ "{:,.0f}".format(total_operating_cash) }}</div><div class="kl">Op. Cash Given</div></div>
+  <div class="kpi kpi-r"><span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div><div class="kl">Agent Expenses</div></div>
+  <div class="kpi kpi-t"><span style="font-size:20px;">↩️</span><div class="kv">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div><div class="kl">Op. Cash Returned</div></div>
+  <div class="kpi {% if operating_balance >= 0 %}kpi-g{% else %}kpi-r{% endif %}"><span style="font-size:20px;">⚖️</span><div class="kv">₦{{ "{:,.0f}".format(operating_balance) }}</div><div class="kl">Op. Balance</div></div>
   {% if user and user.role == "ADMIN" %}
-  <div class="cash-kpi kpi-amber">
-    <span class="kpi-icon">🏢</span>
-    <div class="kpi-val">₦{{ "{:,.0f}".format(total_office_expenses) }}</div>
-    <div class="kpi-lbl">Office Expenses</div>
-  </div>
+  <div class="kpi kpi-a"><span style="font-size:20px;">🏢</span><div class="kv">₦{{ "{:,.0f}".format(total_office_expenses) }}</div><div class="kl">Office Expenses</div></div>
   {% endif %}
 </div>
 
-<!-- ── Remittance banner (admin only) ── -->
 {% if user and user.role == "ADMIN" %}
-<div class="remit-banner">
+<div class="remit">
   <div>
-    <div class="rb-label">Net Remittance</div>
-    <div class="rb-val">₦{{ "{:,.0f}".format(remittance) }}</div>
-    <div class="rb-formula">Collections − Office Expenses</div>
+    <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Net Remittance</div>
+    <div style="font-size:28px;font-weight:800;color:#7fa8ff;">₦{{ "{:,.0f}".format(remittance) }}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:2px;">Collections − Office Expenses</div>
   </div>
   <div style="text-align:right;">
-    <div class="rb-label">Net Position</div>
-    <div style="font-size:20px;font-weight:800;color:#8b5cf6;">₦{{ "{:,.0f}".format(net_position) }}</div>
-    <div class="rb-formula">Remittance + Op. Balance</div>
+    <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Net Position</div>
+    <div style="font-size:22px;font-weight:800;color:#a78bfa;">₦{{ "{:,.0f}".format(net_position) }}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:2px;">Remittance + Op. Balance</div>
   </div>
 </div>
 {% endif %}
 
-<!-- ── Entry forms ── -->
+<!-- Entry forms — [FIX-4] CSRF on every POST form -->
 <div class="entry-grid">
-
-  <!-- Collection -->
-  <div class="entry-card ec-collection">
-    <div class="ec-header"><span class="ec-dot" style="background:#22c55e;"></span>Record Collection</div>
+  <div class="ec ec-col">
+    <div class="ec-hd"><span class="ec-dot" style="background:#22c55e;"></span>Record Collection</div>
     <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="COLLECTION">
-      <label>Amount (₦)</label>
-      <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      {% if user and user.role == "ADMIN" %}
-      <label style="margin-top:8px;">Agent</label>
-      <select name="agent_id">
-        <option value="">— select —</option>
-        {% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}
-      </select>
-      {% endif %}
-      <label style="margin-top:8px;">Note</label>
-      <input type="text" name="note" placeholder="optional">
-      <button class="ec-btn ec-btn-green" type="submit">💰 Save Collection</button>
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      {% if user and user.role == "ADMIN" %}<label style="margin-top:8px;">Agent</label>
+      <select name="agent_id"><option value="">— select —</option>{% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}</select>{% endif %}
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="optional">
+      <button class="ec-btn ec-g" type="submit">💰 Save Collection</button>
     </form>
   </div>
 
-  <!-- Agent Expense -->
-  <div class="entry-card ec-expense">
-    <div class="ec-header"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
+  <div class="ec ec-exp">
+    <div class="ec-hd"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
     <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="EXPENSE">
-      <label>Amount (₦)</label>
-      <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      {% if user and user.role == "ADMIN" %}
-      <label style="margin-top:8px;">Agent</label>
-      <select name="agent_id">
-        <option value="">— select —</option>
-        {% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}
-      </select>
-      {% endif %}
-      <label style="margin-top:8px;">Note</label>
-      <input type="text" name="note" placeholder="e.g. fuel, food">
-      <button class="ec-btn ec-btn-red" type="submit">📤 Save Expense</button>
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      {% if user and user.role == "ADMIN" %}<label style="margin-top:8px;">Agent</label>
+      <select name="agent_id"><option value="">— select —</option>{% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}</select>{% endif %}
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. fuel, food">
+      <button class="ec-btn ec-r" type="submit">📤 Save Expense</button>
     </form>
   </div>
 
-  <!-- Give Operating Cash -->
-  <div class="entry-card ec-opcash">
-    <div class="ec-header"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash</div>
+  <div class="ec ec-op">
+    <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash</div>
     <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="OPERATING_CASH">
-      <label>Amount (₦)</label>
-      <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      {% if user and user.role == "ADMIN" %}
-      <label style="margin-top:8px;">Agent</label>
-      <select name="agent_id">
-        <option value="">— select —</option>
-        {% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}
-      </select>
-      {% endif %}
-      <label style="margin-top:8px;">Note</label>
-      <input type="text" name="note" placeholder="e.g. morning float">
-      <button class="ec-btn ec-btn-blue" type="submit">🏦 Give Cash</button>
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      {% if user and user.role == "ADMIN" %}<label style="margin-top:8px;">Agent</label>
+      <select name="agent_id"><option value="">— select —</option>{% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}</select>{% endif %}
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. morning float">
+      <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
     </form>
   </div>
 
-  <!-- Return Op Cash Balance -->
-  <div class="entry-card ec-return">
-    <div class="ec-header"><span class="ec-dot" style="background:#14b8a6;"></span>Agent Returns Balance</div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 10px 0;line-height:1.5;">Record the balance an agent returns after deducting their expenses from the operating cash given.</p>
+  <div class="ec ec-ret">
+    <div class="ec-hd"><span class="ec-dot" style="background:#14b8a6;"></span>Agent Returns Balance</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Record the balance an agent returns after deducting their expenses from operating cash.</p>
     <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="RETURN_OPERATING_CASH">
-      <label>Amount Returned (₦)</label>
-      <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      {% if user and user.role == "ADMIN" %}
-      <label style="margin-top:8px;">Agent</label>
-      <select name="agent_id">
-        <option value="">— select —</option>
-        {% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}
-      </select>
-      {% endif %}
-      <label style="margin-top:8px;">Note</label>
-      <input type="text" name="note" placeholder="e.g. balance returned by John">
-      <button class="ec-btn ec-btn-teal" type="submit">↩️ Record Return</button>
+      <label>Amount Returned (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      {% if user and user.role == "ADMIN" %}<label style="margin-top:8px;">Agent</label>
+      <select name="agent_id"><option value="">— select —</option>{% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}</select>{% endif %}
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. balance returned by John">
+      <button class="ec-btn ec-t" type="submit">↩️ Record Return</button>
     </form>
   </div>
 
-  <!-- Office Expense (admin only) -->
   {% if user and user.role == "ADMIN" %}
-  <div class="entry-card ec-office">
-    <div class="ec-header"><span class="ec-dot" style="background:#f59e0b;"></span>Office Expense</div>
+  <div class="ec ec-off">
+    <div class="ec-hd"><span class="ec-dot" style="background:#f59e0b;"></span>Office Expense</div>
     <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="OFFICE_EXPENSE">
-      <label>Amount (₦)</label>
-      <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      <label style="margin-top:8px;">Note / Category</label>
-      <input type="text" name="note" placeholder="e.g. waybill, rent, utilities">
-      <button class="ec-btn ec-btn-amber" type="submit">🏢 Record Office Expense</button>
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      <label style="margin-top:8px;">Note / Category</label><input type="text" name="note" placeholder="e.g. waybill, rent, utilities">
+      <button class="ec-btn ec-a" type="submit">🏢 Record Office Expense</button>
     </form>
   </div>
   {% endif %}
-
 </div>
 
-<!-- ── Daily summary table ── -->
+<!-- Daily summary -->
 {% if rows and rows|length > 0 %}
 <div class="card">
-  <div style="font-weight:700;margin-bottom:12px;">📅 Daily Summary</div>
+  <div style="font-weight:700;margin-bottom:14px;">📅 Daily Summary</div>
   <div style="overflow-x:auto;">
-  <table class="daily-table">
+  <table>
     <thead>
       <tr>
         <th>Date</th>
         <th style="text-align:right;">Collections</th>
         <th style="text-align:right;">Op. Cash</th>
-        <th style="text-align:right;">Expenses</th>
+        <th style="text-align:right;">Agent Exp.</th>
         <th style="text-align:right;">Office Exp.</th>
-        {% if user and user.role == "ADMIN" %}
-        <th style="text-align:right;">Remittance</th>
-        {% endif %}
+        {% if user and user.role == "ADMIN" %}<th style="text-align:right;">Remittance</th>{% endif %}
       </tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td>{{ r.day }}</td>
-        <td style="text-align:right;color:#22c55e;">₦{{ "{:,.0f}".format(r.collections|float) }}</td>
-        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(r.operating_cash|float) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.expenses|float) }}</td>
-        <td style="text-align:right;color:#f59e0b;">₦{{ "{:,.0f}".format(r.office_expenses|float) }}</td>
+        <td style="text-align:right;color:#4ade80;font-weight:600;">₦{{ "{:,.0f}".format(r.collections|float) }}</td>
+        <td style="text-align:right;color:#7fa8ff;">₦{{ "{:,.0f}".format(r.operating_cash|float) }}</td>
+        <td style="text-align:right;color:#f87171;">₦{{ "{:,.0f}".format(r.expenses|float) }}</td>
+        <td style="text-align:right;color:#fbbf24;">₦{{ "{:,.0f}".format(r.office_expenses|float) }}</td>
         {% if user and user.role == "ADMIN" %}
         <td style="text-align:right;font-weight:700;">₦{{ "{:,.0f}".format((r.collections|float) - (r.office_expenses|float)) }}</td>
         {% endif %}
@@ -346,27 +203,23 @@ if (cur) { for (let o of ps.options) { if (o.value === cur) { o.selected = true;
       {% endfor %}
     </tbody>
     <tfoot>
-      <tr style="border-top:2px solid rgba(255,255,255,.15);font-weight:800;">
+      <tr style="border-top:2px solid var(--border);font-weight:800;">
         <td>TOTAL</td>
-        <td style="text-align:right;color:#22c55e;">₦{{ "{:,.0f}".format(total_collections) }}</td>
-        <td style="text-align:right;color:#4f7cff;">₦{{ "{:,.0f}".format(total_operating_cash) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(total_expenses) }}</td>
-        <td style="text-align:right;color:#f59e0b;">₦{{ "{:,.0f}".format(total_office_expenses) }}</td>
+        <td style="text-align:right;color:#4ade80;">₦{{ "{:,.0f}".format(total_collections) }}</td>
+        <td style="text-align:right;color:#7fa8ff;">₦{{ "{:,.0f}".format(total_operating_cash) }}</td>
+        <td style="text-align:right;color:#f87171;">₦{{ "{:,.0f}".format(total_expenses) }}</td>
+        <td style="text-align:right;color:#fbbf24;">₦{{ "{:,.0f}".format(total_office_expenses) }}</td>
         {% if user and user.role == "ADMIN" %}
-        <td style="text-align:right;font-weight:800;">₦{{ "{:,.0f}".format(remittance) }}</td>
+        <td style="text-align:right;">₦{{ "{:,.0f}".format(remittance) }}</td>
         {% endif %}
       </tr>
     </tfoot>
   </table>
   </div>
-  <div class="muted" style="margin-top:10px;font-size:12px;">
-    Agent expenses reduce operating cash only. Office expenses reduce remittance only.
-  </div>
 </div>
 {% else %}
-<div class="card" style="text-align:center;color:var(--muted);padding:40px 20px;">
+<div class="card" style="text-align:center;color:var(--muted);padding:50px 20px;">
   No cash entries found for this period.
 </div>
 {% endif %}
-
 {% endblock %}

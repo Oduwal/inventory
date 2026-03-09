@@ -1,55 +1,79 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Transactions{% endblock %}
 {% block page_title %}Transactions{% endblock %}
-{% block page_subtitle %}Recent stock movements (IN / OUT){% endblock %}
+{% block page_subtitle %}All stock IN / OUT movements{% endblock %}
 {% set active = 'transactions' %}
 
 {% block top_right %}
-<a class="btnPrimary" href="/transactions/new">New Transaction</a>
+{% if user and user.role == "ADMIN" %}
+<a class="btnPrimary" href="/transactions/new">+ New Transaction</a>
+{% endif %}
 {% endblock %}
 
 {% block content %}
+
+<!-- Quick stats -->
+{% if txs %}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:18px;">
+  {% set in_count = txs | selectattr('type', 'eq', 'IN') | list | length %}
+  {% set out_count = txs | selectattr('type', 'eq', 'OUT') | list | length %}
+  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#4ade80;">{{ in_count }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Stock IN</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#f87171;">{{ out_count }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Stock OUT</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#7fa8ff;">{{ txs|length }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Total</div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div class="badge b-purple">RECENT TRANSACTIONS</div>
-        <div class="muted small">{{ txs|length }} shown</div>
-    </div>
-
-    <div style="margin-top:12px;">
-        <table>
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Qty</th>
-                    <th>Item ID</th>
-                    <th>Reference</th>
-                    <th>Note</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if not txs %}
-                <tr><td colspan="6" class="muted">No transactions yet.</td></tr>
-                {% endif %}
-
-                {% for t in txs %}
-                <tr>
-                    <td class="muted">{{ t.created_at }}</td>
-                    <td>
-                        {% if t.type == "IN" %}
-                        <span class="badge b-green">IN</span>
-                        {% else %}
-                        <span class="badge b-red">OUT</span>
-                        {% endif %}
-                    </td>
-                    <td><span class="badge b-blue">{{ t.quantity }}</span></td>
-                    <td class="muted">{{ t.item_id }}</td>
-                    <td>{{ t.reference if t.reference else "-" }}</td>
-                    <td class="muted">{{ t.note if t.note else "-" }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span class="badge b-purple">RECENT TRANSACTIONS</span>
+    <span style="color:var(--muted);font-size:12px;">{{ txs|length if txs else 0 }} records</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Type</th>
+          <th style="text-align:right;">Qty</th>
+          <th>Item</th>
+          <th>Reference</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if txs %}
+        {% for t in txs %}
+        <tr>
+          <td style="color:var(--muted);white-space:nowrap;">{{ t.created_at }}</td>
+          <td>
+            {% if t.type == "IN" %}
+            <span class="badge b-green" style="font-size:11px;">📥 IN</span>
+            {% else %}
+            <span class="badge b-red" style="font-size:11px;">📤 OUT</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;font-weight:700;font-size:15px;">{{ t.quantity }}</td>
+          <td style="color:var(--muted);">{{ t.item_id }}</td>
+          <td>{{ t.reference or "—" }}</td>
+          <td style="color:var(--muted);">{{ t.note or "—" }}</td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr>
+          <td colspan="6" style="text-align:center;padding:50px;color:var(--muted);">No transactions yet.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

@@ -1,14 +1,80 @@
-﻿{% extends "base.html" %}
-{% block content %}
-<h1>Low Stock</h1>
+{% extends "base.html" %}
+{% block title %}Low Stock{% endblock %}
+{% block page_title %}Low Stock Alerts{% endblock %}
+{% block page_subtitle %}Items that have hit or dropped below their reorder level{% endblock %}
+{% set active = "low" %}
 
-<table class="table">
-    <tr><th>Item</th><th>Stock</th></tr>
-    {% for item, stock in rows %}
-    <tr>
-        <td>{{ item.name }}</td>
-        <td>{{ stock }}</td>
-    </tr>
-    {% endfor %}
-</table>
+{% block content %}
+
+{% if rows %}
+<!-- Summary -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px;">
+  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#ef4444;">{{ rows | selectattr('1', 'le', 0) | list | length }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Out of Stock</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #f59e0b;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#fbbf24;">{{ rows | length }}</div>
+    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Items Below Reorder</div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span class="badge b-yellow">⚠ LOW STOCK</span>
+    <span style="color:var(--muted);font-size:12px;">{{ rows|length }} items need attention</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Category</th>
+          <th style="text-align:right;">Current Stock</th>
+          <th style="text-align:right;">Reorder Level</th>
+          <th style="text-align:right;">Deficit</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item, stock in rows %}
+        <tr>
+          <td style="font-weight:700;">{{ item.name }}</td>
+          <td>
+            {% if item.category %}
+            <span class="badge b-blue" style="font-size:11px;">{{ item.category }}</span>
+            {% else %}<span style="color:var(--muted);">—</span>{% endif %}
+          </td>
+          <td style="text-align:right;">
+            {% if stock <= 0 %}
+            <span class="badge b-red">{{ stock }}</span>
+            {% else %}
+            <span class="badge b-yellow">{{ stock }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;color:var(--muted);">{{ item.reorder_level or 0 }}</td>
+          <td style="text-align:right;font-weight:700;color:#f87171;">
+            {{ [(item.reorder_level or 0) - stock, 0] | max }}
+          </td>
+          <td>
+            <a class="btnGhost" href="/items/{{ item.id }}" style="padding:6px 12px;font-size:12px;">View</a>
+            {% if user and user.role == "ADMIN" %}
+            <a class="btnGhost" href="/items/{{ item.id }}/edit" style="padding:6px 12px;font-size:12px;">Restock</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div class="card" style="text-align:center;padding:60px 20px;">
+  <div style="font-size:48px;margin-bottom:14px;">✅</div>
+  <div style="font-size:18px;font-weight:700;margin-bottom:8px;">All stocked up!</div>
+  <div style="color:var(--muted);font-size:13px;">No items are currently below their reorder level.</div>
+</div>
+{% endif %}
+
 {% endblock %}

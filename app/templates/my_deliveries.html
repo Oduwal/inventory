@@ -1,7 +1,7 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}My Deliveries{% endblock %}
 {% block page_title %}My Deliveries{% endblock %}
-{% block page_subtitle %}Create and manage your orders.{% endblock %}
+{% block page_subtitle %}Your assigned delivery orders{% endblock %}
 {% set active = 'deliveries' %}
 
 {% block top_right %}
@@ -9,38 +9,75 @@
 {% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="badge b-blue">DELIVERIES</div>
 
-    <div style="margin-top:12px;">
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Customer</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if rows and rows|length > 0 %}
-                {% for d in rows %}
-                <tr>
-                    <td>#{{ d.id }}</td>
-                    <td>{{ d.customer_name }}</td>
-                    <td>{{ d.status }}</td>
-                    <td>{{ d.created_at }}</td>
-                    <td style="text-align:right;">
-                        <a class="btnGhost" href="/deliveries/{{ d.id }}">View</a>
-                    </td>
-                </tr>
-                {% endfor %}
-                {% else %}
-                <tr><td colspan="5" class="muted">No deliveries yet.</td></tr>
-                {% endif %}
-            </tbody>
-        </table>
-    </div>
+<!-- Quick stats -->
+{% if rows %}
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:18px;">
+  {% set pending_c = rows | selectattr('status', 'eq', 'PENDING') | list | length %}
+  {% set ofd_c = rows | selectattr('status', 'eq', 'OUT_FOR_DELIVERY') | list | length %}
+  {% set done_c = rows | selectattr('status', 'eq', 'DELIVERED') | list | length %}
+  <div class="card" style="text-align:center;border-top:3px solid #f59e0b;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#fbbf24;">{{ pending_c }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Pending</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#7fa8ff;">{{ ofd_c }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Out for Delivery</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#4ade80;">{{ done_c }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Delivered</div>
+  </div>
+  <div class="card" style="text-align:center;border-top:3px solid #8b5cf6;padding:14px;">
+    <div style="font-size:24px;font-weight:800;color:#a78bfa;">{{ rows|length }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Total</div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span class="badge b-blue">MY ORDERS</span>
+    <span style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} orders</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Customer</th>
+        <th>Phone</th>
+        <th>Status</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if rows and rows|length > 0 %}
+      {% for d in rows %}
+      <tr>
+        <td><span style="color:var(--muted);">#{{ d.id }}</span></td>
+        <td style="font-weight:700;">{{ d.customer_name }}</td>
+        <td style="color:var(--muted);">{{ d.customer_phone or "—" }}</td>
+        <td>
+          {% if d.status == "DELIVERED" %}<span class="badge b-green">✓ {{ d.status }}</span>
+          {% elif d.status == "OUT_FOR_DELIVERY" %}<span class="badge b-blue">🚚 {{ d.status }}</span>
+          {% elif d.status == "PENDING" %}<span class="badge b-yellow">⏳ {{ d.status }}</span>
+          {% else %}<span class="badge b-red">{{ d.status }}</span>
+          {% endif %}
+        </td>
+        <td style="color:var(--muted);">{{ d.created_at.strftime('%d %b %Y') if d.created_at else "—" }}</td>
+        <td><a class="btnGhost" href="/deliveries/{{ d.id }}" style="padding:6px 14px;font-size:12px;">View →</a></td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="6" style="text-align:center;padding:50px;color:var(--muted);">
+          No deliveries yet. <a href="/deliveries/new" style="color:var(--accent);">Create your first order →</a>
+        </td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}

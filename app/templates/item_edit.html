@@ -1,77 +1,79 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Edit Item{% endblock %}
 {% block page_title %}Edit Item{% endblock %}
-{% block page_subtitle %}Update name, category, pricing, and reorder level.{% endblock %}
+{% block page_subtitle %}Update name, category, pricing, reorder level and stock.{% endblock %}
 {% set active = "items" %}
 
+{% block top_right %}
+<a class="btnGhost" href="/items/{{ item.id }}">← Cancel</a>
+{% endblock %}
+
 {% block content %}
-<div class="card">
-    <div class="badge b-blue">EDIT ITEM</div>
+<div class="card" style="max-width:720px;">
+  <div class="badge b-blue" style="margin-bottom:16px;">EDIT ITEM</div>
 
-    {% if error %}
-    <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
-    {% endif %}
+  {% if error %}
+  <div class="alert alert-danger">⚠ {{ error }}</div>
+  {% endif %}
 
-    <form method="post" action="/items/{{ item.id }}/edit" style="margin-top:12px;">
-        <div class="inputs">
-            <div>
-                <label>Name</label>
-                <input name="name" value="{{ item.name }}" required>
-            </div>
+  <!-- [FIX-4] CSRF token -->
+  <form method="post" action="/items/{{ item.id }}/edit">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
 
-            <div>
-                <label>SKU</label>
-                <input name="sku" value="{{ item.sku or '' }}">
-            </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;">
+      <div>
+        <label>Name *</label>
+        <input name="name" value="{{ item.name }}" required />
+      </div>
+      <div>
+        <label>Category</label>
+        <input name="category" value="{{ item.category or '' }}" placeholder="e.g. Medicine" />
+      </div>
+      <div>
+        <label>Unit</label>
+        <input name="unit" value="{{ item.unit or 'pcs' }}" />
+      </div>
+      <div>
+        <label>Reorder Level</label>
+        <input name="reorder_level" type="number" min="0" value="{{ item.reorder_level or 0 }}" />
+      </div>
+      <div>
+        <label>Cost Price (₦)</label>
+        <input name="cost_price" type="number" step="0.01" min="0" value="{{ item.cost_price or 0 }}" />
+      </div>
+      <div>
+        <label>Selling Price (₦)</label>
+        <input name="selling_price" type="number" step="0.01" min="0" value="{{ item.selling_price or 0 }}" />
+      </div>
+    </div>
 
-            <div>
-                <label>Category</label>
-                <input name="category" value="{{ item.category or '' }}">
-            </div>
-
-            <div>
-                <label>Unit</label>
-                <input name="unit" value="{{ item.unit or 'pcs' }}">
-            </div>
-
-            <div>
-                <label>Reorder Level</label>
-                <input name="reorder_level" type="number" min="0" value="{{ item.reorder_level or 0 }}">
-            </div>
-
-            <div>
-                <label>Cost Price</label>
-                <input name="cost_price" type="number" step="0.01" min="0" value="{{ item.cost_price or 0 }}">
-            </div>
-
-            <div>
-                <label>Selling Price</label>
-                <input name="selling_price" type="number" step="0.01" min="0" value="{{ item.selling_price or 0 }}">
-            </div>
-
-            <div>
-                <div>
-                    <label>Adjust Stock Type</label>
-                    <select name="adjust_type">
-                        <option value="">No change</option>
-                        <option value="IN">IN (Add)</option>
-                        <option value="OUT">OUT (Remove)</option>
-                    </select>
-                </div>
-
-                <div>
-                    <label>Adjust Quantity</label>
-                    <input name="adjust_qty" type="number" min="0" value="0">
-                </div>
-
-                <div>
-                    <label>Adjustment Note</label>
-                    <input name="adjust_note" placeholder="Reason for adjustment">
-                </div>
-                <button class="btnPrimary" type="submit">Save</button>
-                <a class="btnGhost" href="/items/{{ item.id }}">Cancel</a>
-            </div>
+    <!-- Stock adjustment -->
+    <div class="card" style="background:rgba(79,124,255,.05);border-color:rgba(79,124,255,.2);margin-bottom:16px;">
+      <div class="badge b-purple" style="margin-bottom:12px;">STOCK ADJUSTMENT (optional)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:12px;">
+        <div>
+          <label>Type</label>
+          <select name="adjust_type">
+            <option value="">No change</option>
+            <option value="IN">IN — Add stock</option>
+            <option value="OUT">OUT — Remove stock</option>
+          </select>
         </div>
-    </form>
+        <div>
+          <label>Quantity</label>
+          <input name="adjust_qty" type="number" min="0" value="0" />
+        </div>
+        <div>
+          <label>Reason / Note</label>
+          <input name="adjust_note" placeholder="Reason for adjustment" />
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;">
+      <button class="btnPrimary" type="submit">Save Changes</button>
+      <a class="btnGhost" href="/items/{{ item.id }}">Cancel</a>
+    </div>
+  </form>
 </div>
 {% endblock %}

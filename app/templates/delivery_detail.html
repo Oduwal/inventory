@@ -1,152 +1,151 @@
-﻿<!-- app/templates/delivery_detail.html -->
 {% extends "base.html" %}
 {% block title %}Delivery #{{ d.id }}{% endblock %}
 {% block page_title %}Delivery #{{ d.id }}{% endblock %}
-{% block page_subtitle %}Customer, items, status updates, and money tracking.{% endblock %}
+{% block page_subtitle %}{{ d.customer_name }} — {{ d.status }}{% endblock %}
 {% set active = 'deliveries' %}
 
 {% block top_right %}
-<a class="btnGhost" href="{{ back_url or '/deliveries' }}">Back</a>
+<a class="btnGhost" href="{{ back_url or '/deliveries' }}">← Back</a>
 {% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="badge b-blue">DETAILS</div>
 
-    <div style="margin-top:12px; display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
-        <div>
-            <div class="muted">Customer</div>
-            <div style="font-weight:800; font-size:16px;">{{ d.customer_name }}</div>
-            <div class="muted" style="margin-top:6px;">Phone: {{ d.customer_phone or "-" }}</div>
-            <div class="muted">Address: {{ d.address or "-" }}</div>
-            {% if d.note %}
-            <div class="muted" style="margin-top:8px;">Note: {{ d.note }}</div>
-            {% endif %}
-        </div>
+{% if error %}
+<div class="alert alert-danger">⚠ {{ error }}</div>
+{% endif %}
 
-        <div>
-            <div class="muted">Delivery Date</div>
-            <div style="font-weight:700;margin-bottom:12px;">
-                {{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}
-            </div>
-
-            <div class="muted">Status</div>
-            <div style="margin-top:6px;">
-                {% if d.status == "DELIVERED" %}
-                <span class="badge b-green">{{ d.status }}</span>
-                {% elif d.status == "OUT_FOR_DELIVERY" %}
-                <span class="badge b-blue">{{ d.status }}</span>
-                {% elif d.status == "PENDING" %}
-                <span class="badge b-yellow">{{ d.status }}</span>
-                {% else %}
-                <span class="badge b-red">{{ d.status }}</span>
-                {% endif %}
-            </div>
-
-            <form method="post" action="/deliveries/{{ d.id }}/status" style="margin-top:12px;">
-                <div class="inputs">
-                    <div>
-                        <label>Update status</label>
-                        <select name="status">
-                            <option value="PENDING" {% if d.status=="PENDING" %}selected{% endif %}>PENDING</option>
-                            <option value="OUT_FOR_DELIVERY" {% if d.status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT_FOR_DELIVERY</option>
-                            <option value="DELIVERED" {% if d.status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
-                            <option value="FAILED" {% if d.status=="FAILED" %}selected{% endif %}>FAILED</option>
-                            <option value="RETURNED" {% if d.status=="RETURNED" %}selected{% endif %}>RETURNED</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <button class="btnPrimary" type="submit">Save</button>
-                    </div>
-                </div>
-
-                {% if error %}
-                <div class="badge b-red" style="margin-top:10px;">{{ error }}</div>
-                {% endif %}
-            </form>
-        </div>
+<!-- Customer & Status grid -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+  <div class="card">
+    <div class="badge b-blue" style="margin-bottom:14px;">CUSTOMER</div>
+    <div style="font-size:20px;font-weight:800;margin-bottom:10px;">{{ d.customer_name }}</div>
+    <div style="display:flex;flex-direction:column;gap:6px;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span style="color:var(--muted);font-size:12px;min-width:60px;">Phone</span>
+        <span style="font-size:13px;">{{ d.customer_phone or "—" }}</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span style="color:var(--muted);font-size:12px;min-width:60px;">Address</span>
+        <span style="font-size:13px;">{{ d.address or "—" }}</span>
+      </div>
+      {% if d.note %}
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-top:4px;">
+        <span style="color:var(--muted);font-size:12px;min-width:60px;">Note</span>
+        <span style="font-size:13px;color:var(--muted);">{{ d.note }}</span>
+      </div>
+      {% endif %}
     </div>
-</div>
+  </div>
 
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-purple">ITEMS</div>
-
-    <div style="margin-top:12px;">
-        <table>
-            <thead>
-                <tr>
-                    <th>Item</th>
-                    <th>Qty</th>
-                    <th>Amount Collected (₦)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% set line_total = 0 %}
-                {% for di, it in d_items %}
-                {% set line_total = line_total + (di.line_amount|float) %}
-                <tr>
-                    <td>{{ it.name }}</td>
-                    <td>{{ di.quantity }}</td>
-                    <td>{{ '%.2f'|format(di.line_amount|float) }}</td>
-                </tr>
-                {% endfor %}
-                <tr>
-                    <td colspan="2" style="font-weight:800;">Line Total</td>
-                    <td style="font-weight:800;">{{ '%.2f'|format(line_total) }}</td>
-                </tr>
-            </tbody>
-        </table>
+  <div class="card">
+    <div class="badge b-purple" style="margin-bottom:14px;">STATUS</div>
+    <div style="margin-bottom:16px;">
+      {% if d.status == "DELIVERED" %}<span class="badge b-green" style="font-size:14px;padding:8px 16px;">✓ DELIVERED</span>
+      {% elif d.status == "OUT_FOR_DELIVERY" %}<span class="badge b-blue" style="font-size:14px;padding:8px 16px;">🚚 OUT FOR DELIVERY</span>
+      {% elif d.status == "PENDING" %}<span class="badge b-yellow" style="font-size:14px;padding:8px 16px;">⏳ PENDING</span>
+      {% elif d.status == "FAILED" %}<span class="badge b-red" style="font-size:14px;padding:8px 16px;">✕ FAILED</span>
+      {% else %}<span class="badge" style="font-size:14px;padding:8px 16px;">{{ d.status }}</span>
+      {% endif %}
     </div>
-</div>
-
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-blue">RECORD EXPENSE OR EXTRA COLLECTION</div>
-
-    <div class="muted" style="margin-top:8px;">
-        Operating cash should be recorded from the Cash page, because it is not tied to a delivery.
+    <div style="color:var(--muted);font-size:12px;margin-bottom:12px;">
+      Delivery Date: <strong style="color:var(--text);">{{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}</strong>
     </div>
 
-    <form method="post" action="/cash/new" style="margin-top:12px;">
-        <input type="hidden" name="delivery_id" value="{{ d.id }}">
-
-        <div class="inputs">
-            <div>
-                <label>Type</label>
-                <select name="kind" required>
-                    <option value="COLLECTION">Extra Collection</option>
-                    <option value="EXPENSE">Expense</option>
-                </select>
-            </div>
-
-            <div>
-                <label>Amount</label>
-                <input type="number" name="amount" step="0.01" min="0.01" required />
-            </div>
-
-            <div style="min-width:240px;">
-                <label>Note</label>
-                <input type="text" name="note" placeholder="Fuel, dispatch, etc." />
-            </div>
-
-            <div>
-                <button class="btnPrimary" type="submit">Save</button>
-            </div>
+    <!-- [FIX-4] CSRF on status update -->
+    <form method="post" action="/deliveries/{{ d.id }}/status">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <div style="display:flex;gap:10px;align-items:flex-end;">
+        <div style="flex:1;">
+          <label>Update Status</label>
+          <select name="status">
+            <option value="PENDING" {% if d.status=="PENDING" %}selected{% endif %}>PENDING</option>
+            <option value="OUT_FOR_DELIVERY" {% if d.status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT FOR DELIVERY</option>
+            <option value="DELIVERED" {% if d.status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
+            <option value="FAILED" {% if d.status=="FAILED" %}selected{% endif %}>FAILED</option>
+            <option value="RETURNED" {% if d.status=="RETURNED" %}selected{% endif %}>RETURNED</option>
+          </select>
         </div>
+        <button class="btnPrimary" type="submit">Save</button>
+      </div>
     </form>
+  </div>
 </div>
 
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-green">DELIVERY FINANCE</div>
+<!-- Items table -->
+<div class="card" style="margin-bottom:16px;">
+  <div class="badge b-purple" style="margin-bottom:14px;">ORDER ITEMS</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th style="text-align:right;">Qty</th>
+        <th style="text-align:right;">Amount (₦)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set line_total = namespace(v=0) %}
+      {% for di, it in d_items %}
+      {% set line_total.v = line_total.v + (di.line_amount|float) %}
+      <tr>
+        <td style="font-weight:600;">{{ it.name }}</td>
+        <td style="text-align:right;">{{ di.quantity }}</td>
+        <td style="text-align:right;">{{ '%.2f'|format(di.line_amount|float) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr style="border-top:2px solid var(--border);">
+        <td colspan="2" style="font-weight:800;padding-top:12px;">Line Total</td>
+        <td style="text-align:right;font-weight:800;font-size:15px;color:#4ade80;padding-top:12px;">
+          ₦{{ '%.2f'|format(line_total.v) }}
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
 
-    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-        <span class="badge b-blue">Collected: {{ '%.2f'|format(collection_total) }}</span>
-        <span class="badge b-red">Expenses: {{ '%.2f'|format(expense_total) }}</span>
-        <span class="badge b-purple">Profit: {{ '%.2f'|format(collection_total - expense_total) }}</span>
-    </div>
+<!-- Finance summary -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+  <div class="card" style="border-top:3px solid #22c55e;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Collected</div>
+    <div style="font-size:24px;font-weight:800;color:#4ade80;">₦{{ '%.2f'|format(collection_total) }}</div>
+  </div>
+  <div class="card" style="border-top:3px solid #ef4444;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Expenses</div>
+    <div style="font-size:24px;font-weight:800;color:#f87171;">₦{{ '%.2f'|format(expense_total) }}</div>
+  </div>
+</div>
 
-    <div class="muted" style="margin-top:8px;">
-        Line totals come from the order form. Extra entries come from cash entries linked to this delivery.
+<!-- Record cash entry -->
+<div class="card">
+  <div class="badge b-blue" style="margin-bottom:6px;">RECORD EXPENSE / EXTRA COLLECTION</div>
+  <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Operating cash is recorded from the Cash page as it is not tied to a single delivery.</p>
+
+  <!-- [FIX-4] CSRF on cash entry -->
+  <form method="post" action="/cash/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <input type="hidden" name="delivery_id" value="{{ d.id }}">
+    <div class="inputs">
+      <div>
+        <label>Type</label>
+        <select name="kind" required>
+          <option value="COLLECTION">Extra Collection</option>
+          <option value="EXPENSE">Expense</option>
+        </select>
+      </div>
+      <div>
+        <label>Amount (₦)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" required />
+      </div>
+      <div style="min-width:200px;">
+        <label>Note</label>
+        <input type="text" name="note" placeholder="e.g. Fuel, dispatch fee" />
+      </div>
+      <div style="min-width:auto;flex:0;">
+        <label>&nbsp;</label>
+        <button class="btnPrimary" type="submit">Save</button>
+      </div>
     </div>
+  </form>
 </div>
 {% endblock %}

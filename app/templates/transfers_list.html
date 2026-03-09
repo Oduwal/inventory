@@ -2,6 +2,7 @@
 {% block title %}Stock Transfers{% endblock %}
 {% block page_title %}Stock Transfers{% endblock %}
 {% block page_subtitle %}Waybill packages sent between branches{% endblock %}
+{% set active = "transfers" %}
 
 {% block top_right %}
 {% if user and user.role == "ADMIN" %}
@@ -11,52 +12,58 @@
 
 {% block content %}
 
-{% set pending  = transfers | selectattr("status","eq","PENDING")   | list %}
-{% set received = transfers | selectattr("status","eq","RECEIVED")  | list %}
-{% set cancelled= transfers | selectattr("status","eq","CANCELLED") | list %}
+{% set pending   = transfers | selectattr("status","eq","PENDING")   | list %}
+{% set received  = transfers | selectattr("status","eq","RECEIVED")  | list %}
+{% set cancelled = transfers | selectattr("status","eq","CANCELLED") | list %}
 
 <!-- Summary strip -->
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px;">
-  <div class="card" style="text-align:center;border-top:3px solid #f59e0b;">
-    <div style="font-size:28px;font-weight:800;color:#f59e0b;">{{ pending|length }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Pending</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px;">
+  <div class="card" style="text-align:center;border-top:3px solid #f59e0b;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#fbbf24;">{{ pending|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">⏳ Pending</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;">
-    <div style="font-size:28px;font-weight:800;color:#22c55e;">{{ received|length }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Received</div>
+  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ received|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">✓ Received</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #ef4444;">
-    <div style="font-size:28px;font-weight:800;color:#ef4444;">{{ cancelled|length }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Cancelled</div>
+  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#f87171;">{{ cancelled|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">✕ Cancelled</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;">
-    <div style="font-size:28px;font-weight:800;color:#4f7cff;">{{ transfers|length }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Total</div>
+  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;padding:14px 16px;">
+    <div style="font-size:28px;font-weight:800;color:#7fa8ff;">{{ transfers|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Total</div>
   </div>
 </div>
 
-<!-- Incoming pending — highlight for receiving branch -->
+<!-- Incoming action required (for receiving branch admin) -->
 {% if user.role == "ADMIN" %}
 {% set incoming = transfers | selectattr("status","eq","PENDING") | selectattr("to_branch_id","eq", user.branch_id) | list %}
 {% if incoming %}
-<div class="card" style="border:1px solid rgba(245,158,11,.4);margin-bottom:20px;">
-  <div style="font-weight:700;margin-bottom:10px;color:#f59e0b;">📦 Incoming — Action Required</div>
+<div class="card" style="border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);margin-bottom:20px;">
+  <div style="font-weight:700;margin-bottom:12px;color:#fbbf24;font-size:15px;">📦 Incoming — Action Required</div>
   <table>
-    <thead><tr><th>#</th><th>From</th><th>Items</th><th>Sent</th><th>Note</th><th></th></tr></thead>
+    <thead>
+      <tr>
+        <th>#</th><th>From</th><th>Items</th><th>Sent</th><th>Note</th><th></th>
+      </tr>
+    </thead>
     <tbody>
       {% for t in incoming %}
       <tr>
         <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
-        <td>{{ t.from_branch.name }}</td>
+        <td style="font-weight:600;">{{ t.from_branch.name }}</td>
         <td>
           {% for line in t.items %}
-            <span class="badge b-blue">{{ line.quantity }} × {{ line.item.name }}</span>
+          <span class="badge b-blue" style="margin:2px;">{{ line.quantity }} × {{ line.item.name }}</span>
           {% endfor %}
         </td>
-        <td class="muted">{{ t.created_at.strftime("%d %b %Y") }}</td>
-        <td class="muted">{{ t.note or "—" }}</td>
+        <td style="color:var(--muted);">{{ t.created_at.strftime("%d %b %Y") }}</td>
+        <td style="color:var(--muted);">{{ t.note or "—" }}</td>
         <td>
+          <!-- [FIX-4] CSRF on receive -->
           <form method="post" action="/transfers/{{ t.id }}/receive" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
             <button class="btnPrimary" type="submit" style="padding:7px 14px;font-size:12px;">✓ Receive</button>
           </form>
         </td>
@@ -68,57 +75,44 @@
 {% endif %}
 {% endif %}
 
-<!-- All transfers table -->
+<!-- All transfers -->
 <div class="card">
-  <div style="font-weight:700;margin-bottom:12px;">All Transfers</div>
+  <div style="font-weight:700;margin-bottom:14px;">All Transfers</div>
   {% if transfers %}
   <div style="overflow-x:auto;">
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>From</th>
-        <th>To</th>
-        <th>Items</th>
-        <th>Status</th>
-        <th>Sent</th>
-        <th>Note</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for t in transfers %}
-      <tr>
-        <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
-        <td style="font-weight:600;">{{ t.from_branch.name }}</td>
-        <td style="font-weight:600;">{{ t.to_branch.name }}</td>
-        <td>
-          {% for line in t.items %}
-            <span class="badge b-blue" style="margin:2px;">{{ line.quantity }} × {{ line.item.name }}</span>
-          {% endfor %}
-        </td>
-        <td>
-          {% if t.status == "PENDING" %}
-            <span class="badge b-yellow">⏳ Pending</span>
-          {% elif t.status == "RECEIVED" %}
-            <span class="badge b-green">✓ Received</span>
-          {% else %}
-            <span class="badge b-red">✕ Cancelled</span>
-          {% endif %}
-        </td>
-        <td class="muted">{{ t.created_at.strftime("%d %b %Y") }}</td>
-        <td class="muted">{{ t.note or "—" }}</td>
-        <td>
-          <a href="/transfers/{{ t.id }}" class="btnGhost" style="padding:6px 12px;font-size:12px;">View</a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>From</th><th>To</th><th>Items</th>
+          <th>Status</th><th>Sent</th><th>Note</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in transfers %}
+        <tr>
+          <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
+          <td style="font-weight:600;">{{ t.from_branch.name }}</td>
+          <td style="font-weight:600;">{{ t.to_branch.name }}</td>
+          <td style="max-width:240px;">
+            {% for line in t.items %}
+            <span class="badge b-blue" style="margin:2px;font-size:11px;">{{ line.quantity }} × {{ line.item.name }}</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% if t.status == "PENDING" %}<span class="badge b-yellow">⏳ Pending</span>
+            {% elif t.status == "RECEIVED" %}<span class="badge b-green">✓ Received</span>
+            {% else %}<span class="badge b-red">✕ Cancelled</span>{% endif %}
+          </td>
+          <td style="color:var(--muted);white-space:nowrap;">{{ t.created_at.strftime("%d %b %Y") }}</td>
+          <td style="color:var(--muted);">{{ t.note or "—" }}</td>
+          <td><a href="/transfers/{{ t.id }}" class="btnGhost" style="padding:6px 12px;font-size:12px;">View</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% else %}
-  <div style="color:var(--muted);padding:40px 0;text-align:center;">No transfers yet.</div>
+  <div style="text-align:center;padding:50px;color:var(--muted);">No transfers yet.</div>
   {% endif %}
 </div>
-
 {% endblock %}

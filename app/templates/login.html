@@ -1,36 +1,42 @@
-﻿{% extends "base.html" %}
-{% block title %}Login{% endblock %}
+{% extends "base.html" %}
+{% block title %}Login — Inventory Keeper{% endblock %}
 {% block page_title %}{% endblock %}
 {% block page_subtitle %}{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="badge b-blue">SIGN IN</div>
-    <h2 style="margin:10px 0 4px;">Login</h2>
-    <div class="muted small">Enter your username and password to continue.</div>
+<div style="max-width:420px;margin:60px auto;">
+  <div style="text-align:center;margin-bottom:28px;">
+    <div style="width:52px;height:52px;border-radius:16px;margin:0 auto 14px;
+      background:linear-gradient(135deg,#4f7cff,#8b5cf6);
+      box-shadow:0 8px 24px rgba(79,124,255,.4);
+      display:flex;align-items:center;justify-content:center;font-size:22px;">📦</div>
+    <h1 style="font-size:22px;font-weight:800;margin-bottom:4px;">Inventory Keeper</h1>
+    <p style="color:var(--muted);font-size:13px;">Sign in to your account</p>
+  </div>
 
+  <div class="card" style="padding:28px;">
     {% if error %}
-    <div class="card" style="margin-top:12px; border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.10);">
-        <span class="badge b-red">{{ error }}</span>
-    </div>
+    <div class="alert alert-danger" style="margin-bottom:20px;">⚠ {{ error }}</div>
     {% endif %}
 
-    <form method="post" action="/login" style="margin-top:14px;">
-        <div style="margin-bottom:10px;">
-            <label>Username</label>
-            <input name="username" required />
-        </div>
+    <!-- [FIX-4] CSRF token -->
+    <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
 
-        <div style="margin-bottom:12px;">
-            <label>Password</label>
-            <input name="password" type="password" required />
-        </div>
+      <div style="margin-bottom:16px;">
+        <label>Username</label>
+        <input name="username" required autocomplete="username" placeholder="Enter your username" />
+      </div>
 
-        <button class="btnPrimary" type="submit" style="width:100%;">Login</button>
+      <div style="margin-bottom:22px;">
+        <label>Password</label>
+        <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+      </div>
+
+      <button class="btnPrimary" type="submit" style="width:100%;justify-content:center;padding:12px;">
+        Sign In →
+      </button>
     </form>
-
-    <div class="muted small" style="margin-top:12px;">
-        Admin can be created from <span class="badge b-purple">/create-admin</span> if no admin exists.
-    </div>
+  </div>
 </div>
 {% endblock %}

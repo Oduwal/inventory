@@ -1,112 +1,93 @@
 {% extends "base.html" %}
-{% block title %}Stale Stock<script>
-// Set the correct selected option based on current days value
-const sel = document.getElementById('days-select');
-if (sel) {
-  const current = "{{ days }}";
-  for (let opt of sel.options) {
-    if (opt.value === current) { opt.selected = true; break; }
-  }
-}
-</script>
-{% endblock %}
+{% block title %}Stale Stock{% endblock %}
 {% block page_title %}Stale Stock Alert{% endblock %}
 {% block page_subtitle %}Items with stock that haven't moved in a while{% endblock %}
 {% set active = 'stale' %}
 
 {% block content %}
 <style>
-  .stale-badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
-  .stale-critical { background:rgba(239,68,68,.15); color:#ef4444; border:1px solid rgba(239,68,68,.3); }
-  .stale-warning  { background:rgba(251,191,36,.15); color:#f59e0b; border:1px solid rgba(251,191,36,.3); }
-  .stale-mild     { background:rgba(99,102,241,.15);  color:#818cf8; border:1px solid rgba(99,102,241,.3); }
-  .bar { height:6px; border-radius:3px; background:rgba(255,255,255,.07); overflow:hidden; min-width:80px; }
-  .bar-fill { height:100%; border-radius:3px; }
+  .stale-critical{background:rgba(239,68,68,.14);color:#f87171;border:1px solid rgba(239,68,68,.3);}
+  .stale-warning{background:rgba(245,158,11,.14);color:#fbbf24;border:1px solid rgba(245,158,11,.3);}
+  .stale-mild{background:rgba(139,92,246,.14);color:#a78bfa;border:1px solid rgba(139,92,246,.3);}
 </style>
 
 <!-- Filter -->
 <div class="card" style="margin-bottom:16px;">
-  <form method="get" action="/stale-stock" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+  <form method="get" action="/stale-stock" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
     <div>
       <label>Inactive for more than</label>
-      <select name="days" id="days-select" onchange="this.form.submit()">
-        <option value="7">7 days</option>
-        <option value="14" {% if days == 14 %}selected{% endif %}>14 days</option>
-        <option value="30" {% if days == 30 %}selected{% endif %}>30 days</option>
-        <option value="60" {% if days == 60 %}selected{% endif %}>60 days</option>
+      <select name="days" id="days-select" onchange="this.form.submit()" style="width:auto;">
+        <option value="7" {% if days|int == 7 %}selected{% endif %}>7 days</option>
+        <option value="14" {% if days|int == 14 %}selected{% endif %}>14 days</option>
+        <option value="30" {% if days|int == 30 %}selected{% endif %}>30 days</option>
+        <option value="60" {% if days|int == 60 %}selected{% endif %}>60 days</option>
       </select>
     </div>
-    <div style="color:var(--muted);font-size:13px;padding-bottom:10px;">
-      Showing <strong style="color:var(--text);">{{ rows|length }}</strong> items with stock untouched for {{ days }}+ days
+    <div style="padding-bottom:11px;color:var(--muted);font-size:13px;">
+      Showing <strong style="color:var(--text);">{{ rows|length }}</strong> items idle for {{ days }}+ days
     </div>
   </form>
 </div>
 
 {% if rows %}
-<!-- Summary Strip -->
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
-  <div class="card" style="padding:14px 16px;">
-    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Total Stale Items</div>
-    <div style="font-size:24px;font-weight:800;color:#ef4444;margin-top:4px;">{{ rows|length }}</div>
+<!-- Summary -->
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px;">
+  <div class="card" style="padding:14px 16px;border-top:3px solid #ef4444;text-align:center;">
+    <div style="font-size:26px;font-weight:800;color:#f87171;">{{ rows | selectattr('days_since', 'ge', 30) | list | length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Critical (30+ days)</div>
   </div>
-  <div class="card" style="padding:14px 16px;">
-    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Critical (30+ days)</div>
-    <div style="font-size:24px;font-weight:800;color:#ef4444;margin-top:4px;">
-      {{ rows | selectattr('days_since', 'ge', 30) | list | length }}
-    </div>
+  <div class="card" style="padding:14px 16px;border-top:3px solid #f59e0b;text-align:center;">
+    <div style="font-size:26px;font-weight:800;color:#fbbf24;">{{ rows | selectattr('days_since', 'ge', 14) | selectattr('days_since', 'lt', 30) | list | length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Warning (14–29 days)</div>
   </div>
-  <div class="card" style="padding:14px 16px;">
-    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Warning (14–29 days)</div>
-    <div style="font-size:24px;font-weight:800;color:#f59e0b;margin-top:4px;">
-      {{ rows | selectattr('days_since', 'ge', 14) | selectattr('days_since', 'lt', 30) | list | length }}
-    </div>
+  <div class="card" style="padding:14px 16px;border-top:3px solid #8b5cf6;text-align:center;">
+    <div style="font-size:26px;font-weight:800;color:#a78bfa;">{{ rows | selectattr('days_since', 'lt', 14) | list | length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Mild (7–13 days)</div>
   </div>
-  <div class="card" style="padding:14px 16px;">
-    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Mild (7–13 days)</div>
-    <div style="font-size:24px;font-weight:800;color:#818cf8;margin-top:4px;">
-      {{ rows | selectattr('days_since', 'lt', 14) | list | length }}
-    </div>
+  <div class="card" style="padding:14px 16px;border-top:3px solid #4f7cff;text-align:center;">
+    <div style="font-size:26px;font-weight:800;color:#7fa8ff;">{{ rows|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Total Stale Items</div>
   </div>
 </div>
 
-<!-- Table -->
 <div class="card">
   <div style="overflow-x:auto;">
-    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <table>
       <thead>
         <tr>
-          <th style="text-align:left;padding:10px 12px;background:rgba(79,124,255,.1);color:var(--muted);font-size:11px;text-transform:uppercase;">Item</th>
-          <th style="text-align:left;padding:10px 12px;background:rgba(79,124,255,.1);color:var(--muted);font-size:11px;text-transform:uppercase;">Category</th>
-          <th style="text-align:center;padding:10px 12px;background:rgba(79,124,255,.1);color:var(--muted);font-size:11px;text-transform:uppercase;">Stock</th>
-          <th style="text-align:left;padding:10px 12px;background:rgba(79,124,255,.1);color:var(--muted);font-size:11px;text-transform:uppercase;">Last Movement</th>
-          <th style="text-align:center;padding:10px 12px;background:rgba(79,124,255,.1);color:var(--muted);font-size:11px;text-transform:uppercase;">Days Idle</th>
-          <th style="padding:10px 12px;background:rgba(79,124,255,.1);"></th>
+          <th>Item</th>
+          <th>Category</th>
+          <th style="text-align:right;">Stock</th>
+          <th>Last Movement</th>
+          <th style="text-align:center;">Days Idle</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
-        {% set ds = row.days_since %}
-        <tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:12px;font-weight:600;">{{ row.item.name }}</td>
-          <td style="padding:12px;color:var(--muted);">{{ row.item.category or '—' }}</td>
-          <td style="padding:12px;text-align:center;">
-            <span style="font-weight:700;color:{% if row.stock > 10 %}#22c55e{% elif row.stock > 3 %}#f59e0b{% else %}#ef4444{% endif %}">
+        <tr>
+          <td style="font-weight:700;">{{ row.item.name }}</td>
+          <td>
+            {% if row.item.category %}
+            <span class="badge b-blue" style="font-size:11px;">{{ row.item.category }}</span>
+            {% else %}<span style="color:var(--muted);">—</span>{% endif %}
+          </td>
+          <td style="text-align:right;font-weight:700;">
+            <span style="color:{% if row.stock > 10 %}#4ade80{% elif row.stock > 3 %}#fbbf24{% else %}#f87171{% endif %}">
               {{ row.stock }}
             </span>
           </td>
-          <td style="padding:12px;color:var(--muted);">
-            {% if row.last_tx %}
-              {{ row.last_tx.strftime('%d %b %Y') }}
-            {% else %}
-              <span style="color:#ef4444">Never moved</span>
-            {% endif %}
+          <td style="color:var(--muted);">
+            {% if row.last_tx %}{{ row.last_tx.strftime('%d %b %Y') }}
+            {% else %}<span style="color:#f87171;font-weight:600;">Never moved</span>{% endif %}
           </td>
-          <td style="padding:12px;text-align:center;">
-            <span class="stale-badge {% if ds >= 30 %}stale-critical{% elif ds >= 14 %}stale-warning{% else %}stale-mild{% endif %}">
-              {% if ds >= 9999 %}∞{% else %}{{ ds }}d{% endif %}
+          <td style="text-align:center;">
+            <span class="badge {% if row.days_since >= 30 %}stale-critical{% elif row.days_since >= 14 %}stale-warning{% else %}stale-mild{% endif %}"
+                  style="font-size:11px;padding:4px 10px;border-radius:999px;">
+              {% if row.days_since >= 9999 %}∞{% else %}{{ row.days_since }}d{% endif %}
             </span>
           </td>
-          <td style="padding:12px;">
+          <td>
             <a href="/items/{{ row.item.id }}" class="btnGhost" style="padding:6px 12px;font-size:12px;">View</a>
           </td>
         </tr>
@@ -117,10 +98,10 @@ if (sel) {
 </div>
 
 {% else %}
-<div class="card" style="text-align:center;padding:40px;">
-  <div style="font-size:40px;margin-bottom:12px;">✅</div>
-  <div style="font-weight:700;font-size:16px;">All clear!</div>
-  <div class="muted" style="margin-top:6px;">No items with stock have been idle for {{ days }}+ days.</div>
+<div class="card" style="text-align:center;padding:60px 20px;">
+  <div style="font-size:48px;margin-bottom:14px;">✅</div>
+  <div style="font-size:18px;font-weight:700;margin-bottom:8px;">All clear!</div>
+  <div style="color:var(--muted);font-size:13px;">No items with stock have been idle for {{ days }}+ days.</div>
 </div>
 {% endif %}
 

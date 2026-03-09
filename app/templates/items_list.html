@@ -1,99 +1,100 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Items{% endblock %}
 {% block page_title %}Items{% endblock %}
-{% block page_subtitle %}Manage products, categories (merchants), and stock levels.{% endblock %}
+{% block page_subtitle %}Manage products, categories, and stock levels.{% endblock %}
 {% set active = "items" %}
 
 {% block top_right %}
-<div style="display:flex; gap:10px; flex-wrap:wrap;">
-    {% if user and user.role == "ADMIN" %}
-    <a class="btnPrimary" href="/items/new">+ New Item</a>
-    <a class="btnGhost" href="/items/import">Import</a>
-    {% endif %}
+<div style="display:flex;gap:10px;flex-wrap:wrap;">
+  {% if user and user.role == "ADMIN" %}
+  <a class="btnPrimary" href="/items/new">+ New Item</a>
+  <a class="btnGhost" href="/items/import">⬆ Import</a>
+  {% endif %}
 </div>
 {% endblock %}
 
 {% block content %}
 
-<div class="card">
-    <div class="badge b-blue">FILTERS</div>
-
-    <form method="get" action="/items" style="margin-top:12px;">
-        <div class="inputs">
-            <div style="min-width:240px;">
-                <label>Search</label>
-                <input type="text" name="q" value="{{ q or '' }}" placeholder="Search name / SKU / category" />
-            </div>
-
-            <div>
-                <button class="btnPrimary" type="submit">Apply</button>
-            </div>
-
-            <div>
-                <a class="btnGhost" href="/items">Reset</a>
-            </div>
-        </div>
-    </form>
-</div>
-
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-purple">ITEMS</div>
-
-    <div style="margin-top:12px; overflow:auto;">
-        <table>
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>SKU</th>
-                    <th>Category / Merchant</th>
-                    <th>Unit</th>
-                    <th>Stock</th>
-                    <th>Reorder</th>
-                    <th>Action</th>
-                </tr>
-            </thead>
-
-            <tbody>
-                {% if rows and rows|length > 0 %}
-                {% for item, stock in rows %}
-                <tr>
-                    <td style="font-weight:800;">
-                        <a href="/items/{{ item.id }}" style="color:inherit; text-decoration:underline;">
-                            {{ item.name }}
-                        </a>
-                    </td>
-
-                    <td>{{ item.sku or "-" }}</td>
-                    <td>{{ item.category or "-" }}</td>
-                    <td>{{ item.unit or "pcs" }}</td>
-
-                    <td>
-                        {% set rl = (item.reorder_level or 0) %}
-                        {% if (stock|int) <= (rl|int) %}
-                        <span class="badge b-red">{{ stock }}</span>
-                        {% else %}
-                        <span class="badge b-green">{{ stock }}</span>
-                        {% endif %}
-                    </td>
-
-                    <td>{{ item.reorder_level or 0 }}</td>
-
-                    <td style="white-space:nowrap;">
-                        <a class="btnPrimary" href="/items/{{ item.id }}">View</a>
-                        {% if user and user.role == "ADMIN" %}
-                        <a class="btnGhost" href="/items/{{ item.id }}/edit">Edit</a>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-                {% else %}
-                <tr>
-                    <td colspan="7" class="muted">No items found.</td>
-                </tr>
-                {% endif %}
-            </tbody>
-        </table>
+<!-- Search -->
+<div class="card" style="margin-bottom:16px;">
+  <form method="get" action="/items" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="flex:1;min-width:220px;">
+      <label>Search</label>
+      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search by name, SKU or category…" />
     </div>
+    <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Search</button></div>
+    <div><label>&nbsp;</label><a class="btnGhost" href="/items">Reset</a></div>
+  </form>
 </div>
 
+<!-- Items table -->
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <span class="badge b-purple">ITEMS</span>
+    <span style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} item{% if rows|length != 1 %}s{% endif %}</span>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>SKU</th>
+          <th>Category</th>
+          <th>Unit</th>
+          <th style="text-align:right;">Stock</th>
+          <th style="text-align:right;">Reorder</th>
+          <th style="text-align:right;">Cost</th>
+          <th style="text-align:right;">Price</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if rows and rows|length > 0 %}
+        {% for item, stock in rows %}
+        <tr>
+          <td>
+            <a href="/items/{{ item.id }}" style="font-weight:700;color:var(--text);">
+              {{ item.name }}
+            </a>
+          </td>
+          <td style="color:var(--muted);">{{ item.sku or "—" }}</td>
+          <td>
+            {% if item.category %}
+            <span class="badge b-blue" style="font-size:11px;">{{ item.category }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="color:var(--muted);">{{ item.unit or "pcs" }}</td>
+          <td style="text-align:right;">
+            {% set rl = (item.reorder_level or 0)|int %}
+            {% if stock|int <= 0 %}
+            <span class="badge b-red">{{ stock }}</span>
+            {% elif stock|int <= rl %}
+            <span class="badge b-yellow">{{ stock }}</span>
+            {% else %}
+            <span class="badge b-green">{{ stock }}</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;color:var(--muted);">{{ item.reorder_level or 0 }}</td>
+          <td style="text-align:right;color:var(--muted);">₦{{ '%.0f'|format(item.cost_price|float) }}</td>
+          <td style="text-align:right;font-weight:600;">₦{{ '%.0f'|format(item.selling_price|float) }}</td>
+          <td style="white-space:nowrap;">
+            <a class="btnGhost" href="/items/{{ item.id }}" style="padding:6px 12px;font-size:12px;">View</a>
+            {% if user and user.role == "ADMIN" %}
+            <a class="btnGhost" href="/items/{{ item.id }}/edit" style="padding:6px 12px;font-size:12px;">Edit</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr>
+          <td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">
+            No items found.{% if q %} Try a different search term.{% endif %}
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

@@ -1,44 +1,48 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}New Agent{% endblock %}
 {% block page_title %}New Agent{% endblock %}
-{% block page_subtitle %}Create a new agent account.{% endblock %}
+{% block page_subtitle %}Create a new delivery agent account.{% endblock %}
 {% set active = "agents" %}
 
+{% block top_right %}
+<a class="btnGhost" href="/agents">← Back</a>
+{% endblock %}
+
 {% block content %}
-<div class="card">
-    <div class="badge b-blue">NEW AGENT</div>
+<div class="card" style="max-width:600px;">
+  <div class="badge b-blue" style="margin-bottom:16px;">NEW AGENT</div>
 
-    {% if error %}
-    <div class="badge b-red" style="margin-top:12px;">{{ error }}</div>
-    {% endif %}
+  {% if error %}
+  <div class="alert alert-danger">⚠ {{ error }}</div>
+  {% endif %}
 
-    <form method="post" action="/agents/new" style="margin-top:12px;">
-        <div class="inputs">
-            <div>
-                <label>Username</label>
-                <input name="username" required>
-            </div>
+  <!-- [FIX-4] CSRF token -->
+  <form method="post" action="/agents/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
 
-            <div>
-                <label>Password</label>
-                <input name="password" type="password" required>
-            </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+      <div>
+        <label>Username *</label>
+        <input name="username" required placeholder="e.g. john_doe" autocomplete="off" />
+      </div>
+      <div>
+        <label>Password * (min 8 chars)</label>
+        <input name="password" type="password" required placeholder="••••••••" autocomplete="new-password" />
+      </div>
+      <div>
+        <label>Full Name</label>
+        <input name="full_name" placeholder="Optional" />
+      </div>
+      <div>
+        <label>Phone</label>
+        <input name="phone" placeholder="Optional" />
+      </div>
+    </div>
 
-            <div>
-                <label>Full name</label>
-                <input name="full_name">
-            </div>
-
-            <div>
-                <label>Phone</label>
-                <input name="phone">
-            </div>
-
-            <div>
-                <button class="btnPrimary" type="submit">Create</button>
-                <a class="btnGhost" href="/agents">Cancel</a>
-            </div>
-        </div>
-    </form>
+    <div style="display:flex;gap:10px;">
+      <button class="btnPrimary" type="submit">Create Agent</button>
+      <a class="btnGhost" href="/agents">Cancel</a>
+    </div>
+  </form>
 </div>
 {% endblock %}
