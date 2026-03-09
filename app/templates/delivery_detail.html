@@ -29,18 +29,7 @@
             <div style="font-weight:700;margin-bottom:12px;">
                 {{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}
             </div>
-            <form method="post" action="/deliveries/{{ d.id }}/date" style="margin-bottom:14px;">
-                <div class="inputs">
-                    <div>
-                        <label>Change Date</label>
-                        <input type="date" name="delivery_date"
-                            value="{{ (d.delivery_date or d.created_at).strftime('%Y-%m-%d') }}" />
-                    </div>
-                    <div>
-                        <button class="btnGhost" type="submit" style="margin-top:auto;">Update</button>
-                    </div>
-                </div>
-            </form>
+
             <div class="muted">Status</div>
             <div style="margin-top:6px;">
                 {% if d.status == "DELIVERED" %}

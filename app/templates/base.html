@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -194,7 +194,7 @@
       <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🔄</span>Transactions
       </a>
-      {% if role == "ADMIN" %}
+      {% if role == "ADMIN" or role == "SUPERVISOR" %}
       <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
         <span class="nav-icon">⚠️</span>Low Stock
       </a>

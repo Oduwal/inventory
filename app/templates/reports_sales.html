@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Sales Report{% endblock %}
 {% block page_title %}Sales Report{% endblock %}
 {% block page_subtitle %}Preview your report before downloading{% endblock %}
@@ -6,212 +6,108 @@
 
 {% block content %}
 <style>
-    .rpt-kpi {
-        display: grid;
-        grid-template-columns: repeat(auto-fit,minmax(160px,1fr));
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-
-    .rpt-kpi-card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 16px;
-        padding: 16px 18px;
-    }
-
-        .rpt-kpi-card .lbl {
-            font-size: 11px;
-            color: var(--muted);
-            text-transform: uppercase;
-            letter-spacing: .06em;
-            margin-bottom: 4px;
-        }
-
-        .rpt-kpi-card .val {
-            font-size: 22px;
-            font-weight: 800;
-        }
-
-    .preview-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-    }
-
-        .preview-table th {
-            background: rgba(79,124,255,.12);
-            color: var(--muted);
-            font-size: 11px;
-            text-transform: uppercase;
-            padding: 8px 12px;
-            text-align: left;
-        }
-
-        .preview-table td {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .preview-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .preview-table .item-pill {
-            display: inline-block;
-            background: rgba(139,92,246,.15);
-            border: 1px solid rgba(139,92,246,.3);
-            border-radius: 8px;
-            padding: 2px 8px;
-            font-size: 12px;
-            margin: 2px;
-        }
-
-    .section-header {
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: .08em;
-        color: var(--muted);
-        padding: 10px 12px;
-        background: rgba(0,0,0,.15);
-    }
-
-    .filter-bar {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        align-items: flex-end;
-    }
-
-    #preview-area {
-        display: none;
-        margin-top: 20px;
-    }
-
-    .spinner {
-        display: none;
-        width: 20px;
-        height: 20px;
-        border: 2px solid rgba(79,124,255,.3);
-        border-top-color: #4f7cff;
-        border-radius: 50%;
-        animation: spin .7s linear infinite;
-    }
-
-    @keyframes spin {
-        to {
-            transform: rotate(360deg);
-        }
-    }
-
-    .expense-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        font-size: 13px;
-    }
-
-        .expense-row:last-child {
-            border-bottom: none;
-        }
-
-    .remittance-box {
-        background: linear-gradient(135deg,rgba(79,124,255,.15),rgba(139,92,246,.15));
-        border: 1px solid rgba(79,124,255,.3);
-        border-radius: 14px;
-        padding: 18px 20px;
-        margin-top: 16px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
+  .rpt-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
+  .rpt-kpi-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px 18px; }
+  .rpt-kpi-card .lbl { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
+  .rpt-kpi-card .val { font-size:22px; font-weight:800; }
+  .preview-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .preview-table th { background:rgba(79,124,255,.12); color:var(--muted); font-size:11px; text-transform:uppercase; padding:8px 12px; text-align:left; }
+  .preview-table td { padding:10px 12px; border-bottom:1px solid var(--border); }
+  .preview-table tr:last-child td { border-bottom:none; }
+  .preview-table .item-pill { display:inline-block; background:rgba(139,92,246,.15); border:1px solid rgba(139,92,246,.3); border-radius:8px; padding:2px 8px; font-size:12px; margin:2px; }
+  .section-header { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:10px 12px; background:rgba(0,0,0,.15); }
+  .filter-bar { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  #preview-area { display:none; margin-top:20px; }
+  .spinner { display:none; width:20px; height:20px; border:2px solid rgba(79,124,255,.3); border-top-color:#4f7cff; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .expense-row { display:flex; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--border); font-size:13px; }
+  .expense-row:last-child { border-bottom:none; }
+  .remittance-box { background:linear-gradient(135deg,rgba(79,124,255,.15),rgba(139,92,246,.15)); border:1px solid rgba(79,124,255,.3); border-radius:14px; padding:18px 20px; margin-top:16px; display:flex; justify-content:space-between; align-items:center; }
 </style>
 
 <!-- Filter Card -->
 <div class="card">
-    <div class="badge b-blue" style="margin-bottom:14px;">FILTER</div>
-    <div class="filter-bar">
-        <div>
-            <label>Start Date</label>
-            <input type="date" id="f_start" value="{{ start_date or '' }}">
-        </div>
-        <div>
-            <label>End Date</label>
-            <input type="date" id="f_end" value="{{ end_date or '' }}">
-        </div>
-        {% if user.role == "ADMIN" %}
-        <div>
-            <label>Agent</label>
-            <select id="f_agent">
-                <option value="">All agents</option>
-                {% for a in agents %}
-                <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        {% endif %}
-        <div>
-            <button class="btnPrimary" onclick="loadPreview()" style="display:flex;align-items:center;gap:8px;">
-                <div class="spinner" id="spinner"></div>
-                Preview Report
-            </button>
-        </div>
+  <div class="badge b-blue" style="margin-bottom:14px;">FILTER</div>
+  <div class="filter-bar">
+    <div>
+      <label>Start Date</label>
+      <input type="date" id="f_start" value="{{ start_date or '' }}">
     </div>
+    <div>
+      <label>End Date</label>
+      <input type="date" id="f_end" value="{{ end_date or '' }}">
+    </div>
+    {% if user.role == "ADMIN" %}
+    <div>
+      <label>Agent</label>
+      <select id="f_agent">
+        <option value="">All agents</option>
+        {% for a in agents %}
+        <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div>
+      <button class="btnPrimary" onclick="loadPreview()" style="display:flex;align-items:center;gap:8px;">
+        <div class="spinner" id="spinner"></div>
+        Preview Report
+      </button>
+    </div>
+  </div>
 </div>
 
 <!-- Preview Area -->
 <div id="preview-area">
 
-    <!-- KPI Strip -->
-    <div class="rpt-kpi" id="kpi-strip"></div>
+  <!-- KPI Strip -->
+  <div class="rpt-kpi" id="kpi-strip"></div>
 
-    <!-- Deliveries Table -->
-    <div class="card" style="margin-bottom:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <div class="badge b-purple">DELIVERIES</div>
-            <span id="delivery-count" class="muted small"></span>
-        </div>
-        <div style="overflow-x:auto;">
-            <table class="preview-table" id="deliveries-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Customer</th>
-                        <th>Date</th>
-                        <th>Items</th>
-                        <th style="text-align:right;">Amount</th>
-                    </tr>
-                </thead>
-                <tbody id="deliveries-body"></tbody>
-            </table>
-        </div>
+  <!-- Deliveries Table -->
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div class="badge b-purple">DELIVERIES</div>
+      <span id="delivery-count" class="muted small"></span>
     </div>
-
-    <!-- Expenses -->
-    <div class="card" style="margin-bottom:16px;">
-        <div class="badge b-red" style="margin-bottom:12px;">EXPENSES</div>
-        <div class="section-header">Agent Expenses</div>
-        <div id="agent-expenses"></div>
-        <div class="section-header" style="margin-top:8px;">Office Expenses</div>
-        <div id="office-expenses"></div>
-
-        <!-- Remittance -->
-        <div class="remittance-box">
-            <div>
-                <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Amount to Remit</div>
-                <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="remittance-formula"></div>
-            </div>
-            <div style="font-size:26px;font-weight:800;color:#4f7cff;" id="remittance-val"></div>
-        </div>
+    <div style="overflow-x:auto;">
+      <table class="preview-table" id="deliveries-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Customer</th>
+            <th>Date</th>
+            <th>Items</th>
+            <th style="text-align:right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody id="deliveries-body"></tbody>
+      </table>
     </div>
+  </div>
 
-    <!-- Download Button -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <a id="download-btn" class="btnPrimary" style="text-decoration:none;">⬇ Download TXT</a>
-        <button class="btnGhost" onclick="copyReport()">📋 Copy to Clipboard</button>
+  <!-- Expenses -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="badge b-red" style="margin-bottom:12px;">EXPENSES</div>
+    <div class="section-header">Agent Expenses</div>
+    <div id="agent-expenses"></div>
+    <div class="section-header" style="margin-top:8px;">Office Expenses</div>
+    <div id="office-expenses"></div>
+
+    <!-- Remittance -->
+    <div class="remittance-box">
+      <div>
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Amount to Remit</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="remittance-formula"></div>
+      </div>
+      <div style="font-size:26px;font-weight:800;color:#4f7cff;" id="remittance-val"></div>
     </div>
+  </div>
+
+  <!-- Download Button -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <a id="download-btn" class="btnPrimary" style="text-decoration:none;">⬇ Download TXT</a>
+    <button class="btnGhost" onclick="copyReport()">📋 Copy to Clipboard</button>
+  </div>
 </div>
 
 <script>
@@ -263,12 +159,48 @@ async function loadPreview() {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:20px;">No deliveries found</td></tr>';
   }
 
-  // Agent expenses
+  // Agent operating cash & expenses
   const ae = document.getElementById('agent-expenses');
-  ae.innerHTML = data.agent_expenses.length
-    ? data.agent_expenses.map(e => `<div class="expense-row"><span>${e.name}</span><span style="font-weight:700;color:#ef4444">${fmt(e.amount)}</span></div>`).join('')
-      + `<div class="expense-row" style="font-weight:700"><span>Total Agent Expenses</span><span style="color:#ef4444">${fmt(data.total_agent_expenses)}</span></div>`
-    : '<div class="expense-row" style="color:var(--muted)">None</div>';
+  if (data.agent_op_summary && data.agent_op_summary.length) {
+    let html = '';
+    data.agent_op_summary.forEach(a => {
+      if (a.has_op_cash) {
+        const balColor = a.balance >= 0 ? '#22c55e' : '#ef4444';
+        const balLabel = a.balance >= 0 ? 'Balance to return' : 'Overspent (from collection)';
+        html += `<div class="expense-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 0;border-bottom:1px solid var(--border)">
+          <span style="font-weight:700">${a.name}</span>
+          <div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
+            <span style="color:var(--muted)">Operating cash given</span><span>${fmt(a.op_cash)}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
+            <span style="color:var(--muted)">Expenses spent</span><span style="color:#ef4444">− ${fmt(a.expenses)}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;width:100%;font-size:13px;font-weight:700">
+            <span>${balLabel}</span><span style="color:${balColor}">${fmt(Math.abs(a.balance))}</span>
+          </div>
+        </div>`;
+      } else {
+        html += `<div class="expense-row">
+          <span>${a.name} <span style="font-size:11px;color:#f59e0b">(no op cash — deducted from collection)</span></span>
+          <span style="color:#ef4444;font-weight:700">${fmt(a.expenses)}</span>
+        </div>`;
+      }
+    });
+    if (data.total_op_cash_given > 0) {
+      html += `<div class="expense-row" style="font-weight:700;margin-top:6px;">
+        <span>Total Operating Cash Given</span><span>${fmt(data.total_op_cash_given)}</span>
+      </div>`;
+      html += `<div class="expense-row" style="font-weight:700">
+        <span>Total Balance to Return</span><span style="color:#22c55e">${fmt(data.total_op_cash_balance_returned)}</span>
+      </div>`;
+    }
+    html += `<div class="expense-row" style="font-weight:700">
+      <span>Total Agent Expenses</span><span style="color:#ef4444">${fmt(data.total_agent_expenses)}</span>
+    </div>`;
+    ae.innerHTML = html;
+  } else {
+    ae.innerHTML = '<div class="expense-row" style="color:var(--muted)">None</div>';
+  }
 
   // Office expenses
   document.getElementById('office-expenses').innerHTML = `
@@ -279,7 +211,16 @@ async function loadPreview() {
 
   // Remittance
   document.getElementById('remittance-val').textContent = fmt(data.remittance);
-  document.getElementById('remittance-formula').textContent = `${fmt(data.grand_total)} − ${fmt(data.total_expenses)}`;
+  if (data.is_agent) {
+    if (data.expenses_from_collections > 0) {
+      document.getElementById('remittance-formula').textContent =
+        `${fmt(data.grand_total)} − ${fmt(data.expenses_from_collections)} (uncovered expenses)`;
+    } else {
+      document.getElementById('remittance-formula').textContent = `Collections only — expenses covered by operating cash`;
+    }
+  } else {
+    document.getElementById('remittance-formula').textContent = `${fmt(data.grand_total)} − ${fmt(data.total_expenses)}`;
+  }
 
   // Download link
   const dlParams = new URLSearchParams({start_date: start, end_date: end});
@@ -297,11 +238,33 @@ function copyReport() {
     const items = r.items.map(i => `${i.qty} ${i.name}`).join(' + ');
     txt += `(${r.idx})\t${items}\t${fmt(r.total)}\n`;
   });
-  txt += `\nGrand Total: ${fmt(d.grand_total)}\n\nExpenses:\n`;
-  d.agent_expenses.forEach(e => txt += `${e.name}: ${fmt(e.amount)}\n`);
-  txt += `Total Agent Expenses: ${fmt(d.total_agent_expenses)}\n`;
-  txt += `Waybills: ${fmt(d.waybill_total)}\nOther Office: ${fmt(d.other_office_expenses)}\nTotal Office: ${fmt(d.total_office_expenses)}\n`;
-  txt += `\nRemittance: ${fmt(d.grand_total)} - ${fmt(d.total_expenses)} = ${fmt(d.remittance)}`;
+  txt += `\nGrand Total: ${fmt(d.grand_total)}\n\n`;
+
+  if (d.is_agent) {
+    txt += `Operating Cash & Expenses:\n`;
+    (d.agent_op_summary || []).forEach(a => {
+      txt += `  ${a.name}:\n`;
+      if (a.has_op_cash) {
+        txt += `    Operating cash given: ${fmt(a.op_cash)}\n`;
+        txt += `    Expenses spent: ${fmt(a.expenses)}\n`;
+        txt += `    Balance to return: ${fmt(Math.max(a.balance, 0))}\n`;
+      } else {
+        txt += `    Expenses (deducted from collection): ${fmt(a.expenses)}\n`;
+      }
+    });
+    txt += `\nAmount to Remit: ${fmt(d.remittance)}`;
+    if (d.expenses_from_collections > 0) {
+      txt += ` (${fmt(d.grand_total)} − ${fmt(d.expenses_from_collections)} uncovered expenses)`;
+    }
+  } else {
+    txt += `Agent Expenses:\n`;
+    (d.agent_op_summary || []).forEach(a => {
+      txt += `  ${a.name}: ${fmt(a.expenses)}\n`;
+    });
+    txt += `Total Agent Expenses: ${fmt(d.total_agent_expenses)}\n`;
+    txt += `Waybills: ${fmt(d.waybill_total)}\nOther Office: ${fmt(d.other_office_expenses)}\nTotal Office: ${fmt(d.total_office_expenses)}\n`;
+    txt += `\nRemittance: ${fmt(d.grand_total)} - ${fmt(d.total_expenses)} = ${fmt(d.remittance)}`;
+  }
   navigator.clipboard.writeText(txt).then(() => alert('Copied to clipboard!'));
 }
 </script>

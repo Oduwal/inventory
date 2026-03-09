@@ -2140,6 +2140,7 @@ def reports_preview(
             sp = float(selling_price or 0)
             items_by_delivery.setdefault(int(did), []).append({"name": str(name), "qty": q, "amount": la if la > 0 else q * sp})
 
+    # --- agent expenses ---
     agent_exp_rows = db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "EXPENSE")
@@ -2149,6 +2150,17 @@ def reports_preview(
     ).all()
     agent_exp_map = {int(aid): float(t) for aid, t in agent_exp_rows}
 
+    # --- operating cash given to agents ---
+    op_cash_rows = db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OPERATING_CASH")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+        .group_by(CashEntry.agent_id)
+    ).all()
+    op_cash_map = {int(aid): float(t) for aid, t in op_cash_rows}
+
+    # --- office expenses ---
     office_total = float(db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "OFFICE_EXPENSE")
@@ -2164,10 +2176,10 @@ def reports_preview(
         .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
     ) or 0)
 
-    agent_ids = list(agent_exp_map.keys())
+    all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
-    if agent_ids:
-        users = db.execute(select(User).where(User.id.in_(agent_ids))).scalars().all()
+    if all_agent_ids:
+        users = db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()
         uname = {int(u.id): (u.full_name or u.username) for u in users}
 
     delivery_rows = []
@@ -2184,8 +2196,44 @@ def reports_preview(
             "total": total,
         })
 
-    agent_expenses = [{"name": uname.get(aid, f"Agent {aid}"), "amount": amt} for aid, amt in agent_exp_map.items()]
-    total_agent_exp = sum(a["amount"] for a in agent_expenses)
+    # Build per-agent operating cash summary
+    # Expenses covered by op cash; any excess expenses (no op cash given) become office-type deductions
+    agent_op_summary = []
+    total_op_cash_given = 0.0
+    total_op_cash_balance_returned = 0.0
+    expenses_from_collections = 0.0  # agent expenses NOT covered by op cash
+
+    for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
+        exp = agent_exp_map.get(aid, 0.0)
+        op = op_cash_map.get(aid, 0.0)
+        balance = op - exp  # positive = return to office, negative = overspent
+        total_op_cash_given += op
+        if op > 0:
+            # Agent was given operating cash — expenses come from that, balance returned
+            total_op_cash_balance_returned += max(balance, 0)
+            if balance < 0:
+                # Overspent — excess counted as expense from collections
+                expenses_from_collections += abs(balance)
+        else:
+            # No operating cash given — expenses deducted from collections
+            expenses_from_collections += exp
+        agent_op_summary.append({
+            "name": uname.get(aid, f"Agent {aid}"),
+            "op_cash": op,
+            "expenses": exp,
+            "balance": balance,
+            "has_op_cash": op > 0,
+        })
+
+    total_agent_exp = sum(a["expenses"] for a in agent_op_summary)
+
+    # Admin sees: grand_total - all_expenses. Agent sees: grand_total (collections only, expenses from op cash)
+    if is_agent(user):
+        remittance = grand_total - expenses_from_collections
+    else:
+        total_expenses = total_agent_exp + office_total
+        remittance = grand_total - total_expenses
+
     total_expenses = total_agent_exp + office_total
     title = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
 
@@ -2194,13 +2242,17 @@ def reports_preview(
         "delivery_count": len(deliveries),
         "deliveries": delivery_rows,
         "grand_total": grand_total,
-        "agent_expenses": agent_expenses,
+        "agent_op_summary": agent_op_summary,
+        "total_op_cash_given": total_op_cash_given,
+        "total_op_cash_balance_returned": total_op_cash_balance_returned,
+        "expenses_from_collections": expenses_from_collections,
         "total_agent_expenses": total_agent_exp,
         "waybill_total": waybill_total,
         "other_office_expenses": office_total - waybill_total,
         "total_office_expenses": office_total,
         "total_expenses": total_expenses,
-        "remittance": grand_total - total_expenses,
+        "remittance": remittance,
+        "is_agent": is_agent(user),
     })
 
 
@@ -2274,37 +2326,47 @@ def reports_txt(
             sp = float(selling_price or 0)
             items_by_delivery.setdefault(int(did), []).append((str(name), q, la if la > 0 else q * sp))
 
-    exp_stmt = (
+    agent_exp_rows = db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "EXPENSE")
         .where(CashEntry.created_at >= start_dt)
         .where(CashEntry.created_at <= end_dt)
         .group_by(CashEntry.agent_id)
         .order_by(CashEntry.agent_id.asc())
-    )
-    agent_exp_rows = db.execute(exp_stmt).all()
+    ).all()
     agent_exp_map = {int(aid): float(total) for aid, total in agent_exp_rows}
 
-    office_total = float(
-        db.scalar(
-            select(func.coalesce(func.sum(CashEntry.amount), 0))
-            .where(CashEntry.kind == "OFFICE_EXPENSE")
-            .where(CashEntry.created_at >= start_dt)
-            .where(CashEntry.created_at <= end_dt)
-        ) or 0
-    )
+    op_cash_rows = db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OPERATING_CASH")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+        .group_by(CashEntry.agent_id)
+    ).all()
+    op_cash_map = {int(aid): float(t) for aid, t in op_cash_rows}
 
-    waybill_total = float(
-        db.scalar(
-            select(func.coalesce(func.sum(CashEntry.amount), 0))
-            .where(CashEntry.kind == "OFFICE_EXPENSE")
-            .where(CashEntry.created_at >= start_dt)
-            .where(CashEntry.created_at <= end_dt)
-            .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
-        ) or 0
-    )
+    office_total = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+    ) or 0)
+
+    waybill_total = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt)
+        .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
+    ) or 0)
 
     other_office_total = office_total - waybill_total
+
+    all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
+    uname: dict[int, str] = {}
+    if all_agent_ids:
+        users = db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()
+        uname = {int(u.id): (u.full_name or u.username or f"Agent {u.id}") for u in users}
 
     lines: list[str] = []
     title_day = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
@@ -2314,53 +2376,92 @@ def reports_txt(
     lines.append("")
 
     grand_total = 0.0
-
     for idx, d in enumerate(deliveries, start=1):
         d_items = items_by_delivery.get(int(d.id), [])
         total_qty = sum(q for _name, q, _amt in d_items)
         delivery_total = sum(amt for _name, _q, amt in d_items)
-
-        parts = []
-        for name, q, _amt in d_items:
-            parts.append(f"{q:g} {name}")
-
+        parts = [f"{q:g} {name}" for name, q, _amt in d_items]
         items_txt = " + ".join(parts) if parts else "No items"
         grand_total += delivery_total
-
         lines.append(f"({idx})\t{total_qty:g}\t{items_txt}\t{_ngn(delivery_total)}")
 
     lines.append("")
     lines.append(f"Grand total: {_ngn(grand_total)}")
     lines.append("")
-    lines.append("Expenses:")
-    lines.append("")
-    lines.append("Agent expenses (delivery spending):")
 
+    # --- Build agent operating cash / expense section ---
     total_agent_expenses = 0.0
-    if agent_exp_map:
-        agent_ids = list(agent_exp_map.keys())
-        users = db.execute(select(User).where(User.id.in_(agent_ids))).scalars().all()
-        uname = {int(u.id): (u.full_name or u.username or f"Agent {u.id}") for u in users}
+    expenses_from_collections = 0.0
+    total_op_cash_given = 0.0
+    total_op_cash_balance = 0.0
 
-        for aid in sorted(agent_exp_map.keys()):
-            amt = float(agent_exp_map[aid])
-            total_agent_expenses += amt
-            lines.append(f"{uname.get(aid, f'Agent {aid}')}: {_ngn(amt)}")
+    agent_section_lines: list[str] = []
+    for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
+        exp = agent_exp_map.get(aid, 0.0)
+        op = op_cash_map.get(aid, 0.0)
+        name = uname.get(aid, f"Agent {aid}")
+        total_agent_expenses += exp
+        total_op_cash_given += op
+
+        if op > 0:
+            balance = op - exp
+            total_op_cash_balance += max(balance, 0)
+            if balance < 0:
+                expenses_from_collections += abs(balance)
+            agent_section_lines.append(f"  {name}:")
+            agent_section_lines.append(f"    Operating cash given : {_ngn(op)}")
+            agent_section_lines.append(f"    Expenses spent       : {_ngn(exp)}")
+            if balance >= 0:
+                agent_section_lines.append(f"    Balance to return    : {_ngn(balance)}")
+            else:
+                agent_section_lines.append(f"    Overspent (from coll): {_ngn(abs(balance))}")
+        else:
+            # No operating cash — expenses deducted from collections
+            expenses_from_collections += exp
+            agent_section_lines.append(f"  {name}:")
+            agent_section_lines.append(f"    Expenses (no op cash, deducted from collection): {_ngn(exp)}")
+
+    if is_agent(user):
+        # Agent report: collections only; expenses shown but NOT deducted (they came from op cash)
+        lines.append("Operating Cash & Expenses:")
+        lines.extend(agent_section_lines if agent_section_lines else ["  None"])
+        if total_op_cash_given > 0:
+            lines.append(f"  Total operating cash given : {_ngn(total_op_cash_given)}")
+            lines.append(f"  Total expenses             : {_ngn(total_agent_expenses)}")
+            lines.append(f"  Total balance to return    : {_ngn(total_op_cash_balance)}")
+        lines.append("")
+        if expenses_from_collections > 0:
+            lines.append("Expenses deducted from collection (no op cash given):")
+            lines.append(f"  {_ngn(expenses_from_collections)}")
+            lines.append("")
+        lines.append("Office expenses:")
+        lines.append(f"  Waybills              : {_ngn(waybill_total)}")
+        lines.append(f"  Other office expenses : {_ngn(other_office_total)}")
+        lines.append(f"  Total office expenses : {_ngn(office_total)}")
+        lines.append("")
+        remittance = grand_total - expenses_from_collections
+        lines.append("Amount to be remitted (collections only):")
+        if expenses_from_collections > 0:
+            lines.append(f"  {_ngn(grand_total)} - {_ngn(expenses_from_collections)} (uncovered expenses) = {_ngn(remittance)}")
+        else:
+            lines.append(f"  {_ngn(grand_total)}")
     else:
-        lines.append("None")
-
-    lines.append(f"Total agent expenses: {_ngn(total_agent_expenses)}")
-    lines.append("")
-    lines.append("Office expenses:")
-    lines.append(f"Waybills: {_ngn(waybill_total)}")
-    lines.append(f"Other office expenses: {_ngn(other_office_total)}")
-    lines.append(f"Total office expenses: {_ngn(office_total)}")
-    lines.append("")
-    total_expenses = total_agent_expenses + office_total
-    lines.append(f"Total amount of expenses: {_ngn(total_expenses)}")
-    lines.append("")
-    lines.append("Amount to be remitted:")
-    lines.append(f"{_ngn(grand_total)} - {_ngn(total_expenses)} = {_ngn(grand_total - total_expenses)}")
+        # Admin report: collections minus all expenses
+        lines.append("Agent Expenses:")
+        lines.extend(agent_section_lines if agent_section_lines else ["  None"])
+        lines.append(f"  Total agent expenses: {_ngn(total_agent_expenses)}")
+        lines.append("")
+        lines.append("Office expenses:")
+        lines.append(f"  Waybills              : {_ngn(waybill_total)}")
+        lines.append(f"  Other office expenses : {_ngn(other_office_total)}")
+        lines.append(f"  Total office expenses : {_ngn(office_total)}")
+        lines.append("")
+        total_expenses = total_agent_expenses + office_total
+        lines.append(f"Total amount of expenses: {_ngn(total_expenses)}")
+        lines.append("")
+        remittance = grand_total - total_expenses
+        lines.append("Amount to be remitted:")
+        lines.append(f"  {_ngn(grand_total)} - {_ngn(total_expenses)} = {_ngn(remittance)}")
 
     body = "\n".join(lines)
 
