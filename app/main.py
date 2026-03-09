@@ -1491,7 +1491,18 @@ def agent_detail(
         end=end_dt,
     )
 
-    operating_balance = float(total_operating) - float(total_expenses)
+    _ret_stmt = (
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+        .where(CashEntry.agent_id == agent_id)
+    )
+    if start_dt:
+        _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt:
+        _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
+
+    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
     remittance = float(total_collections) - float(total_office_expenses)
     net_position = remittance + operating_balance
 
