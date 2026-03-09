@@ -62,8 +62,9 @@
                 <label>Type</label>
                 <select name="kind" required>
                     <option value="COLLECTION">Extra Collection</option>
-                    <option value="OPERATING_CASH">Operating Cash</option>
+                    <option value="OPERATING_CASH">Operating Cash (Given to Agent)</option>
                     <option value="EXPENSE">Agent Expense</option>
+                    <option value="RETURN_OPERATING_CASH">Return Op. Cash Balance</option>
                     {% if user and user.role == "ADMIN" %}
                     <option value="OFFICE_EXPENSE">Office Expense</option>
                     {% endif %}
@@ -107,9 +108,10 @@
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
         <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
-        <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(total_operating_cash) }}</span>
+        <span class="badge b-purple">Operating Cash Given: {{ '%.2f'|format(total_operating_cash) }}</span>
         <span class="badge b-red">Agent Expenses: {{ '%.2f'|format(total_expenses) }}</span>
-        <span class="badge b-green">Operating Balance: {{ '%.2f'|format(operating_balance) }}</span>
+        <span class="badge b-green">Op. Cash Returned: {{ '%.2f'|format(total_return_op_cash) }}</span>
+        <span class="badge b-green">Op. Cash Balance (outstanding): {{ '%.2f'|format(operating_balance) }}</span>
 
         {% if user and user.role == "ADMIN" %}
         <span class="badge b-red">Office Expenses: {{ '%.2f'|format(total_office_expenses) }}</span>

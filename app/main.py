@@ -1547,6 +1547,7 @@ def agent_detail(
             "total_collections": float(total_collections),
             "total_expenses": float(total_expenses),
             "total_operating_cash": float(total_operating),
+            "total_return_op_cash": float(total_return_op_cash),
             "operating_balance": float(operating_balance),
             "total_office_expenses": float(total_office_expenses),
             "remittance": float(remittance),
@@ -1965,7 +1966,20 @@ def cash_dashboard(
     total_operating = float(sum(float(r["operating_cash"]) for r in rows))
     total_office_expenses = float(sum(float(r["office_expenses"]) for r in rows))
 
-    operating_balance = float(total_operating) - float(total_expenses)
+    # Return operating cash recorded
+    _ret_stmt = (
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+    )
+    if start_dt:
+        _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt:
+        _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+    if selected_agent_id:
+        _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
+    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
+
+    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
     remittance = float(total_collections) - float(total_office_expenses)
     net_position = remittance + operating_balance
 
@@ -1987,6 +2001,7 @@ def cash_dashboard(
             "total_collections": float(total_collections),
             "total_expenses": float(total_expenses),
             "total_operating_cash": float(total_operating),
+            "total_return_op_cash": float(total_return_op_cash),
             "operating_balance": float(operating_balance),
             "total_office_expenses": float(total_office_expenses),
             "remittance": float(remittance),
@@ -2017,7 +2032,7 @@ def cash_new(
     user = user_or
 
     k = (kind or "").strip().upper()
-    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE"}:
+    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
 
     if k == "OFFICE_EXPENSE" and not is_admin(user):
