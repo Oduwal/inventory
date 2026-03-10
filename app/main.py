@@ -566,19 +566,12 @@ def home(request: Request, db: Session = Depends(get_db)):
 
     branch_id = get_selected_branch_id(request, user)
 
-    if is_supervisor(user):
-        if not branch_id:
-            branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
-            return templates.TemplateResponse("dashboard.html", {
-                "request": request, "user": user, "active": "dashboard",
-                "branches": branches, "selected_branch_id": None,
-                "items_count": 0, "low_stock_count": 0, "recent_transactions": [],
-                "total_stock": 0, "inventory_value": 0, "in7": 0, "out7": 0,
-                "top_rows": [], "low_rows": [], "cat_rows": [],
-            })
+    if is_supervisor(user) and not branch_id:
+        # Supervisor with no branch selected: redirect to supervisor overview
+        return redirect("/supervisor")
 
     if not is_admin(user) and not is_supervisor(user):
-        return redirect("/my-deliveries")
+        return redirect("/agent-overview")
 
     items_count = db.scalar(select(func.count(Item.id)).where(Item.branch_id == branch_id)) or 0
 
@@ -637,6 +630,25 @@ def home(request: Request, db: Session = Depends(get_db)):
     if is_supervisor(user):
         branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
 
+    # Chart data — last 14 days deliveries + expenses for branch
+    today_d = date.today()
+    chart_days = [(today_d - timedelta(days=i)) for i in range(13, -1, -1)]
+    del_by_day: dict = {}
+    for d in db.execute(
+        select(Delivery).where(Delivery.branch_id == branch_id)
+        .where(Delivery.created_at >= datetime.utcnow() - timedelta(days=14))
+    ).scalars().all():
+        k = d.created_at.date().isoformat() if d.created_at else None
+        if k: del_by_day[k] = del_by_day.get(k, 0) + 1
+    exp_by_day: dict = {}
+    for e in db.execute(
+        select(CashEntry).where(CashEntry.branch_id == branch_id)
+        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
+    ).scalars().all():
+        k = e.created_at.date().isoformat() if e.created_at else None
+        if k: exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
+
     return templates.TemplateResponse("dashboard.html", {
         "request": request, "user": user, "active": "dashboard",
         "branches": branches, "selected_branch_id": branch_id,
@@ -644,6 +656,9 @@ def home(request: Request, db: Session = Depends(get_db)):
         "stale_count": stale_count, "recent_transactions": recent_transactions,
         "total_stock": total_stock, "inventory_value": inventory_value,
         "in7": in7, "out7": out7, "top_rows": top_rows, "low_rows": low_rows, "cat_rows": cat_rows,
+        "chart_labels": [str(d) for d in chart_days],
+        "chart_deliveries": [del_by_day.get(d.isoformat(), 0) for d in chart_days],
+        "chart_expenses": [round(exp_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
     })
 
 
@@ -809,7 +824,12 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
-    rows = [(item, stock) for (item, stock) in get_items_with_stock(db) if item.branch_id == branch_id]
+    all_rows = get_items_with_stock(db)
+    # Supervisor with no branch selected sees all branches
+    if is_supervisor(user) and not branch_id:
+        rows = list(all_rows)
+    else:
+        rows = [(item, stock) for (item, stock) in all_rows if item.branch_id == branch_id]
     q_lower = q.strip().lower()
     if q_lower:
         rows = [(item, stock) for (item, stock) in rows
@@ -1056,10 +1076,10 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
-    txs = db.scalars(
-        select(Transaction).where(Transaction.branch_id == branch_id)
-        .order_by(desc(Transaction.created_at)).limit(300)
-    ).all()
+    stmt = select(Transaction).order_by(desc(Transaction.created_at)).limit(300)
+    if not (is_supervisor(user) and not branch_id):
+        stmt = stmt.where(Transaction.branch_id == branch_id)
+    txs = db.scalars(stmt).all()
     return templates.TemplateResponse("transactions_list.html", {
         "request": request, "txs": txs, "user": user, "active": "transactions",
     })
@@ -1360,15 +1380,20 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
     if not is_admin(user) and not is_supervisor(user):
-        return redirect("/my-deliveries")
+        return redirect("/agent-overview")
     branch_id = get_selected_branch_id(request, user)
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
-    stmt = select(Delivery).where(Delivery.branch_id == branch_id).order_by(desc(Delivery.created_at)).limit(300)
+    stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(300)
+    if not (is_supervisor(user) and not branch_id):
+        stmt = stmt.where(Delivery.branch_id == branch_id)
     if status: stmt = stmt.where(Delivery.status == status)
     if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
     rows = db.execute(stmt).scalars().all()
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
+    agents_stmt = select(User).where(User.role == "AGENT").order_by(User.username.asc())
+    if not (is_supervisor(user) and not branch_id):
+        agents_stmt = agents_stmt.where(User.branch_id == branch_id)
+    agents = db.execute(agents_stmt).scalars().all()
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
@@ -1465,19 +1490,31 @@ async def delivery_create(
     return redirect(f"/deliveries/{d.id}")
 
 
-@app.get("/my-deliveries", response_class=HTMLResponse)
-def my_deliveries(request: Request, db: Session = Depends(get_db)):
+
+# ────────────────────────────────────────────────
+#  AGENT OVERVIEW
+# ────────────────────────────────────────────────
+
+@app.get("/agent-overview", response_class=HTMLResponse)
+def agent_overview(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
+    if is_admin(user) or is_supervisor(user):
+        return redirect("/")
     branch_id = get_selected_branch_id(request, user)
+
+    # Stats
     rows = db.execute(
         select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
         .order_by(desc(Delivery.created_at)).limit(300)
     ).scalars().all()
+    pending_c = sum(1 for d in rows if d.status == "PENDING")
+    ofd_c = sum(1 for d in rows if d.status == "OUT_FOR_DELIVERY")
+    done_c = sum(1 for d in rows if d.status == "DELIVERED")
 
-    # Build last-14-days daily delivery + expense chart data
+    # Chart data — last 14 days
     today = date.today()
     chart_days = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
     delivery_by_day: dict = {}
@@ -1496,11 +1533,39 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         if k:
             expense_by_day[k] = expense_by_day.get(k, 0) + float(e.amount or 0)
 
-    return templates.TemplateResponse("my_deliveries.html", {
-        "request": request, "rows": rows, "user": user, "active": "deliveries",
+    total_collected = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.agent_id == user.id).where(CashEntry.kind == "COLLECTION")
+    ) or 0)
+    total_expenses = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.agent_id == user.id).where(CashEntry.kind == "EXPENSE")
+    ) or 0)
+
+    return templates.TemplateResponse("agent_overview.html", {
+        "request": request, "user": user, "active": "dashboard",
+        "total_deliveries": len(rows), "pending_c": pending_c,
+        "ofd_c": ofd_c, "done_c": done_c,
+        "total_collected": total_collected, "total_expenses": total_expenses,
         "chart_labels": [str(d) for d in chart_days],
         "chart_deliveries": [delivery_by_day.get(d.isoformat(), 0) for d in chart_days],
         "chart_expenses": [round(expense_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
+    })
+
+@app.get("/my-deliveries", response_class=HTMLResponse)
+def my_deliveries(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    rows = db.execute(
+        select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
+        .order_by(desc(Delivery.created_at)).limit(300)
+    ).scalars().all()
+
+    return templates.TemplateResponse("my_deliveries.html", {
+        "request": request, "rows": rows, "user": user, "active": "deliveries",
     })
 
 
@@ -1700,9 +1765,9 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if is_admin(user) else []
+    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
     return templates.TemplateResponse("reports_sales.html", {
         "request": request, "user": user, "agents": agents,
@@ -1716,7 +1781,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
@@ -1788,7 +1853,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     if isinstance(user_or, RedirectResponse):
         return PlainTextResponse("Unauthorized", status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return PlainTextResponse("Forbidden", status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()

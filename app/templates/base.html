@@ -203,9 +203,15 @@
     <nav class="nav">
       {% set role = (user.role | upper) if user else "" %}
 
+      {% if role == "AGENT" %}
+      <a href="/agent-overview" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
+      </a>
+      {% else %}
       <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🏠</span>Overview
       </a>
+      {% endif %}
 
       {% if role == "SUPERVISOR" %}
       <div class="nav-divider"></div>
@@ -277,22 +283,19 @@
       </a>
       {% endif %}
 
-      {% if role in ("ADMIN", "SUPERVISOR") %}
+      {% if role == "ADMIN" %}
       <div class="nav-divider"></div>
-      <div class="nav-section">{% if role == "SUPERVISOR" %}Management{% else %}Admin{% endif %}</div>
+      <div class="nav-section">Admin</div>
       <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
-        <span class="nav-icon">👤</span>{% if role == "SUPERVISOR" %}Admins{% else %}Agents{% endif %}
+        <span class="nav-icon">👤</span>Agents
       </a>
-      {% if role == "SUPERVISOR" %}
-      <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
-        <span class="nav-icon">📊</span>Reports
-      </a>
-      {% endif %}
       {% endif %}
 
       {% if user %}
       <div class="nav-divider"></div>
+      <!-- [FIX-4] CSRF token on logout form -->
       <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
         <button type="submit" style="
           width:100%;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);
           color:#f87171;border-radius:11px;padding:8px 12px;cursor:pointer;
