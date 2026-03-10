@@ -486,40 +486,44 @@ def _dt_range_from_dates(preset, start_date, end_date):
 # AUTH
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+# ────────────────────────────────────────────────
+#  AUTH
+# ────────────────────────────────────────────────
+
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    # [FIX-4] Generate CSRF token for the login form
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "error": None,
-        "csrf_token": csrf_token,
-    })
+    return templates.TemplateResponse("login.html", {"request": request, "error": None, "csrf_token": csrf_token})
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login(
+async def login(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-3] Rate limit: max 10 login attempts per IP per 60 seconds
-    limiter.check(request, max_requests=10, window_seconds=60)
-
-    # [FIX-4] Verify CSRF token
-    verify_csrf_token(request, csrf_token)
-
-    u = db.scalar(select(User).where(User.username == username.strip()))
-    if not u or not verify_password(password, u.password_hash):
-        new_csrf = get_csrf_token(request)
+    ip = request.client.host if request.client else "unknown"
+    allowed, wait = limiter.check(ip)
+    if not allowed:
+        token = get_csrf_token(request)
         return templates.TemplateResponse("login.html", {
             "request": request,
-            "error": "Invalid login.",
-            "csrf_token": new_csrf,
-        })
+            "error": f"Too many login attempts. Please wait {wait} seconds.",
+            "csrf_token": token,
+        }, status_code=429)
 
+    verify_csrf_token(request, csrf_token)
+    username_clean = sanitize_username(username)
+    u = db.scalar(select(User).where(User.username == username_clean))
+    if not u or not verify_password(password, u.password_hash):
+        limiter.record_failure(ip)
+        token = get_csrf_token(request)
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": "Invalid login.", "csrf_token": token,
+        })
     request.session["user_id"] = u.id
     request.session["role"] = u.role
     if u.branch_id is not None:
@@ -530,16 +534,224 @@ def login(
 
 
 @app.post("/logout")
-def logout(request: Request, csrf_token: str = Form("")):
-    # [FIX-4] CSRF check on logout too (prevents logout CSRF attacks)
+async def logout(request: Request, csrf_token: str = Form("")):
     verify_csrf_token(request, csrf_token)
     request.session.clear()
     return redirect("/login")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ITEMS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  DASHBOARD
+# ────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+
+    branch_id = get_selected_branch_id(request, user)
+
+    if is_supervisor(user):
+        if not branch_id:
+            branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+            return templates.TemplateResponse("dashboard.html", {
+                "request": request, "user": user, "active": "dashboard",
+                "branches": branches, "selected_branch_id": None,
+                "items_count": 0, "low_stock_count": 0, "recent_transactions": [],
+                "total_stock": 0, "inventory_value": 0, "in7": 0, "out7": 0,
+                "top_rows": [], "low_rows": [], "cat_rows": [],
+            })
+
+    if not is_admin(user) and not is_supervisor(user):
+        return redirect("/my-deliveries")
+
+    items_count = db.scalar(select(func.count(Item.id)).where(Item.branch_id == branch_id)) or 0
+
+    low_rows_all = get_low_stock(db)
+    low_rows = [(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id][:5]
+    low_stock_count = len([(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id])
+
+    stale_cutoff = datetime.utcnow() - timedelta(days=7)
+    stale_items = db.execute(select(Item).where(Item.branch_id == branch_id)).scalars().all()
+    stale_count = 0
+    for _item in stale_items:
+        _stock = db.scalar(
+            select(func.coalesce(
+                func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0
+            )).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id)
+        ) or 0
+        if _stock <= 0:
+            continue
+        _last = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id))
+        if _last is None or _last < stale_cutoff:
+            stale_count += 1
+
+    recent_transactions = db.scalars(
+        select(Transaction).where(Transaction.branch_id == branch_id)
+        .order_by(desc(Transaction.created_at)).limit(10)
+    ).all()
+
+    top_rows_all = top_items_by_stock(db, limit=200)
+    top_rows = [(item, stock) for (item, stock) in top_rows_all if item.branch_id == branch_id][:5]
+
+    all_items_with_stock = get_items_with_stock(db)
+    cat_map: dict[str, float] = {}
+    total_stock = 0
+    inventory_value = 0.0
+    for item, stock in all_items_with_stock:
+        if item.branch_id == branch_id:
+            s = float(stock or 0)
+            total_stock += int(s)
+            inventory_value += s * float(item.cost_price or 0)
+            cat = item.category or "Uncategorized"
+            cat_map[cat] = cat_map.get(cat, 0) + s
+    cat_rows = sorted(cat_map.items(), key=lambda x: x[1], reverse=True)
+
+    in7 = int(db.scalar(
+        select(func.coalesce(func.sum(Transaction.quantity), 0))
+        .where(Transaction.branch_id == branch_id).where(Transaction.type == "IN")
+        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+    ) or 0)
+    out7 = int(db.scalar(
+        select(func.coalesce(func.sum(Transaction.quantity), 0))
+        .where(Transaction.branch_id == branch_id).where(Transaction.type == "OUT")
+        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+    ) or 0)
+
+    branches = []
+    if is_supervisor(user):
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request, "user": user, "active": "dashboard",
+        "branches": branches, "selected_branch_id": branch_id,
+        "items_count": items_count, "low_stock_count": low_stock_count,
+        "stale_count": stale_count, "recent_transactions": recent_transactions,
+        "total_stock": total_stock, "inventory_value": inventory_value,
+        "in7": in7, "out7": out7, "top_rows": top_rows, "low_rows": low_rows, "cat_rows": cat_rows,
+    })
+
+
+@app.get("/supervisor", response_class=HTMLResponse)
+def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = ""):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    preset = preset.strip() or None
+    start_date = start_date.strip() or None
+    end_date = end_date.strip() or None
+    start_dt, end_dt = supervisor_date_range(preset, start_date, end_date)
+
+    branches, rows = supervisor_branch_stats(db, start_dt, end_dt)
+    top_items   = supervisor_top_items(db, start_dt, end_dt)
+    best_agents = supervisor_best_agents(db, start_dt, end_dt)
+    daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
+
+    return templates.TemplateResponse("supervisor_dashboard.html", {
+        "request": request, "user": user, "rows": rows,
+        "top_items": top_items, "best_agents": best_agents,
+        "chart_labels": [str(r.day) for r in daily_chart],
+        "chart_data": [int(r.cnt) for r in daily_chart],
+        "grand_total_deliveries": sum(r["total_deliveries"] for r in rows),
+        "grand_delivered": sum(r["delivered_count"] for r in rows),
+        "grand_pending": sum(r["pending_count"] for r in rows),
+        "grand_out_for_delivery": sum(r["out_for_delivery_count"] for r in rows),
+        "grand_failed": sum(r["failed_count"] for r in rows),
+        "grand_collections": sum(r["collections"] for r in rows),
+        "grand_agent_expenses": sum(r["agent_expenses"] for r in rows),
+        "grand_office_expenses": sum(r["office_expenses"] for r in rows),
+        "grand_operating_cash": sum(r["operating_cash"] for r in rows),
+        "grand_returned_operating_cash": sum(r["returned_operating_cash"] for r in rows),
+        "grand_operating_balance": sum(r["operating_balance"] for r in rows),
+        "grand_remittance": sum(r["remittance"] for r in rows),
+        "branches": branches, "selected_branch_id": None, "active": "supervisor",
+        "preset": preset or "", "start_date": start_date or "", "end_date": end_date or "",
+    })
+
+
+# ────────────────────────────────────────────────
+#  BRANCHES
+# ────────────────────────────────────────────────
+
+@app.get("/branches", response_class=HTMLResponse)
+def branches_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    rows = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+    return templates.TemplateResponse("branches_list.html", {
+        "request": request, "user": user, "rows": rows,
+        "active": "branches", "branches": rows, "selected_branch_id": None,
+    })
+
+
+@app.get("/branches/new", response_class=HTMLResponse)
+def branch_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("branch_new.html", {
+        "request": request, "user": user, "error": request.query_params.get("error"),
+        "active": "branches", "branches": branches, "selected_branch_id": None,
+        "csrf_token": csrf_token,
+    })
+
+
+@app.post("/branches/new")
+async def branch_create(
+    request: Request,
+    name: str = Form(...),
+    code: str = Form(""),
+    address: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    name_clean = sanitize_text(name, 120, "Branch name")
+    code_clean = sanitize_text(code, 20, "Branch code") if (code or "").strip() else None
+    address_clean = sanitize_text(address, 200, "Address") if (address or "").strip() else None
+    if not name_clean:
+        return redirect("/branches/new?error=Branch+name+is+required")
+    if db.scalar(select(Branch).where(Branch.name == name_clean)):
+        return redirect("/branches/new?error=Branch+name+already+exists")
+    if code_clean and db.scalar(select(Branch).where(Branch.code == code_clean)):
+        return redirect("/branches/new?error=Branch+code+already+exists")
+    db.add(Branch(name=name_clean, code=code_clean, address=address_clean))
+    db.commit()
+    return redirect("/branches")
+
+
+@app.get("/api/low-stock-count")
+def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"count": 0}, status_code=401)
+    return {"count": len(get_low_stock(db))}
+
+
+# ────────────────────────────────────────────────
+#  ITEMS
+# ────────────────────────────────────────────────
 
 @app.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
@@ -551,15 +763,11 @@ def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
     rows = [(item, stock) for (item, stock) in get_items_with_stock(db) if item.branch_id == branch_id]
     q_lower = q.strip().lower()
     if q_lower:
-        rows = [
-            (item, stock) for (item, stock) in rows
-            if q_lower in ((item.name or "").lower()) or q_lower in ((item.category or "").lower())
-        ]
-    csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse(
-        "items_list.html",
-        {"request": request, "rows": rows, "q": q, "user": user, "active": "items", "csrf_token": csrf_token},
-    )
+        rows = [(item, stock) for (item, stock) in rows
+                if q_lower in (item.name or "").lower() or q_lower in (item.category or "").lower()]
+    return templates.TemplateResponse("items_list.html", {
+        "request": request, "rows": rows, "q": q, "user": user, "active": "items",
+    })
 
 
 @app.get("/items/new", response_class=HTMLResponse)
@@ -571,15 +779,16 @@ def item_new_form(request: Request, db: Session = Depends(get_db)):
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-    error = request.query_params.get("error")
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("item_new.html", {
-        "request": request, "user": user, "error": error, "active": "items", "csrf_token": csrf_token
+        "request": request, "user": user,
+        "error": request.query_params.get("error"),
+        "active": "items", "csrf_token": csrf_token,
     })
 
 
 @app.post("/items/new")
-def item_create(
+async def item_create(
     request: Request,
     name: str = Form(...),
     category: str = Form(""),
@@ -590,9 +799,6 @@ def item_create(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -600,23 +806,17 @@ def item_create(
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-
-    # [FIX-5] Sanitize inputs
-    name_clean = sanitize_text(name, max_length=200, field_name="name")
+    verify_csrf_token(request, csrf_token)
+    name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
         return redirect("/items/new?error=Name+is+required")
-    category_clean = sanitize_text(category, max_length=120, field_name="category") or None
-    unit_clean = sanitize_text(unit, max_length=20, field_name="unit") or "pcs"
-
     branch_id = get_current_branch_id(request)
     if not branch_id:
         return redirect("/items/new?error=No+branch+assigned")
-
     db.add(Item(
-        branch_id=branch_id,
-        name=name_clean,
-        category=category_clean,
-        unit=unit_clean,
+        branch_id=branch_id, name=name_clean,
+        category=sanitize_text(category, 120, "Category") or None,
+        unit=(unit or "pcs").strip() or "pcs",
         reorder_level=int(reorder_level or 0),
         cost_price=float(cost_price or 0),
         selling_price=float(selling_price or 0),
@@ -625,8 +825,124 @@ def item_create(
     return redirect("/items")
 
 
+@app.get("/items/import", response_class=HTMLResponse)
+def items_import_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("items_import.html", {
+        "request": request, "user": user, "branches": branches,
+        "active": "items", "selected_branch_id": getattr(user, "branch_id", None),
+        "error": request.query_params.get("error"),
+        "success": request.query_params.get("success"),
+        "csrf_token": csrf_token,
+    })
+
+
+@app.post("/items/import")
+async def items_import_upload(request: Request, db: Session = Depends(get_db)):
+    import csv, io
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    form = await request.form()
+    verify_csrf_token(request, str(form.get("csrf_token", "")))
+    file = form.get("csv_file")
+    target = (form.get("target_branch") or "").strip()
+    if not file or not file.filename:
+        return redirect("/items/import?error=Please+select+a+CSV+file")
+    content = await file.read()
+    try:
+        text_content = content.decode("utf-8-sig")
+    except Exception:
+        return redirect("/items/import?error=Could+not+read+file")
+    reader = csv.DictReader(io.StringIO(text_content))
+    headers = [h.strip().lower() for h in (reader.fieldnames or [])]
+    if "name" not in headers:
+        return redirect("/items/import?error=CSV+must+have+a+Name+column")
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    if is_supervisor(user) and target == "all":
+        target_branches = branches
+    elif is_supervisor(user) and target.isdigit():
+        b = db.get(Branch, int(target))
+        target_branches = [b] if b else []
+    else:
+        b = db.get(Branch, user.branch_id)
+        target_branches = [b] if b else []
+    if not target_branches:
+        return redirect("/items/import?error=No+valid+branch+selected")
+    rows = list(reader)
+    if not rows:
+        return redirect("/items/import?error=CSV+file+is+empty")
+    created = 0
+    skipped = 0
+    for branch in target_branches:
+        for row in rows:
+            name = (row.get("name") or row.get("Name") or "").strip()
+            if not name:
+                skipped += 1
+                continue
+            category = (row.get("category") or row.get("Category") or "").strip() or None
+            existing = db.scalar(select(Item).where(Item.branch_id == branch.id, func.lower(Item.name) == name.lower()))
+            if existing:
+                skipped += 1
+                continue
+            db.add(Item(branch_id=branch.id, name=name, category=category, unit="pcs", reorder_level=0, cost_price=0, selling_price=0))
+            created += 1
+    db.commit()
+    return redirect(f"/items/import?success=Imported+{created}+items+({skipped}+skipped)")
+
+
+@app.get("/items/{item_id}", response_class=HTMLResponse)
+def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    row = get_item_with_stock(db, item_id)
+    if not row:
+        return HTMLResponse("Item not found", status_code=404)
+    item, stock = row
+    require_item_access(request, user, item)
+    txs = db.scalars(
+        select(Transaction).where(Transaction.item_id == item_id)
+        .where(Transaction.branch_id == item.branch_id)
+        .order_by(desc(Transaction.created_at)).limit(200)
+    ).all()
+    return templates.TemplateResponse("item_detail.html", {
+        "request": request, "item": item, "stock": stock, "txs": txs, "user": user, "active": "items",
+    })
+
+
+@app.get("/items/{item_id}/edit", response_class=HTMLResponse)
+def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    item = db.get(Item, item_id)
+    require_item_access(request, user, item)
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("item_edit.html", {
+        "request": request, "item": item, "user": user,
+        "error": request.query_params.get("error"),
+        "active": "items", "csrf_token": csrf_token,
+    })
+
+
 @app.post("/items/{item_id}/edit")
-def item_edit_save(
+async def item_edit_save(
     request: Request,
     item_id: int,
     name: str = Form(...),
@@ -641,9 +957,6 @@ def item_edit_save(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -651,54 +964,206 @@ def item_edit_save(
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-
+    verify_csrf_token(request, csrf_token)
     item = db.get(Item, item_id)
     require_item_access(request, user, item)
-
-    # [FIX-5] Sanitize
-    name_clean = sanitize_text(name, max_length=200, field_name="name")
+    name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
         return redirect(f"/items/{item_id}/edit?error=Name+is+required")
-
     item.name = name_clean
-    item.category = sanitize_text(category, max_length=120) or None
-    item.unit = sanitize_text(unit, max_length=20) or "pcs"
+    item.category = sanitize_text(category, 120, "Category") or None
+    item.unit = (unit or "pcs").strip() or "pcs"
     item.reorder_level = int(reorder_level or 0)
     item.cost_price = float(cost_price or 0)
     item.selling_price = float(selling_price or 0)
-
     at = (adjust_type or "").strip().upper()
     aq = int(adjust_qty or 0)
-
     if aq < 0:
         return redirect(f"/items/{item_id}/edit?error=Adjust+quantity+must+be+positive")
     if aq > 0:
         if at not in {"IN", "OUT"}:
             return redirect(f"/items/{item_id}/edit?error=Adjust+type+must+be+IN+or+OUT")
         if at == "OUT":
-            row = get_item_with_stock(db, item_id)
-            current_stock = int(row[1]) if row else 0
-            if current_stock < aq:
+            r = get_item_with_stock(db, item_id)
+            if (r[1] if r else 0) < aq:
                 return redirect(f"/items/{item_id}/edit?error=Insufficient+stock+for+OUT+adjustment")
         db.add(Transaction(
-            branch_id=item.branch_id,
-            item_id=item_id,
-            type=at,
-            quantity=aq,
+            branch_id=item.branch_id, item_id=item_id, type=at, quantity=aq,
             reference=f"MANUAL ADJUST #{item_id}",
-            note=sanitize_text(adjust_note, max_length=400) or f"Manual stock adjust by {user.username}",
+            note=sanitize_text(adjust_note, 200, "Note") or f"Manual stock adjust by {user.username}",
         ))
-
     db.commit()
     return redirect(f"/items/{item_id}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# AGENTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  TRANSACTIONS
+# ────────────────────────────────────────────────
+
+@app.get("/transactions", response_class=HTMLResponse)
+def transactions_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    txs = db.scalars(
+        select(Transaction).where(Transaction.branch_id == branch_id)
+        .order_by(desc(Transaction.created_at)).limit(300)
+    ).all()
+    return templates.TemplateResponse("transactions_list.html", {
+        "request": request, "txs": txs, "user": user, "active": "transactions",
+    })
+
+
+@app.get("/transactions/new", response_class=HTMLResponse)
+def tx_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    branch_id = get_selected_branch_id(request, user)
+    items = [i for (i, _s) in get_items_with_stock(db) if i.branch_id == branch_id]
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("tx_form.html", {
+        "request": request, "items": items, "error": request.query_params.get("error"),
+        "user": user, "active": "transactions", "branches": branches,
+        "selected_branch_id": branch_id, "csrf_token": csrf_token,
+    })
+
+
+@app.post("/transactions/new")
+async def tx_create(
+    request: Request,
+    item_id: int = Form(...),
+    tx_type: str = Form(...),
+    quantity: int = Form(...),
+    reference: str = Form(""),
+    note: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    verify_csrf_token(request, csrf_token)
+    tx_type_clean = (tx_type or "").strip().upper()
+    if tx_type_clean not in {"IN", "OUT"}:
+        return redirect("/transactions/new?error=Invalid+type")
+    qty = int(quantity)
+    if qty <= 0:
+        return redirect("/transactions/new?error=Quantity+must+be+greater+than+0")
+    if tx_type_clean == "OUT":
+        r = get_item_with_stock(db, item_id)
+        if not r:
+            return redirect("/transactions/new?error=Item+not+found")
+        if int(r[1]) < qty:
+            return redirect("/transactions/new?error=Insufficient+stock")
+    branch_id = get_current_branch_id(request)
+    if not branch_id:
+        return redirect("/transactions/new?error=No+branch+assigned")
+    db.add(Transaction(
+        branch_id=branch_id, item_id=item_id, type=tx_type_clean, quantity=qty,
+        reference=sanitize_text(reference, 120, "Reference") or None,
+        note=sanitize_text(note, 400, "Note") or None,
+    ))
+    db.commit()
+    return redirect("/transactions")
+
+
+# ────────────────────────────────────────────────
+#  STOCK ALERTS
+# ────────────────────────────────────────────────
+
+@app.get("/stale-stock", response_class=HTMLResponse)
+def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    branch_id = get_selected_branch_id(request, user)
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    all_items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name)).scalars().all()
+    stale_rows = []
+    for item in all_items:
+        stock = db.scalar(
+            select(func.coalesce(func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0))
+            .where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id)
+        ) or 0
+        if stock <= 0:
+            continue
+        last_tx = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id))
+        if last_tx is None or last_tx < cutoff:
+            stale_rows.append({"item": item, "stock": int(stock), "last_tx": last_tx,
+                               "days_since": (datetime.utcnow() - last_tx).days if last_tx else 9999})
+    stale_rows.sort(key=lambda r: r["days_since"], reverse=True)
+    return templates.TemplateResponse("stale_stock.html", {
+        "request": request, "user": user, "rows": stale_rows, "days": days, "active": "stale",
+    })
+
+
+@app.get("/low-stock", response_class=HTMLResponse)
+def low_stock(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
+    return templates.TemplateResponse("low_stock.html", {
+        "request": request, "rows": rows, "user": user, "active": "low",
+    })
+
+
+# ────────────────────────────────────────────────
+#  AGENTS
+# ────────────────────────────────────────────────
+
+@app.get("/agents", response_class=HTMLResponse)
+def agents_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    branch_id = get_selected_branch_id(request, user)
+    agents = db.execute(
+        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+    ).scalars().all()
+    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
+
+
+@app.get("/agents/new", response_class=HTMLResponse)
+def agent_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("agent_new.html", {
+        "request": request, "user": user,
+        "error": request.query_params.get("error"),
+        "active": "agents", "csrf_token": csrf_token,
+    })
+
 
 @app.post("/agents/new")
-def agent_create(
+async def agent_create(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
@@ -707,9 +1172,6 @@ def agent_create(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -717,48 +1179,150 @@ def agent_create(
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-
-    # [FIX-5] Sanitize username
-    try:
-        uname = sanitize_username(username)
-    except HTTPException:
-        return redirect("/agents/new?error=Invalid+username+format")
-
+    verify_csrf_token(request, csrf_token)
+    uname = sanitize_username(username)
     if not uname:
         return redirect("/agents/new?error=Username+is+required")
-
     if db.scalar(select(User).where(User.username == uname)):
         return redirect("/agents/new?error=Username+already+exists")
-
-    # [FIX-7] Minimum password length raised to 8
-    if len(password or "") < MIN_PASSWORD_LENGTH:
-        return redirect(f"/agents/new?error=Password+must+be+at+least+{MIN_PASSWORD_LENGTH}+characters")
-
+    if len(password or "") < 8:
+        return redirect("/agents/new?error=Password+must+be+at+least+8+characters")
     if not user.branch_id:
         return redirect("/agents/new?error=Admin+has+no+branch+assigned")
-
-    # [FIX-5] Sanitize optional fields
-    full_name_clean = sanitize_text(full_name, max_length=140, field_name="full_name") or None
-    phone_clean = sanitize_phone(phone) or None
-
     db.add(User(
-        username=uname,
-        password_hash=hash_password(password),
-        role="AGENT",
+        username=uname, password_hash=hash_password(password), role="AGENT",
         branch_id=user.branch_id,
-        full_name=full_name_clean,
-        phone=phone_clean,
+        full_name=sanitize_text(full_name, 140, "Full name") or None,
+        phone=sanitize_phone(phone) or None,
     ))
     db.commit()
     return redirect("/agents")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DELIVERIES
-# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/agents/{agent_id}", response_class=HTMLResponse)
+def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
+    agent = db.get(User, agent_id)
+    require_agent_access(request, user, agent)
+
+    sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
+    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent_id, start=start_dt, end=end_dt)
+
+    _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
+    if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
+    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
+    remittance = float(total_collections) - float(total_office_expenses)
+    net_position = remittance + operating_balance
+
+    d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
+    if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
+    if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+    deliveries = db.execute(d_stmt).scalars().all()
+
+    delivery_ids = [d.id for d in deliveries]
+    items_summary: dict[int, str] = {}
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+        grouped: dict[int, list[str]] = {}
+        for did, iname, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
+        items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
+
+    cash_stmt = select(CashEntry).order_by(desc(CashEntry.created_at))
+    if start_dt: cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt: cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
+    cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
+    cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
+
+    return templates.TemplateResponse("agent_detail.html", {
+        "request": request, "user": user, "agent": agent, "rows": rows,
+        "deliveries": deliveries, "items_summary": items_summary, "cash_entries": cash_entries,
+        "total_collections": float(total_collections), "total_expenses": float(total_expenses),
+        "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
+        "operating_balance": float(operating_balance), "total_office_expenses": float(total_office_expenses),
+        "remittance": float(remittance), "net_position": float(net_position),
+        "preset": preset_norm or (preset or ""),
+        "start_date": sd.isoformat() if sd else "",
+        "end_date": ed.isoformat() if ed else "",
+        "active": "agents",
+    })
+
+
+# ────────────────────────────────────────────────
+#  DELIVERIES
+# ────────────────────────────────────────────────
+
+@app.get("/deliveries", response_class=HTMLResponse)
+def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user) and not is_supervisor(user):
+        return redirect("/my-deliveries")
+    branch_id = get_selected_branch_id(request, user)
+    status = request.query_params.get("status", "").strip().upper()
+    agent_id = request.query_params.get("agent_id", "").strip()
+    stmt = select(Delivery).where(Delivery.branch_id == branch_id).order_by(desc(Delivery.created_at)).limit(300)
+    if status: stmt = stmt.where(Delivery.status == status)
+    if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
+    rows = db.execute(stmt).scalars().all()
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
+    delivery_ids = [d.id for d in rows]
+    items_summary: dict[int, str] = {}
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+        grouped: dict[int, list[str]] = {}
+        for did, iname, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
+        for did, parts in grouped.items():
+            items_summary[did] = ", ".join(parts)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    return templates.TemplateResponse("deliveries_list.html", {
+        "request": request, "rows": rows, "agents": agents, "status": status,
+        "agent_id": agent_id, "items_summary": items_summary,
+        "branches": branches, "selected_branch_id": branch_id, "user": user, "active": "deliveries",
+    })
+
+
+@app.get("/deliveries/new", response_class=HTMLResponse)
+def delivery_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
+    items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("delivery_new.html", {
+        "request": request, "agents": agents, "items": items, "user": user,
+        "active": "deliveries_new", "branches": branches, "selected_branch_id": branch_id,
+        "today": date.today().isoformat(), "csrf_token": csrf_token,
+    })
+
 
 @app.post("/deliveries/new")
-def delivery_create(
+async def delivery_create(
     request: Request,
     agent_id: int | None = Form(None),
     customer_name: str = Form(...),
@@ -772,93 +1336,126 @@ def delivery_create(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-
+    verify_csrf_token(request, csrf_token)
     if is_admin(user):
         if agent_id is None:
             raise HTTPException(status_code=422, detail="agent_id required for admin")
         target_agent_id = int(agent_id)
     else:
         target_agent_id = int(user.id)
-
-    # [FIX-5] Sanitize free text fields
-    cust = sanitize_text(customer_name, max_length=160, field_name="customer_name")
+    cust = sanitize_text(customer_name, 160, "Customer name")
     if not cust:
         raise HTTPException(status_code=400, detail="Customer name required")
-
     branch_id = get_current_branch_id(request)
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
-
     try:
         d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.utcnow()
     except ValueError:
         d_date = datetime.utcnow()
-
     d = Delivery(
-        branch_id=branch_id,
-        agent_id=target_agent_id,
-        customer_name=cust,
+        branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
         customer_phone=sanitize_phone(customer_phone) or None,
-        address=sanitize_text(address, max_length=300, field_name="address") or None,
-        note=sanitize_text(note, max_length=400, field_name="note") or None,
-        status="PENDING",
-        delivery_date=d_date,
+        address=sanitize_text(address, 300, "Address") or None,
+        note=sanitize_text(note, 400, "Note") or None,
+        status="PENDING", delivery_date=d_date,
     )
     db.add(d)
     db.flush()
-
     amounts = list(line_amount or [])
     while len(amounts) < len(item_id):
         amounts.append(0.0)
-
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0
         if q > 0:
-            db.add(DeliveryItem(
-                delivery_id=d.id,
-                item_id=int(iid),
-                quantity=q,
-                line_amount=float(amt or 0),
-            ))
-
+            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
     db.commit()
     return redirect(f"/deliveries/{d.id}")
 
 
-@app.post("/deliveries/{delivery_id}/status")
-def update_delivery_status(
-    request: Request,
-    delivery_id: int,
-    status: str = Form(...),
-    csrf_token: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
+@app.get("/my-deliveries", response_class=HTMLResponse)
+def my_deliveries(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    rows = db.execute(
+        select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
+        .order_by(desc(Delivery.created_at)).limit(300)
+    ).scalars().all()
+    return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user, "active": "deliveries"})
 
+
+@app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
+def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
     d = db.get(Delivery, delivery_id)
     require_delivery_access(request, user, d)
-
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
+    d_items = db.execute(
+        select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)
+    ).all()
+    col = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "COLLECTION")) or 0
+    exp = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "EXPENSE")) or 0
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("delivery_detail.html", {
+        "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
+        "collection_total": float(col), "expense_total": float(exp),
+        "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
+        "active": "deliveries", "csrf_token": csrf_token,
+    })
 
+
+@app.post("/deliveries/{delivery_id}/date")
+async def update_delivery_date(
+    request: Request, delivery_id: int,
+    delivery_date: str = Form(...), csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    d = db.get(Delivery, delivery_id)
+    require_delivery_access(request, user, d)
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    try:
+        d.delivery_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d")
+        db.commit()
+    except ValueError:
+        pass
+    return redirect(f"/deliveries/{delivery_id}")
+
+
+@app.post("/deliveries/{delivery_id}/status")
+async def update_delivery_status(
+    request: Request, delivery_id: int,
+    status: str = Form(...), csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    d = db.get(Delivery, delivery_id)
+    require_delivery_access(request, user, d)
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
     status_clean = (status or "").strip().upper()
-    allowed = {"PENDING", "OUT_FOR_DELIVERY", "DELIVERED", "FAILED", "RETURNED"}
-    if status_clean not in allowed:
+    if status_clean not in {"PENDING", "OUT_FOR_DELIVERY", "DELIVERED", "FAILED", "RETURNED"}:
         raise HTTPException(status_code=400, detail="Invalid status")
-
     if status_clean == "DELIVERED":
         try:
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
@@ -866,29 +1463,78 @@ def update_delivery_status(
             d.delivered_at = datetime.utcnow()
             db.commit()
         except ValueError as e:
-            d_items = db.execute(
-                select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id)
-                .where(DeliveryItem.delivery_id == d.id)
-            ).all()
+            d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
+            csrf_token2 = get_csrf_token(request)
             return templates.TemplateResponse("delivery_detail.html", {
-                "request": request, "d": d, "d_items": d_items, "user": user,
-                "error": str(e), "collection_total": 0, "expense_total": 0,
+                "request": request, "d": d, "d_items": d_items, "user": user, "error": str(e),
+                "collection_total": 0, "expense_total": 0,
                 "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
-                "active": "deliveries",
+                "active": "deliveries", "csrf_token": csrf_token2,
             })
         return redirect(f"/deliveries/{delivery_id}")
-
     d.status = status_clean
     db.commit()
     return redirect(f"/deliveries/{delivery_id}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CASH
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  CASH
+# ────────────────────────────────────────────────
+
+@app.get("/cash", response_class=HTMLResponse)
+def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end_date: str = "", agent_id: str = "", db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    branch_id = get_selected_branch_id(request, user)
+    sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
+    start_dt = None
+    end_dt = None
+    if preset_norm:
+        start_dt, end_dt = cash_range_from_preset(preset_norm)
+    else:
+        if sd: start_dt = datetime.combine(sd, datetime.min.time())
+        if ed: end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
+    selected_agent_id = None
+    if is_admin(user):
+        if (agent_id or "").isdigit(): selected_agent_id = int(agent_id)
+    else:
+        selected_agent_id = user.id
+    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=selected_agent_id, start=start_dt, end=end_dt)
+    branch_delivery_days = set(str(x) for x in db.execute(select(func.date(Delivery.created_at)).where(Delivery.branch_id == branch_id)).scalars().all() if x is not None)
+    branch_cash_days = set(str(x) for x in db.execute(select(func.date(CashEntry.created_at)).where(CashEntry.branch_id == branch_id)).scalars().all() if x is not None)
+    rows = [r for r in rows if r["day"] in (branch_delivery_days | branch_cash_days)]
+    total_collections = float(sum(float(r["collections"]) for r in rows))
+    total_expenses = float(sum(float(r["expenses"]) for r in rows))
+    total_operating = float(sum(float(r["operating_cash"]) for r in rows))
+    total_office_expenses = float(sum(float(r["office_expenses"]) for r in rows))
+    _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH")
+    if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+    if selected_agent_id: _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
+    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
+    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
+    remittance = float(total_collections) - float(total_office_expenses)
+    net_position = remittance + operating_balance
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("cash_dashboard.html", {
+        "request": request, "user": user, "rows": rows,
+        "total_collections": float(total_collections), "total_expenses": float(total_expenses),
+        "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
+        "operating_balance": float(operating_balance), "total_office_expenses": float(total_office_expenses),
+        "remittance": float(remittance), "net_position": float(net_position),
+        "agents": agents, "agent_id": agent_id,
+        "preset": preset_norm or (preset or ""),
+        "start_date": sd.isoformat() if sd else "",
+        "end_date": ed.isoformat() if ed else "",
+        "active": "cash", "csrf_token": csrf_token,
+    })
+
 
 @app.post("/cash/new")
-def cash_new(
+async def cash_new(
     request: Request,
     kind: str = Form(...),
     amount: float = Form(...),
@@ -898,279 +1544,214 @@ def cash_new(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-
+    verify_csrf_token(request, csrf_token)
     k = (kind or "").strip().upper()
     if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
-
     if k == "OFFICE_EXPENSE" and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
-
-    # [FIX-5] Validate amount
-    amt = sanitize_amount(amount, field_name="amount")
-
+    amt = sanitize_amount(amount)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be > 0")
     target_agent_id = user.id
-    if is_admin(user) and (agent_id or "").isdigit():
-        target_agent_id = int(agent_id)
-
-    if k == "OFFICE_EXPENSE":
-        target_agent_id = user.id
-
+    if is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
+    if k == "OFFICE_EXPENSE": target_agent_id = user.id
     d_id = int(delivery_id) if (delivery_id or "").isdigit() else None
-
     branch_id = get_current_branch_id(request)
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
-
     db.add(CashEntry(
-        branch_id=branch_id,
-        agent_id=target_agent_id,
-        delivery_id=d_id,
-        kind=k,
-        amount=amt,
-        note=sanitize_text(note, max_length=400, field_name="note") or None,
+        branch_id=branch_id, agent_id=target_agent_id, delivery_id=d_id,
+        kind=k, amount=amt, note=sanitize_text(note, 400, "Note") or None,
     ))
     db.commit()
-
     if d_id:
         return redirect(f"/deliveries/{d_id}")
     return redirect("/cash")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# BRANCHES
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  REPORTS
+# ────────────────────────────────────────────────
 
-@app.post("/branches/new")
-def branch_create(
-    request: Request,
-    name: str = Form(...),
-    code: str = Form(""),
-    address: str = Form(""),
-    csrf_token: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-
-    if not is_supervisor(user):
+    if not (is_admin(user) or is_agent(user)):
         return HTMLResponse("Forbidden", status_code=403)
-
-    # [FIX-5] Sanitize
-    name_clean = sanitize_text(name, max_length=120, field_name="name")
-    code_clean = sanitize_text(code, max_length=20, field_name="code") or None
-    address_clean = sanitize_text(address, max_length=200, field_name="address") or None
-
-    if not name_clean:
-        return redirect("/branches/new?error=Branch+name+is+required")
-
-    existing_name = db.scalar(select(Branch).where(Branch.name == name_clean))
-    if existing_name:
-        return redirect("/branches/new?error=Branch+name+already+exists")
-
-    if code_clean:
-        existing_code = db.scalar(select(Branch).where(Branch.code == code_clean))
-        if existing_code:
-            return redirect("/branches/new?error=Branch+code+already+exists")
-
-    db.add(Branch(name=name_clean, code=code_clean, address=address_clean))
-    db.commit()
-    return redirect("/branches")
+    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if is_admin(user) else []
+    today = date.today().isoformat()
+    return templates.TemplateResponse("reports_sales.html", {
+        "request": request, "user": user, "agents": agents,
+        "start_date": today, "end_date": today, "active": "reports",
+    })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TRANSFERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/transfers/new")
-def transfer_create(
-    request: Request,
-    to_branch_id: int = Form(...),
-    note: str = Form(""),
-    item_ids: list[int] = Form(...),
-    quantities: list[int] = Form(...),
-    csrf_token: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
+@app.get("/reports/preview")
+def reports_preview(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
-        return user_or
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     user = user_or
+    if not (is_admin(user) or is_agent(user)):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
+    if not d1 and not d2: d1 = d2 = date.today()
+    if d1 and not d2: d2 = d1
+    if d2 and not d1: d1 = d2
+    start_dt = datetime.combine(d1, datetime.min.time())
+    end_dt   = datetime.combine(d2, datetime.max.time())
+    target_agent_id = None
+    if is_agent(user): target_agent_id = int(user.id)
+    elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
+    filters = [Delivery.delivery_date >= start_dt, Delivery.delivery_date <= end_dt, Delivery.status == "DELIVERED"]
+    if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
+    deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())).scalars().all()
+    delivery_ids = [d.id for d in deliveries]
+    items_by_delivery: dict[int, list] = {}
+    if delivery_ids:
+        for did, iname, qty, line_amt, selling_price in db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.line_amount, Item.selling_price)
+            .join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id.in_(delivery_ids))
+        ).all():
+            q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
+            items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la if la > 0 else q * sp})
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
+    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
+    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
+    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
+    uname = {}
+    if all_agent_ids:
+        uname = {int(u.id): (u.full_name or u.username) for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+    delivery_rows = []
+    grand_total = 0.0
+    for idx, d in enumerate(deliveries, 1):
+        d_items = items_by_delivery.get(int(d.id), [])
+        total = sum(i["amount"] for i in d_items)
+        grand_total += total
+        delivery_rows.append({"idx": idx, "customer": d.customer_name, "date": (d.delivery_date or d.created_at).strftime("%d %b %Y"), "items": d_items, "total": total})
+    agent_op_summary = []
+    total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0.0
+    for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
+        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0); balance = op - exp
+        total_op_cash_given += op
+        if op > 0:
+            total_op_cash_balance_returned += max(balance, 0)
+            if balance < 0: expenses_from_collections += abs(balance)
+        else:
+            expenses_from_collections += exp
+        agent_op_summary.append({"name": uname.get(aid, f"Agent {aid}"), "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
+    total_agent_exp = sum(a["expenses"] for a in agent_op_summary)
+    total_expenses = total_agent_exp + office_total
+    remittance = grand_total - expenses_from_collections if is_agent(user) else grand_total - total_expenses
+    title = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
+    return JSONResponse({
+        "title": title, "delivery_count": len(deliveries), "deliveries": delivery_rows,
+        "grand_total": grand_total, "agent_op_summary": agent_op_summary,
+        "total_op_cash_given": total_op_cash_given,
+        "total_op_cash_balance_returned": total_op_cash_balance_returned,
+        "expenses_from_collections": expenses_from_collections,
+        "total_agent_expenses": total_agent_exp, "waybill_total": waybill_total,
+        "other_office_expenses": office_total - waybill_total,
+        "total_office_expenses": office_total, "total_expenses": total_expenses,
+        "remittance": remittance, "is_agent": is_agent(user),
+    })
 
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
 
-    if to_branch_id == user.branch_id:
-        return redirect("/transfers/new?error=Cannot+transfer+to+your+own+branch")
-
-    if not item_ids or not quantities or len(item_ids) != len(quantities):
-        return redirect("/transfers/new?error=Please+add+at+least+one+item")
-
-    for item_id, qty in zip(item_ids, quantities):
-        if qty <= 0:
-            return redirect("/transfers/new?error=Quantities+must+be+greater+than+zero")
-        row = get_item_with_stock(db, item_id, branch_id=user.branch_id)
-        if not row:
-            return redirect("/transfers/new?error=Item+not+found")
-        _item, stock = row
-        if int(stock) < qty:
-            return redirect(f"/transfers/new?error=Insufficient+stock+for+{_item.name}")
-
-    transfer = StockTransfer(
-        from_branch_id=user.branch_id,
-        to_branch_id=to_branch_id,
-        status="PENDING",
-        note=sanitize_text(note, max_length=400) or None,
-        created_by_id=user.id,
-    )
-    db.add(transfer)
-    db.flush()
-
-    for item_id, qty in zip(item_ids, quantities):
-        db.add(StockTransferItem(transfer_id=transfer.id, item_id=item_id, quantity=qty))
-
-    for item_id, qty in zip(item_ids, quantities):
-        db.add(Transaction(
-            branch_id=user.branch_id,
-            item_id=item_id,
-            type="OUT",
-            quantity=qty,
-            reference=f"TRANSFER #{transfer.id}",
-            note=f"Stock transfer to branch ID {to_branch_id}",
-        ))
-
-    db.commit()
-    return redirect(f"/transfers/{transfer.id}")
-
-
-@app.post("/transfers/{transfer_id}/receive")
-def transfer_receive(
-    transfer_id: int,
-    request: Request,
-    csrf_token: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
+@app.get("/reports/txt", response_class=PlainTextResponse)
+def reports_txt(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
-        return user_or
+        return PlainTextResponse("Unauthorized", status_code=401)
     user = user_or
-
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
-
-    transfer = db.get(StockTransfer, transfer_id)
-    if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-
-    if transfer.to_branch_id != user.branch_id:
-        return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
-
-    if transfer.status != "PENDING":
-        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
-
-    for line in transfer.items:
-        dest_item = db.scalar(
-            select(Item).where(Item.branch_id == user.branch_id, Item.name == line.item.name)
-        )
-        if not dest_item:
-            dest_item = Item(
-                branch_id=user.branch_id,
-                name=line.item.name,
-                category=line.item.category,
-                unit=line.item.unit,
-                reorder_level=line.item.reorder_level,
-                cost_price=line.item.cost_price,
-                selling_price=line.item.selling_price,
-            )
-            db.add(dest_item)
-            db.flush()
-
-        db.add(Transaction(
-            branch_id=user.branch_id,
-            item_id=dest_item.id,
-            type="IN",
-            quantity=line.quantity,
-            reference=f"TRANSFER #{transfer.id}",
-            note=f"Stock received from branch {transfer.from_branch.name}",
-        ))
-
-    transfer.status = "RECEIVED"
-    transfer.received_by_id = user.id
-    transfer.received_at = datetime.utcnow()
-    db.commit()
-    return redirect(f"/transfers/{transfer_id}")
-
-
-@app.post("/transfers/{transfer_id}/cancel")
-def transfer_cancel(
-    transfer_id: int,
-    request: Request,
-    csrf_token: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
-
-    transfer = db.get(StockTransfer, transfer_id)
-    if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-
-    if user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
-        return HTMLResponse("Forbidden", status_code=403)
-
-    if transfer.status != "PENDING":
-        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
-
-    for line in transfer.items:
-        db.add(Transaction(
-            branch_id=transfer.from_branch_id,
-            item_id=line.item_id,
-            type="IN",
-            quantity=line.quantity,
-            reference=f"TRANSFER #{transfer.id} CANCELLED",
-            note="Stock returned — transfer cancelled",
-        ))
-
-    transfer.status = "CANCELLED"
-    transfer.cancelled_by_id = user.id
-    transfer.cancelled_at = datetime.utcnow()
-    db.commit()
-    return redirect(f"/transfers/{transfer_id}")
+    if not (is_admin(user) or is_agent(user)):
+        return PlainTextResponse("Forbidden", status_code=403)
+    d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
+    if not d1 and not d2: d1 = d2 = date.today()
+    if d1 and not d2: d2 = d1
+    if d2 and not d1: d1 = d2
+    start_dt = datetime.combine(d1, datetime.min.time())
+    end_dt   = datetime.combine(d2, datetime.max.time())
+    target_agent_id = None
+    if is_agent(user): target_agent_id = int(user.id)
+    elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
+    filters = [Delivery.created_at >= start_dt, Delivery.created_at <= end_dt, Delivery.status == "DELIVERED"]
+    if target_agent_id is not None: filters.append(Delivery.agent_id == target_agent_id)
+    deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
+    delivery_ids = [d.id for d in deliveries]
+    items_by_delivery: dict[int, list] = {}
+    if delivery_ids:
+        for did, iname, qty, line_amt, sp in db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.line_amount, Item.selling_price)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all():
+            q = float(qty or 0); la = float(line_amt or 0); spp = float(sp or 0)
+            items_by_delivery.setdefault(int(did), []).append((str(iname), q, la if la > 0 else q * spp))
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
+    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
+    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    other_office_total = office_total - waybill_total
+    all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
+    uname: dict[int, str] = {}
+    if all_agent_ids:
+        uname = {int(u.id): (u.full_name or u.username or f"Agent {u.id}") for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+    title_day = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
+    lines = [f"REPORT FOR {title_day}.", f"TOTAL DELIVERY = {len(deliveries)}", ""]
+    grand_total = 0.0
+    for idx, d in enumerate(deliveries, start=1):
+        d_items = items_by_delivery.get(int(d.id), [])
+        delivery_total = sum(amt for _n, _q, amt in d_items)
+        grand_total += delivery_total
+        parts = [f"{q:g} {n}" for n, q, _a in d_items]
+        lines.append(f"({idx})\t{sum(q for _n,q,_a in d_items):g}\t{' + '.join(parts) if parts else 'No items'}\t{_ngn(delivery_total)}")
+    lines += ["", f"Grand total: {_ngn(grand_total)}", ""]
+    total_agent_expenses = expenses_from_collections = total_op_cash_given = total_op_cash_balance = 0.0
+    agent_section_lines: list[str] = []
+    for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
+        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0); aname = uname.get(aid, f"Agent {aid}")
+        total_agent_expenses += exp; total_op_cash_given += op
+        if op > 0:
+            balance = op - exp; total_op_cash_balance += max(balance, 0)
+            if balance < 0: expenses_from_collections += abs(balance)
+            agent_section_lines += [f"  {aname}:", f"    Operating cash given : {_ngn(op)}", f"    Expenses spent       : {_ngn(exp)}",
+                                    f"    {'Balance to return' if balance >= 0 else 'Overspent (from coll)'}: {_ngn(abs(balance))}"]
+        else:
+            expenses_from_collections += exp
+            agent_section_lines += [f"  {aname}:", f"    Expenses (no op cash, deducted from collection): {_ngn(exp)}"]
+    if is_agent(user):
+        lines += ["Operating Cash & Expenses:"] + (agent_section_lines or ["  None"])
+        if total_op_cash_given > 0:
+            lines += [f"  Total operating cash given : {_ngn(total_op_cash_given)}", f"  Total expenses             : {_ngn(total_agent_expenses)}", f"  Total balance to return    : {_ngn(total_op_cash_balance)}"]
+        lines += ["", "Office expenses:", f"  Waybills              : {_ngn(waybill_total)}", f"  Other office expenses : {_ngn(other_office_total)}", f"  Total office expenses : {_ngn(office_total)}", ""]
+        remittance = grand_total - expenses_from_collections
+        lines += ["Amount to be remitted (collections only):"]
+        lines.append(f"  {_ngn(grand_total)} - {_ngn(expenses_from_collections)} (uncovered expenses) = {_ngn(remittance)}" if expenses_from_collections > 0 else f"  {_ngn(grand_total)}")
+    else:
+        total_expenses = total_agent_expenses + office_total
+        remittance = grand_total - total_expenses
+        lines += ["Agent Expenses:"] + (agent_section_lines or ["  None"]) + [f"  Total agent expenses: {_ngn(total_agent_expenses)}", "", "Office expenses:",
+            f"  Waybills              : {_ngn(waybill_total)}", f"  Other office expenses : {_ngn(other_office_total)}", f"  Total office expenses : {_ngn(office_total)}", "",
+            f"Total amount of expenses: {_ngn(total_expenses)}", "", "Amount to be remitted:", f"  {_ngn(grand_total)} - {_ngn(total_expenses)} = {_ngn(remittance)}"]
+    return PlainTextResponse("\n".join(lines), headers={"Content-Disposition": f'attachment; filename="report_{d1.isoformat()}_{d2.isoformat()}.txt"'}, media_type="text/plain; charset=utf-8")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ADMIN: RESET SYSTEM  [FIX-8] Now POST-only with CSRF + confirmation token
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  ADMIN RESET  [FIX-8]
+# ────────────────────────────────────────────────
 
 @app.get("/admin/reset-system", response_class=HTMLResponse)
 def reset_system_form(request: Request, db: Session = Depends(get_db)):
-    """Shows a confirmation page before allowing a database reset."""
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -1178,55 +1759,40 @@ def reset_system_form(request: Request, db: Session = Depends(get_db)):
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-
     csrf_token = get_csrf_token(request)
-    # Simple inline confirmation page — replace with a proper template if preferred
-    html_content = f"""
-    <!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;background:#0b1220;color:#e7eefc">
-    <h2 style="color:#ef4444">⚠️ Danger: Reset System</h2>
-    <p>This will permanently delete ALL transactions, deliveries, delivery items, and cash entries.</p>
-    <p>This action <strong>cannot be undone</strong>.</p>
-    <form method="post" action="/admin/reset-system">
-        <input type="hidden" name="csrf_token" value="{csrf_token}" />
-        <label style="display:block;margin-bottom:10px">
-            Type <strong>RESET</strong> to confirm:
-            <input name="confirm" type="text" style="margin-left:10px;padding:6px;border-radius:6px;border:1px solid #555;background:#1a2b63;color:#fff" />
-        </label>
-        <button type="submit" style="background:#ef4444;color:white;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-weight:bold">
-            Reset Database
-        </button>
-        <a href="/" style="margin-left:20px;color:#a7b4d6">Cancel</a>
-    </form>
-    </body></html>
-    """
-    return HTMLResponse(html_content)
+    return HTMLResponse(f"""<!doctype html><html><head><title>Reset System</title>
+<style>body{{font-family:sans-serif;max-width:500px;margin:80px auto;padding:20px}}
+input,button{{padding:10px;border-radius:8px;border:1px solid #ccc;width:100%;box-sizing:border-box;margin-top:10px}}
+button{{background:#ef4444;color:white;border:none;cursor:pointer;font-weight:700}}</style></head>
+<body><h2>⚠ Reset System</h2>
+<p>This will permanently delete all deliveries, transactions, and cash entries.</p>
+<p>Type <strong>RESET</strong> to confirm:</p>
+<form method="post" action="/admin/reset-system">
+  <input type="hidden" name="csrf_token" value="{csrf_token}" />
+  <input type="text" name="confirm" placeholder="Type RESET here" required />
+  <button type="submit">Delete All Data</button>
+</form>
+<p style="margin-top:20px"><a href="/">← Cancel</a></p>
+</body></html>""")
 
 
 @app.post("/admin/reset-system")
-def reset_system(
+async def reset_system_execute(
     request: Request,
     confirm: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    """[FIX-8] Now requires POST + CSRF + typed confirmation. No more accidental GET resets."""
-    # [FIX-4] CSRF check
-    verify_csrf_token(request, csrf_token)
-
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return user_or
     user = user_or
     forbid = require_admin_or_403(user)
     if forbid:
         return forbid
-
-    if (confirm or "").strip() != "RESET":
-        return HTMLResponse(
-            "Confirmation failed. Please type RESET exactly. <a href='/admin/reset-system'>Go back</a>",
-            status_code=400,
-        )
-
+    verify_csrf_token(request, csrf_token)
+    if confirm.strip() != "RESET":
+        return HTMLResponse("Confirmation text incorrect. <a href='/admin/reset-system'>Go back</a>", status_code=400)
     if DATABASE_URL.startswith("sqlite"):
         db.execute(text("DELETE FROM cash_entries"))
         db.execute(text("DELETE FROM delivery_items"))
@@ -1238,12 +1804,12 @@ def reset_system(
         db.execute(text("TRUNCATE TABLE deliveries RESTART IDENTITY CASCADE"))
         db.execute(text("TRUNCATE TABLE transactions RESTART IDENTITY CASCADE"))
     db.commit()
-    return {"status": "Database reset complete"}
+    return redirect("/?reset=1")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PWA / STATIC HELPERS  (unchanged from original)
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
+#  PWA / STATIC
+# ────────────────────────────────────────────────
 
 @app.get("/manifest.json")
 def pwa_manifest():
@@ -1257,8 +1823,7 @@ def pwa_manifest():
 
 @app.get("/sw.js", response_class=PlainTextResponse)
 def service_worker():
-    sw = """
-const CACHE = "invkeeper-v1";
+    sw = """const CACHE = "invkeeper-v1";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
@@ -1281,9 +1846,179 @@ self.addEventListener("fetch", e => {
       return res;
     }).catch(() => caches.match(e.request))
   );
-});
-"""
+});"""
     return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
 
-# NOTE: /debug-login has been REMOVED. [FIX-2]
-# If you need to test login, do it through the normal /login page.
+
+# NOTE: /debug-login REMOVED [FIX-2]
+
+
+# ────────────────────────────────────────────────
+#  STOCK TRANSFERS
+# ────────────────────────────────────────────────
+
+@app.get("/transfers", response_class=HTMLResponse)
+def transfers_list(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    if is_supervisor(user):
+        transfers = db.execute(select(StockTransfer).order_by(desc(StockTransfer.created_at))).scalars().all()
+    else:
+        transfers = db.execute(
+            select(StockTransfer)
+            .where((StockTransfer.from_branch_id == user.branch_id) | (StockTransfer.to_branch_id == user.branch_id))
+            .order_by(desc(StockTransfer.created_at))
+        ).scalars().all()
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    return templates.TemplateResponse("transfers_list.html", {
+        "request": request, "user": user, "transfers": transfers, "branches": branches,
+        "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
+    })
+
+
+@app.get("/transfers/new", response_class=HTMLResponse)
+def transfer_new_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)).scalars().all()
+    items = get_items_with_stock(db, branch_id=user.branch_id)
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("transfer_new.html", {
+        "request": request, "user": user, "branches": branches, "items": items,
+        "error": request.query_params.get("error"), "active": "transfers",
+        "selected_branch_id": user.branch_id, "csrf_token": csrf_token,
+    })
+
+
+@app.post("/transfers/new")
+async def transfer_create(
+    request: Request,
+    to_branch_id: int = Form(...),
+    note: str = Form(""),
+    item_ids: list[int] = Form(...),
+    quantities: list[int] = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    if to_branch_id == user.branch_id:
+        return redirect("/transfers/new?error=Cannot+transfer+to+your+own+branch")
+    if not item_ids or not quantities or len(item_ids) != len(quantities):
+        return redirect("/transfers/new?error=Please+add+at+least+one+item")
+    for item_id, qty in zip(item_ids, quantities):
+        if qty <= 0:
+            return redirect("/transfers/new?error=Quantities+must+be+greater+than+zero")
+        row = get_item_with_stock(db, item_id, branch_id=user.branch_id)
+        if not row:
+            return redirect("/transfers/new?error=Item+not+found")
+        _item, stock = row
+        if int(stock) < qty:
+            return redirect(f"/transfers/new?error=Insufficient+stock+for+{_item.name}")
+    transfer = StockTransfer(
+        from_branch_id=user.branch_id, to_branch_id=to_branch_id, status="PENDING",
+        note=sanitize_text(note, 400, "Note") or None, created_by_id=user.id,
+    )
+    db.add(transfer)
+    db.flush()
+    for item_id, qty in zip(item_ids, quantities):
+        db.add(StockTransferItem(transfer_id=transfer.id, item_id=item_id, quantity=qty))
+    for item_id, qty in zip(item_ids, quantities):
+        db.add(Transaction(branch_id=user.branch_id, item_id=item_id, type="OUT", quantity=qty,
+                           reference=f"TRANSFER #{transfer.id}", note=f"Stock transfer to branch ID {to_branch_id}"))
+    db.commit()
+    return redirect(f"/transfers/{transfer.id}")
+
+
+@app.get("/transfers/{transfer_id}", response_class=HTMLResponse)
+def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+    if is_admin(user) and user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("transfer_detail.html", {
+        "request": request, "user": user, "transfer": transfer, "branches": branches,
+        "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
+        "csrf_token": csrf_token,
+    })
+
+
+@app.post("/transfers/{transfer_id}/receive")
+async def transfer_receive(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+    if transfer.to_branch_id != user.branch_id:
+        return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
+    if transfer.status != "PENDING":
+        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
+    for line in transfer.items:
+        dest_item = db.scalar(select(Item).where(Item.branch_id == user.branch_id, Item.name == line.item.name))
+        if not dest_item:
+            dest_item = Item(branch_id=user.branch_id, name=line.item.name, category=line.item.category,
+                             unit=line.item.unit, reorder_level=line.item.reorder_level,
+                             cost_price=line.item.cost_price, selling_price=line.item.selling_price)
+            db.add(dest_item)
+            db.flush()
+        db.add(Transaction(branch_id=user.branch_id, item_id=dest_item.id, type="IN", quantity=line.quantity,
+                           reference=f"TRANSFER #{transfer.id}", note=f"Stock received from branch {transfer.from_branch.name}"))
+    transfer.status = "RECEIVED"
+    transfer.received_by_id = user.id
+    transfer.received_at = datetime.utcnow()
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
+
+
+@app.post("/transfers/{transfer_id}/cancel")
+async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+    if user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+        return HTMLResponse("Forbidden", status_code=403)
+    if transfer.status != "PENDING":
+        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
+    for line in transfer.items:
+        db.add(Transaction(branch_id=transfer.from_branch_id, item_id=line.item_id, type="IN", quantity=line.quantity,
+                           reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"))
+    transfer.status = "CANCELLED"
+    transfer.cancelled_by_id = user.id
+    transfer.cancelled_at = datetime.utcnow()
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
