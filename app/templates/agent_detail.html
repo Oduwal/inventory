@@ -1,4 +1,5 @@
-﻿{% extends "base.html" %}
+﻿<!-- app/templates/agent_detail.html -->
+{% extends "base.html" %}
 {% block title %}Agent: {{ agent.username }}{% endblock %}
 {% block page_title %}Agent: {{ agent.username }}{% endblock %}
 {% block page_subtitle %}Cash + deliveries summary with date filters.{% endblock %}
@@ -9,20 +10,19 @@
 {% endblock %}
 
 {% block content %}
-
 <div class="card">
     <div class="badge b-blue">FILTERS</div>
 
     <form method="get" action="/agents/{{ agent.id }}" style="margin-top:12px;">
-        <div class="inputs">
+        <div class="inputs" style="flex-wrap:wrap;">
             <div>
                 <label>Quick Filter</label>
                 <select name="preset">
                     <option value="" {% if not preset %}selected{% endif %}>Custom</option>
-                    <option value="today" {% if preset=="today" %}selected{% endif %}>Today</option>
-                    <option value="yesterday" {% if preset=="yesterday" %}selected{% endif %}>Yesterday</option>
-                    <option value="7d" {% if preset=="7d" %}selected{% endif %}>Last 7 days</option>
-                    <option value="30d" {% if preset=="30d" %}selected{% endif %}>Last 30 days</option>
+                    <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
+                    <option value="yesterday" {% if preset= ="yesterday" %}selected{% endif %}>Yesterday</option>
+                    <option value="7d" {% if preset= ="7d" %}selected{% endif %}>Last 7 days</option>
+                    <option value="30d" {% if preset= ="30d" %}selected{% endif %}>Last 30 days</option>
                 </select>
             </div>
 
@@ -47,15 +47,10 @@
     <div class="badge b-green">TOTALS</div>
 
     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
-        <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
-        <span class="badge b-red">Office Expenses: {{ '%.2f'|format(total_office_expenses) }}</span>
-        <span class="badge b-purple">Remittance: {{ '%.2f'|format(remittance) }}</span>
-
         <span class="badge b-purple">Operating Cash: {{ '%.2f'|format(total_operating_cash) }}</span>
-        <span class="badge b-red">Agent Expenses: {{ '%.2f'|format(total_expenses) }}</span>
+        <span class="badge b-red">Expenses: {{ '%.2f'|format(total_expenses) }}</span>
+        <span class="badge b-blue">Collections: {{ '%.2f'|format(total_collections) }}</span>
         <span class="badge b-green">Operating Balance: {{ '%.2f'|format(operating_balance) }}</span>
-
-        <span class="badge b-green">Net Position: {{ '%.2f'|format(net_position) }}</span>
     </div>
 
     <div style="margin-top:12px; overflow:auto;">
@@ -64,10 +59,8 @@
                 <tr>
                     <th>Date</th>
                     <th>Operating Cash</th>
-                    <th>Agent Expenses</th>
+                    <th>Expenses</th>
                     <th>Collections</th>
-                    <th>Office Expenses</th>
-                    <th>Remittance</th>
                 </tr>
             </thead>
             <tbody>
@@ -78,19 +71,13 @@
                     <td>{{ '%.2f'|format(r.operating_cash|float) }}</td>
                     <td>{{ '%.2f'|format(r.expenses|float) }}</td>
                     <td>{{ '%.2f'|format(r.collections|float) }}</td>
-                    <td>{{ '%.2f'|format(r.office_expenses|float) }}</td>
-                    <td>{{ '%.2f'|format((r.collections|float) - (r.office_expenses|float)) }}</td>
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="6" class="muted">No cash records for this range.</td></tr>
+                <tr><td colspan="4" class="muted">No cash records for this range.</td></tr>
                 {% endif %}
             </tbody>
         </table>
-    </div>
-
-    <div class="muted" style="margin-top:10px;">
-        Agent expenses reduce operating cash only. Office expenses reduce remittance only.
     </div>
 </div>
 
@@ -142,49 +129,41 @@
         </table>
     </div>
 </div>
-<div class="card" style="margin-top:14px;">
-    <div class="badge b-blue">CASH ENTRY DETAILS</div>
 
-    <div style="margin-top:12px; overflow:auto;">
-        <table>
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Amount</th>
-                    <th>Note</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if cash_entries and cash_entries|length > 0 %}
-                {% for c in cash_entries %}
-                <tr>
-                    <td>{{ c.created_at }}</td>
-                    <td>
-                        {% if c.kind == "OPERATING_CASH" %}
-                        <span class="badge b-purple">Operating Cash</span>
-                        {% elif c.kind == "EXPENSE" %}
-                        <span class="badge b-red">Agent Expense</span>
-                        {% elif c.kind == "COLLECTION" %}
-                        <span class="badge b-blue">Extra Collection</span>
-                        {% elif c.kind == "OFFICE_EXPENSE" %}
-                        <span class="badge b-red">Office Expense</span>
-                        {% else %}
-                        <span class="badge b-yellow">{{ c.kind }}</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ '%.2f'|format(c.amount|float) }}</td>
-                    <td>{{ c.note or "-" }}</td>
-                </tr>
-                {% endfor %}
-                {% else %}
-                <tr>
-                    <td colspan="4" class="muted">No cash entries for this range.</td>
-                </tr>
-                {% endif %}
-            </tbody>
-        </table>
-    </div>
+<!-- ══════════════════════════════════════════════════════════════════════════
+     PASTE THIS BLOCK at the bottom of agent_detail.html, before {% endblock %}
+     ══════════════════════════════════════════════════════════════════════════ -->
+<!-- Reset Password -->
+<div class="card" style="margin-top:16px;border-top:3px solid #f59e0b;">
+    <div class="badge b-yellow" style="margin-bottom:10px;">🔑 RESET PASSWORD</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
+        Set a new password for <strong style="color:var(--text);">{{ agent.username }}</strong>.
+        The agent must use this new password on their next login.
+    </p>
+
+    {% if request.query_params.get('success') %}
+    <div class="alert alert-success" style="margin-bottom:14px;">✓ {{ request.query_params.get('success') }}</div>
+    {% endif %}
+    {% if request.query_params.get('error') %}
+    <div class="alert alert-danger" style="margin-bottom:14px;">⚠ {{ request.query_params.get('error') }}</div>
+    {% endif %}
+
+    <form method="post" action="/agents/{{ agent.id }}/reset-password">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <div class="inputs">
+            <div>
+                <label>New Password</label>
+                <input type="password" name="new_password" minlength="8" required placeholder="Min. 8 characters" />
+            </div>
+            <div style="min-width:auto;flex:0;">
+                <label>&nbsp;</label>
+                <button class="btnPrimary" type="submit"
+                        style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 6px 20px rgba(245,158,11,.3);">
+                    🔑 Reset Password
+                </button>
+            </div>
+        </div>
+    </form>
 </div>
 
 {% endblock %}
