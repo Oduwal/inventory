@@ -71,6 +71,20 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# Automatically inject csrf_token into every TemplateResponse context
+# so base.html logout form always has it — no need to pass per-route.
+_orig_tr = templates.TemplateResponse.__func__ if hasattr(templates.TemplateResponse, "__func__") else None
+
+_orig_TemplateResponse = templates.TemplateResponse
+
+def _auto_csrf(name, context, *args, **kwargs):
+    req = context.get("request")
+    if req and "csrf_token" not in context:
+        context["csrf_token"] = get_csrf_token(req)
+    return _orig_TemplateResponse(name, context, *args, **kwargs)
+
+templates.TemplateResponse = _auto_csrf  # type: ignore
+
 static_dir = os.path.join(BASE_DIR, "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -228,7 +242,7 @@ def require_login_or_redirect(db: Session, request: Request) -> User | RedirectR
 
 
 def require_admin_or_403(user: User) -> HTMLResponse | None:
-    if not is_admin(user):
+    if not (is_admin(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
     return None
 
