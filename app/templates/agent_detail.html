@@ -1,4 +1,4 @@
-﻿<!-- app/templates/agent_detail.html -->
+<!-- app/templates/agent_detail.html -->
 {% extends "base.html" %}
 {% block title %}Agent: {{ agent.username }}{% endblock %}
 {% block page_title %}Agent: {{ agent.username }}{% endblock %}
@@ -19,7 +19,7 @@
                 <label>Quick Filter</label>
                 <select name="preset">
                     <option value="" {% if not preset %}selected{% endif %}>Custom</option>
-                    <option value="today" {% if preset= ="today" %}selected{% endif %}>Today</option>
+                    <option value="today" {% if preset=="today" %}selected{% endif %}>Today</option>
                     <option value="yesterday" {% if preset= ="yesterday" %}selected{% endif %}>Yesterday</option>
                     <option value="7d" {% if preset= ="7d" %}selected{% endif %}>Last 7 days</option>
                     <option value="30d" {% if preset= ="30d" %}selected{% endif %}>Last 30 days</option>
@@ -85,7 +85,7 @@
     <div class="badge b-purple">DELIVERIES</div>
 
     <div class="muted small" style="margin-top:10px;">
-        Items column shows: Item ×Qty, Item ×Qty (all items inside each delivery).
+        Items column shows: Item �Qty, Item �Qty (all items inside each delivery).
     </div>
 
     <div style="margin-top:12px; overflow:auto;">
@@ -130,22 +130,22 @@
     </div>
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════════════════
+<!-- --------------------------------------------------------------------------
      PASTE THIS BLOCK at the bottom of agent_detail.html, before {% endblock %}
-     ══════════════════════════════════════════════════════════════════════════ -->
+     -------------------------------------------------------------------------- -->
 <!-- Reset Password -->
 <div class="card" style="margin-top:16px;border-top:3px solid #f59e0b;">
-    <div class="badge b-yellow" style="margin-bottom:10px;">🔑 RESET PASSWORD</div>
+    <div class="badge b-yellow" style="margin-bottom:10px;">?? RESET PASSWORD</div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
         Set a new password for <strong style="color:var(--text);">{{ agent.username }}</strong>.
         The agent must use this new password on their next login.
     </p>
 
     {% if request.query_params.get('success') %}
-    <div class="alert alert-success" style="margin-bottom:14px;">✓ {{ request.query_params.get('success') }}</div>
+    <div class="alert alert-success" style="margin-bottom:14px;">? {{ request.query_params.get('success') }}</div>
     {% endif %}
     {% if request.query_params.get('error') %}
-    <div class="alert alert-danger" style="margin-bottom:14px;">⚠ {{ request.query_params.get('error') }}</div>
+    <div class="alert alert-danger" style="margin-bottom:14px;">? {{ request.query_params.get('error') }}</div>
     {% endif %}
 
     <form method="post" action="/agents/{{ agent.id }}/reset-password">
@@ -159,7 +159,7 @@
                 <label>&nbsp;</label>
                 <button class="btnPrimary" type="submit"
                         style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 6px 20px rgba(245,158,11,.3);">
-                    🔑 Reset Password
+                    ?? Reset Password
                 </button>
             </div>
         </div>
