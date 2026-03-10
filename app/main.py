@@ -666,6 +666,27 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     best_agents = supervisor_best_agents(db, start_dt, end_dt)
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
 
+    # All-branch inventory & agent totals for the enhanced overview
+    all_items_count = db.scalar(select(func.count(Item.id))) or 0
+    all_low_stock_count = len([
+        (item, stock) for (item, stock) in get_low_stock(db)
+    ])
+    all_agents_count = db.scalar(select(func.count(User.id)).where(User.role == "AGENT")) or 0
+    all_admins_count = db.scalar(select(func.count(User.id)).where(User.role == "ADMIN")) or 0
+    all_inventory_value = 0.0
+    for item, stock in get_items_with_stock(db):
+        all_inventory_value += float(stock or 0) * float(item.cost_price or 0)
+    all_in7 = int(db.scalar(
+        select(func.coalesce(func.sum(Transaction.quantity), 0))
+        .where(Transaction.type == "IN")
+        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+    ) or 0)
+    all_out7 = int(db.scalar(
+        select(func.coalesce(func.sum(Transaction.quantity), 0))
+        .where(Transaction.type == "OUT")
+        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+    ) or 0)
+
     return templates.TemplateResponse("supervisor_dashboard.html", {
         "request": request, "user": user, "rows": rows,
         "top_items": top_items, "best_agents": best_agents,
@@ -683,6 +704,13 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "grand_returned_operating_cash": sum(r["returned_operating_cash"] for r in rows),
         "grand_operating_balance": sum(r["operating_balance"] for r in rows),
         "grand_remittance": sum(r["remittance"] for r in rows),
+        # All-branch inventory & staff totals
+        "all_items_count": all_items_count,
+        "all_low_stock_count": all_low_stock_count,
+        "all_agents_count": all_agents_count,
+        "all_admins_count": all_admins_count,
+        "all_inventory_value": all_inventory_value,
+        "all_in7": all_in7, "all_out7": all_out7,
         "branches": branches, "selected_branch_id": None, "active": "supervisor",
         "preset": preset or "", "start_date": start_date or "", "end_date": end_date or "",
     })
@@ -1164,15 +1192,14 @@ def agent_new_form(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
-    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("agent_new.html", {
         "request": request, "user": user,
         "error": request.query_params.get("error"),
         "active": "agents", "csrf_token": csrf_token,
-        "branches": branches,
     })
 
 
@@ -1183,7 +1210,6 @@ async def agent_create(
     password: str = Form(...),
     full_name: str = Form(""),
     phone: str = Form(""),
-    branch_id: int = Form(0),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -1191,8 +1217,9 @@ async def agent_create(
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
+    forbid = require_admin_or_403(user)
+    if forbid:
+        return forbid
     verify_csrf_token(request, csrf_token)
     uname = sanitize_username(username)
     if not uname:
@@ -1201,23 +1228,11 @@ async def agent_create(
         return redirect("/agents/new?error=Username+already+exists")
     if len(password or "") < 8:
         return redirect("/agents/new?error=Password+must+be+at+least+8+characters")
-
-    if is_supervisor(user):
-        # Supervisor creates branch admins — must pick a branch
-        if not branch_id:
-            return redirect("/agents/new?error=Please+select+a+branch+for+this+admin")
-        assigned_branch = branch_id
-        new_role = "ADMIN"
-    else:
-        # Admin creates agents for their own branch
-        if not user.branch_id:
-            return redirect("/agents/new?error=Admin+has+no+branch+assigned")
-        assigned_branch = user.branch_id
-        new_role = "AGENT"
-
+    if not user.branch_id:
+        return redirect("/agents/new?error=Admin+has+no+branch+assigned")
     db.add(User(
-        username=uname, password_hash=hash_password(password), role=new_role,
-        branch_id=assigned_branch,
+        username=uname, password_hash=hash_password(password), role="AGENT",
+        branch_id=user.branch_id,
         full_name=sanitize_text(full_name, 140, "Full name") or None,
         phone=sanitize_phone(phone) or None,
     ))
@@ -1414,7 +1429,32 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
         .order_by(desc(Delivery.created_at)).limit(300)
     ).scalars().all()
-    return templates.TemplateResponse("my_deliveries.html", {"request": request, "rows": rows, "user": user, "active": "deliveries"})
+
+    # Build last-14-days daily delivery + expense chart data
+    today = date.today()
+    chart_days = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    delivery_by_day: dict = {}
+    for d in rows:
+        k = d.created_at.date().isoformat() if d.created_at else None
+        if k:
+            delivery_by_day[k] = delivery_by_day.get(k, 0) + 1
+    expense_by_day: dict = {}
+    expenses_raw = db.execute(
+        select(CashEntry).where(CashEntry.agent_id == user.id)
+        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
+    ).scalars().all()
+    for e in expenses_raw:
+        k = e.created_at.date().isoformat() if e.created_at else None
+        if k:
+            expense_by_day[k] = expense_by_day.get(k, 0) + float(e.amount or 0)
+
+    return templates.TemplateResponse("my_deliveries.html", {
+        "request": request, "rows": rows, "user": user, "active": "deliveries",
+        "chart_labels": [str(d) for d in chart_days],
+        "chart_deliveries": [delivery_by_day.get(d.isoformat(), 0) for d in chart_days],
+        "chart_expenses": [round(expense_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
+    })
 
 
 @app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
@@ -1576,7 +1616,7 @@ async def cash_new(
     user = user_or
     verify_csrf_token(request, csrf_token)
     k = (kind or "").strip().upper()
-    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH"}:
+    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH", "CASH_PAYMENT", "TRANSFER_PAYMENT"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
     if k == "OFFICE_EXPENSE" and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
@@ -1610,13 +1650,12 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
+    if not (is_admin(user) or is_agent(user)):
         return HTMLResponse("Forbidden", status_code=403)
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if is_admin(user) else []
-    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     today = date.today().isoformat()
     return templates.TemplateResponse("reports_sales.html", {
-        "request": request, "user": user, "agents": agents, "branches": branches,
+        "request": request, "user": user, "agents": agents,
         "start_date": today, "end_date": today, "active": "reports",
     })
 
@@ -1627,7 +1666,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
+    if not (is_admin(user) or is_agent(user)):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
@@ -1640,9 +1679,6 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.delivery_date >= start_dt, Delivery.delivery_date <= end_dt, Delivery.status == "DELIVERED"]
     if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
-    # Supervisor can filter by branch
-    if is_supervisor(user) and (agent_id or "").isdigit():
-        filters.append(Delivery.branch_id == int(agent_id))
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list] = {}
@@ -1658,13 +1694,9 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
-    uname = {}; ubranch = {}
+    uname = {}
     if all_agent_ids:
-        for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
-            uname[int(u.id)] = u.full_name or u.username
-            if u.branch_id:
-                br = db.get(Branch, u.branch_id)
-                ubranch[int(u.id)] = br.name if br else ""
+        uname = {int(u.id): (u.full_name or u.username) for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
     delivery_rows = []
     grand_total = 0.0
     for idx, d in enumerate(deliveries, 1):
@@ -1682,11 +1714,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             if balance < 0: expenses_from_collections += abs(balance)
         else:
             expenses_from_collections += exp
-        branch_name = ubranch.get(aid, "")
-        display_name = uname.get(aid, f"Agent {aid}")
-        if is_supervisor(user) and branch_name:
-            display_name = f"{display_name} ({branch_name})"
-        agent_op_summary.append({"name": display_name, "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
+        agent_op_summary.append({"name": uname.get(aid, f"Agent {aid}"), "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
     total_agent_exp = sum(a["expenses"] for a in agent_op_summary)
     total_expenses = total_agent_exp + office_total
     remittance = grand_total - expenses_from_collections if is_agent(user) else grand_total - total_expenses
@@ -1710,7 +1738,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     if isinstance(user_or, RedirectResponse):
         return PlainTextResponse("Unauthorized", status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
+    if not (is_admin(user) or is_agent(user)):
         return PlainTextResponse("Forbidden", status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
@@ -1723,9 +1751,6 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.created_at >= start_dt, Delivery.created_at <= end_dt, Delivery.status == "DELIVERED"]
     if target_agent_id is not None: filters.append(Delivery.agent_id == target_agent_id)
-    # Supervisor can filter by branch
-    if is_supervisor(user) and (agent_id or "").isdigit():
-        filters.append(Delivery.branch_id == int(agent_id))
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list] = {}
@@ -1744,14 +1769,9 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     other_office_total = office_total - waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
-    uname: dict[int, str] = {}; ubranch2: dict[int, str] = {}
+    uname: dict[int, str] = {}
     if all_agent_ids:
-        for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
-            base_name = u.full_name or u.username or f"Agent {u.id}"
-            if is_supervisor(user) and u.branch_id:
-                br = db.get(Branch, u.branch_id)
-                if br: ubranch2[int(u.id)] = br.name
-            uname[int(u.id)] = base_name
+        uname = {int(u.id): (u.full_name or u.username or f"Agent {u.id}") for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
     title_day = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
     lines = [f"REPORT FOR {title_day}.", f"TOTAL DELIVERY = {len(deliveries)}", ""]
     grand_total = 0.0
@@ -1765,10 +1785,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     total_agent_expenses = expenses_from_collections = total_op_cash_given = total_op_cash_balance = 0.0
     agent_section_lines: list[str] = []
     for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
-        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0)
-        aname = uname.get(aid, f"Agent {aid}")
-        if is_supervisor(user) and aid in ubranch2:
-            aname = f"{aname} ({ubranch2[aid]})" 
+        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0); aname = uname.get(aid, f"Agent {aid}")
         total_agent_expenses += exp; total_op_cash_given += op
         if op > 0:
             balance = op - exp; total_op_cash_balance += max(balance, 0)

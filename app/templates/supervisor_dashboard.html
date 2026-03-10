@@ -1,148 +1,150 @@
 {% extends "base.html" %}
-{% block title %}Supervisor Analytics{% endblock %}
-{% block page_title %}Supervisor Analytics{% endblock %}
+{% block title %}Supervisor Dashboard{% endblock %}
+{% block page_title %}Supervisor{% endblock %}
 {% block page_subtitle %}Cross-branch performance overview{% endblock %}
-
-{% block top_right %}
-<form method="get" action="/supervisor" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-  <div>
-    <label>Quick filter</label>
-    <select name="preset" onchange="this.form.submit()" style="width:auto;padding:8px 12px;">
-      <option value="" {% if not preset %}selected{% endif %}>All time</option>
-      <option value="today"      {% if preset=='today'      %}selected{% endif %}>Today</option>
-      <option value="yesterday"  {% if preset=='yesterday'  %}selected{% endif %}>Yesterday</option>
-      <option value="7d"         {% if preset=='7d'         %}selected{% endif %}>Last 7 days</option>
-      <option value="30d"        {% if preset=='30d'        %}selected{% endif %}>Last 30 days</option>
-      <option value="this_month" {% if preset=='this_month' %}selected{% endif %}>This month</option>
-    </select>
-  </div>
-  <div>
-    <label>From</label>
-    <input type="date" name="start_date" value="{{ start_date }}" style="width:auto;padding:8px 12px;">
-  </div>
-  <div>
-    <label>To</label>
-    <input type="date" name="end_date" value="{{ end_date }}" style="width:auto;padding:8px 12px;">
-  </div>
-  <button class="btnPrimary" type="submit">Apply</button>
-</form>
-{% endblock %}
+{% set active = 'supervisor' %}
 
 {% block content %}
+<style>
+  .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
+  .kpi { border-radius:14px; padding:16px 18px; }
+  .kpi .kv { font-size:22px; font-weight:800; line-height:1.1; margin-top:4px; }
+  .kpi .kl { font-size:10.5px; color:var(--muted); margin-top:5px; text-transform:uppercase; letter-spacing:.06em; }
+  .kpi-g { background:rgba(34,197,94,.1);  border:1px solid rgba(34,197,94,.22);  } .kpi-g .kv{color:#4ade80;}
+  .kpi-b { background:rgba(79,124,255,.1); border:1px solid rgba(79,124,255,.22); } .kpi-b .kv{color:#7fa8ff;}
+  .kpi-r { background:rgba(239,68,68,.1);  border:1px solid rgba(239,68,68,.22);  } .kpi-r .kv{color:#f87171;}
+  .kpi-t { background:rgba(20,184,166,.1); border:1px solid rgba(20,184,166,.22); } .kpi-t .kv{color:#2dd4bf;}
+  .kpi-a { background:rgba(245,158,11,.1); border:1px solid rgba(245,158,11,.22); } .kpi-a .kv{color:#fbbf24;}
+  .kpi-p { background:rgba(139,92,246,.1); border:1px solid rgba(139,92,246,.22); } .kpi-p .kv{color:#a78bfa;}
+  .section-title { font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.06em;
+                   color:var(--muted); margin:18px 0 10px; }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px; }
+  @media(max-width:860px){ .two-col { grid-template-columns:1fr; } }
+  .chart-wrap { position:relative; height:200px; }
+</style>
 
-<!-- ── Grand KPI strip ─────────────────────────────── -->
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;">
-
-  {% set kpis = [
-    ("Total Orders",   grand_total_deliveries, "#4f7cff"),
-    ("Delivered",      grand_delivered,         "#22c55e"),
-    ("Pending",        grand_pending,           "#f59e0b"),
-    ("Out for Delivery", grand_out_for_delivery,"#8b5cf6"),
-    ("Failed",         grand_failed,            "#ef4444"),
-  ] %}
-  {% for label, val, color in kpis %}
-  <div class="card" style="text-align:center;border-top:3px solid {{ color }};">
-    <div style="font-size:26px;font-weight:800;color:{{ color }};">{{ val }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">{{ label }}</div>
-  </div>
-  {% endfor %}
-
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;">
-    <div style="font-size:22px;font-weight:800;color:#22c55e;">₦{{ "{:,.0f}".format(grand_collections) }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Total Collections</div>
-  </div>
-  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;">
-    <div style="font-size:22px;font-weight:800;color:#4f7cff;">₦{{ "{:,.0f}".format(grand_remittance) }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Net Remittance</div>
-  </div>
-  <div class="card" style="text-align:center;border-top:3px solid #ef4444;">
-    <div style="font-size:22px;font-weight:800;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses + grand_office_expenses) }}</div>
-    <div style="color:var(--muted);font-size:12px;margin-top:4px;">Total Expenses</div>
-  </div>
-
+<!-- Date filter -->
+<div class="card" style="margin-bottom:18px;">
+  <form method="get" action="/supervisor" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+    <div>
+      <label>Quick Filter</label>
+      <select name="preset" onchange="this.form.submit()" style="width:auto;">
+        <option value="">Custom</option>
+        <option value="today" {% if preset=='today' %}selected{% endif %}>Today</option>
+        <option value="yesterday" {% if preset=='yesterday' %}selected{% endif %}>Yesterday</option>
+        <option value="7d" {% if preset=='7d' %}selected{% endif %}>Last 7 days</option>
+        <option value="30d" {% if preset=='30d' %}selected{% endif %}>Last 30 days</option>
+        <option value="this_month" {% if preset=='this_month' %}selected{% endif %}>This month</option>
+      </select>
+    </div>
+    <div><label>From</label><input type="date" name="start_date" value="{{ start_date }}" style="width:auto;"></div>
+    <div><label>To</label><input type="date" name="end_date" value="{{ end_date }}" style="width:auto;"></div>
+    <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Apply</button></div>
+  </form>
 </div>
 
-<!-- ── Delivery trend chart + Top items ───────────── -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+<!-- ── DELIVERY KPIs ──────────────────────────────────────────────────────── -->
+<div class="section-title">🚚 Deliveries — All Branches</div>
+<div class="kpi-grid">
+  <div class="kpi kpi-b"><div>📦 Total Orders</div><div class="kv">{{ grand_total_deliveries }}</div><div class="kl">across all branches</div></div>
+  <div class="kpi kpi-g"><div>✅ Delivered</div><div class="kv">{{ grand_delivered }}</div><div class="kl">completed</div></div>
+  <div class="kpi kpi-a"><div>⏳ Pending</div><div class="kv">{{ grand_pending }}</div><div class="kl">awaiting dispatch</div></div>
+  <div class="kpi kpi-t"><div>🚚 In Transit</div><div class="kv">{{ grand_out_for_delivery }}</div><div class="kl">out for delivery</div></div>
+  <div class="kpi kpi-r"><div>✕ Failed</div><div class="kv">{{ grand_failed }}</div><div class="kl">cancelled/failed</div></div>
+</div>
 
-  <!-- Chart -->
+<!-- ── CASH KPIs ──────────────────────────────────────────────────────────── -->
+<div class="section-title">💰 Cash — All Branches</div>
+<div class="kpi-grid">
+  <div class="kpi kpi-g"><div>💰 Collections</div><div class="kv">₦{{ '{:,.0f}'.format(grand_collections) }}</div><div class="kl">total collected</div></div>
+  <div class="kpi kpi-r"><div>📤 Agent Expenses</div><div class="kv">₦{{ '{:,.0f}'.format(grand_agent_expenses) }}</div><div class="kl">field expenses</div></div>
+  <div class="kpi kpi-r"><div>🏢 Office Expenses</div><div class="kv">₦{{ '{:,.0f}'.format(grand_office_expenses) }}</div><div class="kl">office costs</div></div>
+  <div class="kpi kpi-b"><div>🏦 Operating Cash</div><div class="kv">₦{{ '{:,.0f}'.format(grand_operating_cash) }}</div><div class="kl">issued to agents</div></div>
+  <div class="kpi kpi-a"><div>📊 Net Remittance</div><div class="kv">₦{{ '{:,.0f}'.format(grand_remittance) }}</div><div class="kl">estimated remittance</div></div>
+</div>
+
+<!-- ── INVENTORY KPIs ─────────────────────────────────────────────────────── -->
+<div class="section-title">📦 Inventory — All Branches</div>
+<div class="kpi-grid">
+  <div class="kpi kpi-b"><div>📦 Total Items</div><div class="kv">{{ all_items_count if all_items_count is defined else '—' }}</div><div class="kl">products listed</div></div>
+  <div class="kpi kpi-r"><div>⚠️ Low Stock</div><div class="kv">{{ all_low_stock_count if all_low_stock_count is defined else '—' }}</div><div class="kl">need restocking</div></div>
+  <div class="kpi kpi-g"><div>📥 Stock In (7d)</div><div class="kv">{{ all_in7 if all_in7 is defined else '—' }}</div><div class="kl">units received</div></div>
+  <div class="kpi kpi-a"><div>📤 Stock Out (7d)</div><div class="kv">{{ all_out7 if all_out7 is defined else '—' }}</div><div class="kl">units dispatched</div></div>
+  <div class="kpi kpi-p"><div>💼 Inventory Value</div>
+    <div class="kv">₦{{ '{:,.0f}'.format(all_inventory_value) if all_inventory_value is defined else '—' }}</div>
+    <div class="kl">at cost price</div></div>
+</div>
+
+<!-- ── STAFF KPIs ─────────────────────────────────────────────────────────── -->
+<div class="section-title">👥 Staff — All Branches</div>
+<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
+  <div class="kpi kpi-b"><div>👤 Admins (Branch Managers)</div><div class="kv">{{ all_admins_count if all_admins_count is defined else '—' }}</div><div class="kl">total admins</div></div>
+  <div class="kpi kpi-p"><div>🧑‍💼 Field Agents</div><div class="kv">{{ all_agents_count if all_agents_count is defined else '—' }}</div><div class="kl">total agents</div></div>
+  <div class="kpi kpi-t"><div>🏢 Branches</div><div class="kv">{{ rows|length }}</div><div class="kl">active branches</div></div>
+</div>
+
+<!-- ── CHARTS ─────────────────────────────────────────────────────────────── -->
+{% if chart_labels and chart_labels|length > 0 %}
+<div class="two-col">
   <div class="card">
-    <div style="font-weight:700;margin-bottom:12px;">📈 Deliveries Over Time</div>
-    {% if chart_labels %}
-    <canvas id="deliveryChart" height="200"></canvas>
-    {% else %}
-    <div style="color:var(--muted);padding:40px 0;text-align:center;">No delivery data in this period.</div>
-    {% endif %}
+    <div class="section-title" style="margin-top:0;">📈 Daily Deliveries Trend</div>
+    <div class="chart-wrap"><canvas id="chartDaily"></canvas></div>
   </div>
-
-  <!-- Top items -->
   <div class="card">
-    <div style="font-weight:700;margin-bottom:12px;">🏆 Top Items by Volume</div>
-    {% if top_items %}
-    <table>
-      <thead><tr><th>#</th><th>Item</th><th>Category</th><th style="text-align:right;">Units Out</th></tr></thead>
-      <tbody>
-        {% for row in top_items %}
-        <tr>
-          <td style="color:var(--muted);">{{ loop.index }}</td>
-          <td>{{ row.name }}</td>
-          <td><span class="badge b-blue">{{ row.category }}</span></td>
-          <td style="text-align:right;font-weight:700;">{{ row.qty }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div style="color:var(--muted);padding:40px 0;text-align:center;">No data in this period.</div>
-    {% endif %}
+    <div class="section-title" style="margin-top:0;">🏢 Revenue by Branch</div>
+    <div class="chart-wrap"><canvas id="chartBranch"></canvas></div>
   </div>
-
 </div>
 
-<!-- ── Best agents ─────────────────────────────────── -->
-<div class="card" style="margin-bottom:20px;">
-  <div style="font-weight:700;margin-bottom:12px;">⭐ Best Performing Agents</div>
-  {% if best_agents %}
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Agent</th>
-        <th>Branch</th>
-        <th style="text-align:right;">Deliveries</th>
-        <th style="text-align:right;">Collections</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for a in best_agents %}
-      <tr>
-        <td>
-          {% if loop.index0 == 0 %}<span style="font-size:18px;">🥇</span>
-          {% elif loop.index0 == 1 %}<span style="font-size:18px;">🥈</span>
-          {% elif loop.index0 == 2 %}<span style="font-size:18px;">🥉</span>
-          {% else %}<span style="color:var(--muted);">{{ loop.index }}</span>
-          {% endif %}
-        </td>
-        <td>
-          <div style="font-weight:700;">{{ a.full_name }}</div>
-          <div style="color:var(--muted);font-size:12px;">@{{ a.username }}</div>
-        </td>
-        <td><span class="badge b-purple">{{ a.branch_name }}</span></td>
-        <td style="text-align:right;font-weight:700;color:#22c55e;">{{ a.delivered }}</td>
-        <td style="text-align:right;font-weight:700;">₦{{ "{:,.0f}".format(a.collections) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div style="color:var(--muted);padding:30px 0;text-align:center;">No delivery data in this period.</div>
-  {% endif %}
-</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function(){
+  const axisOpts = {
+    grid: { color:'rgba(255,255,255,0.04)' },
+    ticks: { color:'#8a9bc4', font:{ size:10 } }
+  };
+  const baseOpts = {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{ display:false } },
+    scales:{ x: axisOpts, y:{ ...axisOpts, beginAtZero:true } }
+  };
 
-<!-- ── Branch breakdown table ─────────────────────── -->
+  // Daily deliveries
+  new Chart(document.getElementById('chartDaily'), {
+    type:'bar',
+    data:{
+      labels: {{ chart_labels | tojson }},
+      datasets:[{ data: {{ chart_data | tojson }},
+        backgroundColor:'rgba(79,124,255,0.5)', borderColor:'#4f7cff',
+        borderWidth:1, borderRadius:4 }]
+    },
+    options: baseOpts
+  });
+
+  // Revenue by branch
+  const branchLabels = [{% for r in rows %}"{{ r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
+  const branchRevenue = [{% for r in rows %}{{ r.collections }}{% if not loop.last %},{% endif %}{% endfor %}];
+  const branchColors = ['rgba(79,124,255,0.7)','rgba(34,197,94,0.7)','rgba(139,92,246,0.7)','rgba(245,158,11,0.7)','rgba(20,184,166,0.7)'];
+  new Chart(document.getElementById('chartBranch'), {
+    type:'bar',
+    data:{
+      labels: branchLabels,
+      datasets:[{ data: branchRevenue,
+        backgroundColor: branchColors.slice(0, branchLabels.length),
+        borderRadius:4 }]
+    },
+    options:{ ...baseOpts, indexAxis:'y',
+      scales:{ x:{ ...axisOpts, beginAtZero:true,
+        ticks:{ color:'#8a9bc4', font:{size:10}, callback: v=>'₦'+Number(v).toLocaleString() }},
+        y: axisOpts }}
+  });
+})();
+</script>
+{% endif %}
+
+<!-- ── BRANCH TABLE ───────────────────────────────────────────────────────── -->
+<div class="section-title">🏢 Branch Breakdown</div>
 <div class="card">
-  <div style="font-weight:700;margin-bottom:12px;">🏢 Branch Breakdown</div>
-  <div style="overflow-x:auto;">
   <table>
     <thead>
       <tr>
@@ -150,78 +152,59 @@
         <th style="text-align:right;">Orders</th>
         <th style="text-align:right;">Delivered</th>
         <th style="text-align:right;">Pending</th>
-        <th style="text-align:right;">Failed</th>
+        <th style="text-align:right;">In Transit</th>
         <th style="text-align:right;">Collections</th>
-        <th style="text-align:right;">Agent Exp.</th>
-        <th style="text-align:right;">Office Exp.</th>
-        <th style="text-align:right;">Total Exp.</th>
+        <th style="text-align:right;">Expenses</th>
         <th style="text-align:right;">Remittance</th>
       </tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
-        <td style="font-weight:700;">{{ r.branch.name }}</td>
+        <td style="font-weight:700;">{{ r.branch_name }}</td>
         <td style="text-align:right;">{{ r.total_deliveries }}</td>
-        <td style="text-align:right;color:#22c55e;">{{ r.delivered_count }}</td>
-        <td style="text-align:right;color:#f59e0b;">{{ r.pending_count }}</td>
-        <td style="text-align:right;color:#ef4444;">{{ r.failed_count }}</td>
-        <td style="text-align:right;">₦{{ "{:,.0f}".format(r.collections) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.agent_expenses) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.office_expenses) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(r.agent_expenses + r.office_expenses) }}</td>
-        <td style="text-align:right;font-weight:700;color:#22c55e;">₦{{ "{:,.0f}".format(r.remittance) }}</td>
+        <td style="text-align:right;color:#4ade80;">{{ r.delivered_count }}</td>
+        <td style="text-align:right;color:#fbbf24;">{{ r.pending_count }}</td>
+        <td style="text-align:right;color:#7fa8ff;">{{ r.out_for_delivery_count }}</td>
+        <td style="text-align:right;color:#4ade80;">₦{{ '{:,.0f}'.format(r.collections) }}</td>
+        <td style="text-align:right;color:#f87171;">₦{{ '{:,.0f}'.format(r.agent_expenses + r.office_expenses) }}</td>
+        <td style="text-align:right;font-weight:800;color:#fbbf24;">₦{{ '{:,.0f}'.format(r.remittance) }}</td>
       </tr>
       {% endfor %}
     </tbody>
     <tfoot>
-      <tr style="border-top:2px solid rgba(255,255,255,.15);font-weight:800;">
-        <td>TOTAL</td>
-        <td style="text-align:right;">{{ grand_total_deliveries }}</td>
-        <td style="text-align:right;color:#22c55e;">{{ grand_delivered }}</td>
-        <td style="text-align:right;color:#f59e0b;">{{ grand_pending }}</td>
-        <td style="text-align:right;color:#ef4444;">{{ grand_failed }}</td>
-        <td style="text-align:right;">₦{{ "{:,.0f}".format(grand_collections) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_office_expenses) }}</td>
-        <td style="text-align:right;color:#ef4444;">₦{{ "{:,.0f}".format(grand_agent_expenses + grand_office_expenses) }}</td>
-        <td style="text-align:right;color:#22c55e;">₦{{ "{:,.0f}".format(grand_remittance) }}</td>
+      <tr style="border-top:2px solid var(--border);">
+        <td style="font-weight:800;">TOTAL</td>
+        <td style="text-align:right;font-weight:800;">{{ grand_total_deliveries }}</td>
+        <td style="text-align:right;font-weight:800;color:#4ade80;">{{ grand_delivered }}</td>
+        <td style="text-align:right;font-weight:800;color:#fbbf24;">{{ grand_pending }}</td>
+        <td style="text-align:right;font-weight:800;color:#7fa8ff;">{{ grand_out_for_delivery }}</td>
+        <td style="text-align:right;font-weight:800;color:#4ade80;">₦{{ '{:,.0f}'.format(grand_collections) }}</td>
+        <td style="text-align:right;font-weight:800;color:#f87171;">₦{{ '{:,.0f}'.format(grand_agent_expenses + grand_office_expenses) }}</td>
+        <td style="text-align:right;font-weight:800;color:#fbbf24;">₦{{ '{:,.0f}'.format(grand_remittance) }}</td>
       </tr>
     </tfoot>
   </table>
-  </div>
 </div>
 
-<!-- ── Chart.js ───────────────────────────────────── -->
-{% if chart_labels %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script>
-const ctx = document.getElementById('deliveryChart').getContext('2d');
-new Chart(ctx, {
-  type: 'line',
-  data: {
-    labels: {{ chart_labels | tojson }},
-    datasets: [{
-      label: 'Deliveries',
-      data: {{ chart_data | tojson }},
-      borderColor: '#4f7cff',
-      backgroundColor: 'rgba(79,124,255,0.12)',
-      borderWidth: 2,
-      pointBackgroundColor: '#4f7cff',
-      tension: 0.4,
-      fill: true,
-    }]
-  },
-  options: {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: {
-      x: { ticks: { color: '#a7b4d6', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
-      y: { ticks: { color: '#a7b4d6' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
-    }
-  }
-});
-</script>
+<!-- ── TOP AGENTS ─────────────────────────────────────────────────────────── -->
+{% if best_agents %}
+<div class="section-title">🏆 Top Agents</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>Agent</th><th style="text-align:right;">Deliveries</th><th style="text-align:right;">Collections</th></tr>
+    </thead>
+    <tbody>
+      {% for a in best_agents %}
+      <tr>
+        <td style="font-weight:600;">{{ a.agent_name }}</td>
+        <td style="text-align:right;">{{ a.delivery_count }}</td>
+        <td style="text-align:right;color:#4ade80;">₦{{ '{:,.0f}'.format(a.total_collections) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endif %}
-
 {% endblock %}
