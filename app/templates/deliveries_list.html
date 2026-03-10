@@ -1,11 +1,13 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block title %}Deliveries{% endblock %}
 {% block page_title %}Deliveries{% endblock %}
 {% block page_subtitle %}Track all delivery orders and filter by agent or status.{% endblock %}
 {% set active = 'deliveries' %}
 
 {% block top_right %}
+{% if user.role != "SUPERVISOR" %}
 <a class="btnPrimary" href="/deliveries/new">+ New Delivery</a>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -109,4 +111,3 @@
     </div>
 </div>
 {% endblock %}
-
