@@ -19,7 +19,6 @@
     <div class="alert alert-danger" style="margin-bottom:20px;">⚠ {{ error }}</div>
     {% endif %}
 
-    <!-- [FIX-4] CSRF token -->
     <form method="post" action="/login">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
 
@@ -28,9 +27,13 @@
         <input name="username" required autocomplete="username" placeholder="Enter your username" />
       </div>
 
-      <div style="margin-bottom:22px;">
+      <div style="margin-bottom:8px;">
         <label>Password</label>
         <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+      </div>
+
+      <div style="text-align:right;margin-bottom:22px;">
+        <a href="/forgot-password" style="font-size:12px;color:var(--accent);">Forgot password?</a>
       </div>
 
       <button class="btnPrimary" type="submit" style="width:100%;justify-content:center;padding:12px;">

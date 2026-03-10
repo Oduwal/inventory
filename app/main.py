@@ -794,6 +794,14 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
 #  ITEMS
 # ────────────────────────────────────────────────
 
+@app.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_page(request: Request):
+    return templates.TemplateResponse("forgot_password.html", {
+        "request": request, "error": request.query_params.get("error"),
+        "success": request.query_params.get("success"),
+    })
+
+
 @app.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -1288,6 +1296,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
     cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
+    csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
         "deliveries": deliveries, "items_summary": items_summary, "cash_entries": cash_entries,
@@ -1298,9 +1307,47 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         "preset": preset_norm or (preset or ""),
         "start_date": sd.isoformat() if sd else "",
         "end_date": ed.isoformat() if ed else "",
-        "active": "agents",
+        "active": "agents", "csrf_token": csrf_token,
     })
 
+
+
+
+# ────────────────────────────────────────────────
+#  PASSWORD RESET (admin resets agent/admin password)
+# ────────────────────────────────────────────────
+
+@app.post("/agents/{agent_id}/reset-password")
+async def agent_reset_password(
+    request: Request,
+    agent_id: int,
+    new_password: str = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    # Admins can reset agents in their branch; supervisors can reset anyone
+    if not is_admin(user) and not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    target = db.get(User, agent_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Admins can only reset agents in their own branch
+    if is_admin(user) and not is_supervisor(user):
+        if target.branch_id != user.branch_id:
+            return HTMLResponse("Forbidden", status_code=403)
+        if target.role not in ("AGENT",):
+            return HTMLResponse("Forbidden — admins can only reset agent passwords", status_code=403)
+    pw = (new_password or "").strip()
+    if len(pw) < 8:
+        return redirect(f"/agents/{agent_id}?error=Password+must+be+at+least+8+characters")
+    target.password_hash = hash_password(pw)
+    db.commit()
+    return redirect(f"/agents/{agent_id}?success=Password+reset+successfully")
 
 # ────────────────────────────────────────────────
 #  DELIVERIES
@@ -1522,6 +1569,9 @@ async def update_delivery_status(
     status_clean = (status or "").strip().upper()
     if status_clean not in {"PENDING", "OUT_FOR_DELIVERY", "DELIVERED", "FAILED", "RETURNED"}:
         raise HTTPException(status_code=400, detail="Invalid status")
+    # Lock: once DELIVERED, no further status changes allowed
+    if d.status == "DELIVERED":
+        return redirect(f"/deliveries/{delivery_id}?error=This+order+has+already+been+delivered+and+cannot+be+updated")
     if status_clean == "DELIVERED":
         try:
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)

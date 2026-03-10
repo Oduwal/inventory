@@ -14,6 +14,10 @@
 <div class="alert alert-danger">⚠ {{ error }}</div>
 {% endif %}
 
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger">⚠ {{ request.query_params.get('error') }}</div>
+{% endif %}
+
 <!-- Customer & Status grid -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div class="card">
@@ -51,6 +55,19 @@
       Delivery Date: <strong style="color:var(--text);">{{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}</strong>
     </div>
 
+    {% if d.status == "DELIVERED" %}
+    <!-- Locked — delivered orders cannot be changed -->
+    <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);
+                border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:18px;">🔒</span>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#4ade80;">Order Completed</div>
+        <div style="font-size:11.5px;color:var(--muted);margin-top:2px;">
+          This order was delivered{% if d.delivered_at %} on {{ d.delivered_at.strftime('%d %b %Y, %H:%M') }}{% endif %} and can no longer be updated.
+        </div>
+      </div>
+    </div>
+    {% else %}
     <form method="post" action="/deliveries/{{ d.id }}/status">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <div style="display:flex;gap:10px;align-items:flex-end;">
@@ -67,6 +84,7 @@
         <button class="btnPrimary" type="submit">Save</button>
       </div>
     </form>
+    {% endif %}
   </div>
 </div>
 
@@ -115,15 +133,11 @@
   </div>
 </div>
 
-<!-- ── PAYMENT RECEIVED ──────────────────────────────────────────────────── -->
+<!-- ── PAYMENT RECEIVED ─────────────────────────────────────────────────── -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-
-  <!-- Cash Payment -->
   <div class="card" style="border-top:3px solid #22c55e;">
     <div class="badge b-green" style="margin-bottom:10px;">💵 CASH RECEIVED</div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
-      Record cash the customer paid physically at the door.
-    </p>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Record cash the customer paid physically at the door.</p>
     <form method="post" action="/cash/new">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="delivery_id" value="{{ d.id }}">
@@ -147,12 +161,9 @@
     </form>
   </div>
 
-  <!-- Bank Transfer Payment -->
   <div class="card" style="border-top:3px solid #4f7cff;">
     <div class="badge b-blue" style="margin-bottom:10px;">🏦 BANK TRANSFER RECEIVED</div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
-      Record payment the customer sent via bank transfer / mobile money.
-    </p>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Record payment the customer sent via bank transfer / mobile money.</p>
     <form method="post" action="/cash/new">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="delivery_id" value="{{ d.id }}">
@@ -168,20 +179,17 @@
         </div>
         <div style="min-width:auto;flex:0;">
           <label>&nbsp;</label>
-          <button class="btnPrimary" type="submit">
-            🏦 Save Transfer
-          </button>
+          <button class="btnPrimary" type="submit">🏦 Save Transfer</button>
         </div>
       </div>
     </form>
   </div>
 </div>
 
-<!-- ── OTHER ENTRIES (expense / extra collection) ─────────────────────────── -->
+<!-- ── OTHER ENTRIES ────────────────────────────────────────────────────── -->
 <div class="card">
   <div class="badge b-blue" style="margin-bottom:6px;">RECORD EXPENSE / EXTRA COLLECTION</div>
   <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Operating cash is recorded from the Cash page as it is not tied to a single delivery.</p>
-
   <form method="post" action="/cash/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
     <input type="hidden" name="delivery_id" value="{{ d.id }}">
