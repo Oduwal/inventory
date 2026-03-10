@@ -5,7 +5,7 @@
 {% set active = 'deliveries' %}
 
 {% block top_right %}
-<a class="btnPrimary" href="/deliveries/new">+ New Order</a>
+{% if user.role != "SUPERVISOR" %}<a class="btnPrimary" href="/deliveries/new">+ New Order</a>{% endif %}
 {% endblock %}
 
 {% block content %}

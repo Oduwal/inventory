@@ -277,11 +277,11 @@
       </a>
       {% endif %}
 
-      {% if role == "ADMIN" %}
+      {% if role in ("ADMIN", "SUPERVISOR") %}
       <div class="nav-divider"></div>
-      <div class="nav-section">Admin</div>
+      <div class="nav-section">{% if role == "SUPERVISOR" %}Management{% else %}Admin{% endif %}</div>
       <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
-        <span class="nav-icon">👤</span>Agents
+        <span class="nav-icon">👤</span>{% if role == "SUPERVISOR" %}Admins{% else %}Agents{% endif %}
       </a>
       {% endif %}
 
