@@ -1610,12 +1610,13 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
     agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if is_admin(user) else []
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     today = date.today().isoformat()
     return templates.TemplateResponse("reports_sales.html", {
-        "request": request, "user": user, "agents": agents,
+        "request": request, "user": user, "agents": agents, "branches": branches,
         "start_date": today, "end_date": today, "active": "reports",
     })
 
@@ -1626,7 +1627,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
@@ -1639,6 +1640,9 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.delivery_date >= start_dt, Delivery.delivery_date <= end_dt, Delivery.status == "DELIVERED"]
     if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
+    # Supervisor can filter by branch
+    if is_supervisor(user) and (agent_id or "").isdigit():
+        filters.append(Delivery.branch_id == int(agent_id))
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list] = {}
@@ -1698,7 +1702,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     if isinstance(user_or, RedirectResponse):
         return PlainTextResponse("Unauthorized", status_code=401)
     user = user_or
-    if not (is_admin(user) or is_agent(user)):
+    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return PlainTextResponse("Forbidden", status_code=403)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
@@ -1711,6 +1715,9 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.created_at >= start_dt, Delivery.created_at <= end_dt, Delivery.status == "DELIVERED"]
     if target_agent_id is not None: filters.append(Delivery.agent_id == target_agent_id)
+    # Supervisor can filter by branch
+    if is_supervisor(user) and (agent_id or "").isdigit():
+        filters.append(Delivery.branch_id == int(agent_id))
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list] = {}

@@ -283,6 +283,11 @@
       <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
         <span class="nav-icon">👤</span>{% if role == "SUPERVISOR" %}Admins{% else %}Agents{% endif %}
       </a>
+      {% if role == "SUPERVISOR" %}
+      <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📊</span>Reports
+      </a>
+      {% endif %}
       {% endif %}
 
       {% if user %}

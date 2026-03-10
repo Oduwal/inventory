@@ -37,6 +37,7 @@
       <label>End Date</label>
       <input type="date" id="f_end" value="{{ end_date or '' }}">
     </div>
+
     {% if user.role == "ADMIN" %}
     <div>
       <label>Agent</label>
@@ -48,6 +49,19 @@
       </select>
     </div>
     {% endif %}
+
+    {% if user.role == "SUPERVISOR" %}
+    <div>
+      <label>Branch</label>
+      <select id="f_agent">
+        <option value="">All branches</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
     <div>
       <button class="btnPrimary" onclick="loadPreview()" style="display:flex;align-items:center;gap:8px;">
         <div class="spinner" id="spinner"></div>
