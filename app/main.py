@@ -1164,14 +1164,15 @@ def agent_new_form(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("agent_new.html", {
         "request": request, "user": user,
         "error": request.query_params.get("error"),
         "active": "agents", "csrf_token": csrf_token,
+        "branches": branches,
     })
 
 
@@ -1182,6 +1183,7 @@ async def agent_create(
     password: str = Form(...),
     full_name: str = Form(""),
     phone: str = Form(""),
+    branch_id: int = Form(0),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -1189,9 +1191,8 @@ async def agent_create(
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     uname = sanitize_username(username)
     if not uname:
@@ -1200,11 +1201,23 @@ async def agent_create(
         return redirect("/agents/new?error=Username+already+exists")
     if len(password or "") < 8:
         return redirect("/agents/new?error=Password+must+be+at+least+8+characters")
-    if not user.branch_id:
-        return redirect("/agents/new?error=Admin+has+no+branch+assigned")
+
+    if is_supervisor(user):
+        # Supervisor creates branch admins — must pick a branch
+        if not branch_id:
+            return redirect("/agents/new?error=Please+select+a+branch+for+this+admin")
+        assigned_branch = branch_id
+        new_role = "ADMIN"
+    else:
+        # Admin creates agents for their own branch
+        if not user.branch_id:
+            return redirect("/agents/new?error=Admin+has+no+branch+assigned")
+        assigned_branch = user.branch_id
+        new_role = "AGENT"
+
     db.add(User(
-        username=uname, password_hash=hash_password(password), role="AGENT",
-        branch_id=user.branch_id,
+        username=uname, password_hash=hash_password(password), role=new_role,
+        branch_id=assigned_branch,
         full_name=sanitize_text(full_name, 140, "Full name") or None,
         phone=sanitize_phone(phone) or None,
     ))
