@@ -51,6 +51,7 @@
       Delivery Date: <strong style="color:var(--text);">{{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}</strong>
     </div>
 
+    <!-- [FIX-4] CSRF on status update -->
     <form method="post" action="/deliveries/{{ d.id }}/status">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <div style="display:flex;gap:10px;align-items:flex-end;">
@@ -115,73 +116,12 @@
   </div>
 </div>
 
-<!-- ── PAYMENT RECEIVED ──────────────────────────────────────────────────── -->
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-
-  <!-- Cash Payment -->
-  <div class="card" style="border-top:3px solid #22c55e;">
-    <div class="badge b-green" style="margin-bottom:10px;">💵 CASH RECEIVED</div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
-      Record cash the customer paid physically at the door.
-    </p>
-    <form method="post" action="/cash/new">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-      <input type="hidden" name="delivery_id" value="{{ d.id }}">
-      <input type="hidden" name="kind" value="CASH_PAYMENT">
-      <div class="inputs">
-        <div>
-          <label>Amount Paid (₦)</label>
-          <input type="number" name="amount" step="0.01" min="0.01" placeholder="e.g. 15000" required />
-        </div>
-        <div>
-          <label>Note</label>
-          <input type="text" name="note" placeholder="e.g. Full payment, balance remaining" />
-        </div>
-        <div style="min-width:auto;flex:0;">
-          <label>&nbsp;</label>
-          <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#22c55e,#16a34a);">
-            💵 Save Cash
-          </button>
-        </div>
-      </div>
-    </form>
-  </div>
-
-  <!-- Bank Transfer Payment -->
-  <div class="card" style="border-top:3px solid #4f7cff;">
-    <div class="badge b-blue" style="margin-bottom:10px;">🏦 BANK TRANSFER RECEIVED</div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
-      Record payment the customer sent via bank transfer / mobile money.
-    </p>
-    <form method="post" action="/cash/new">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-      <input type="hidden" name="delivery_id" value="{{ d.id }}">
-      <input type="hidden" name="kind" value="TRANSFER_PAYMENT">
-      <div class="inputs">
-        <div>
-          <label>Amount Transferred (₦)</label>
-          <input type="number" name="amount" step="0.01" min="0.01" placeholder="e.g. 25000" required />
-        </div>
-        <div>
-          <label>Reference / Note</label>
-          <input type="text" name="note" placeholder="e.g. GTB ref 123456, Opay" />
-        </div>
-        <div style="min-width:auto;flex:0;">
-          <label>&nbsp;</label>
-          <button class="btnPrimary" type="submit">
-            🏦 Save Transfer
-          </button>
-        </div>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- ── OTHER ENTRIES (expense / extra collection) ─────────────────────────── -->
+<!-- Record cash entry -->
 <div class="card">
   <div class="badge b-blue" style="margin-bottom:6px;">RECORD EXPENSE / EXTRA COLLECTION</div>
   <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Operating cash is recorded from the Cash page as it is not tied to a single delivery.</p>
 
+  <!-- [FIX-4] CSRF on cash entry -->
   <form method="post" action="/cash/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
     <input type="hidden" name="delivery_id" value="{{ d.id }}">
