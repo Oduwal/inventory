@@ -1658,9 +1658,13 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
-    uname = {}
+    uname = {}; ubranch = {}
     if all_agent_ids:
-        uname = {int(u.id): (u.full_name or u.username) for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+        for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
+            uname[int(u.id)] = u.full_name or u.username
+            if u.branch_id:
+                br = db.get(Branch, u.branch_id)
+                ubranch[int(u.id)] = br.name if br else ""
     delivery_rows = []
     grand_total = 0.0
     for idx, d in enumerate(deliveries, 1):
@@ -1678,7 +1682,11 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             if balance < 0: expenses_from_collections += abs(balance)
         else:
             expenses_from_collections += exp
-        agent_op_summary.append({"name": uname.get(aid, f"Agent {aid}"), "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
+        branch_name = ubranch.get(aid, "")
+        display_name = uname.get(aid, f"Agent {aid}")
+        if is_supervisor(user) and branch_name:
+            display_name = f"{display_name} ({branch_name})"
+        agent_op_summary.append({"name": display_name, "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
     total_agent_exp = sum(a["expenses"] for a in agent_op_summary)
     total_expenses = total_agent_exp + office_total
     remittance = grand_total - expenses_from_collections if is_agent(user) else grand_total - total_expenses
@@ -1736,9 +1744,14 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     other_office_total = office_total - waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
-    uname: dict[int, str] = {}
+    uname: dict[int, str] = {}; ubranch2: dict[int, str] = {}
     if all_agent_ids:
-        uname = {int(u.id): (u.full_name or u.username or f"Agent {u.id}") for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+        for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
+            base_name = u.full_name or u.username or f"Agent {u.id}"
+            if is_supervisor(user) and u.branch_id:
+                br = db.get(Branch, u.branch_id)
+                if br: ubranch2[int(u.id)] = br.name
+            uname[int(u.id)] = base_name
     title_day = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
     lines = [f"REPORT FOR {title_day}.", f"TOTAL DELIVERY = {len(deliveries)}", ""]
     grand_total = 0.0
@@ -1752,7 +1765,10 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     total_agent_expenses = expenses_from_collections = total_op_cash_given = total_op_cash_balance = 0.0
     agent_section_lines: list[str] = []
     for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
-        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0); aname = uname.get(aid, f"Agent {aid}")
+        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0)
+        aname = uname.get(aid, f"Agent {aid}")
+        if is_supervisor(user) and aid in ubranch2:
+            aname = f"{aname} ({ubranch2[aid]})" 
         total_agent_expenses += exp; total_op_cash_given += op
         if op > 0:
             balance = op - exp; total_op_cash_balance += max(balance, 0)
