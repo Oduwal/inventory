@@ -683,9 +683,8 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
 
     # All-branch inventory & agent totals for the enhanced overview
     all_items_count = db.scalar(select(func.count(Item.id))) or 0
-    all_low_stock_count = len([
-        (item, stock) for (item, stock) in get_low_stock(db)
-    ])
+    all_low_items = [(item, stock) for (item, stock) in get_low_stock(db)]
+    all_low_stock_count = len(all_low_items)
     all_agents_count = db.scalar(select(func.count(User.id)).where(User.role == "AGENT")) or 0
     all_admins_count = db.scalar(select(func.count(User.id)).where(User.role == "ADMIN")) or 0
     all_inventory_value = 0.0
@@ -722,6 +721,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         # All-branch inventory & staff totals
         "all_items_count": all_items_count,
         "all_low_stock_count": all_low_stock_count,
+        "all_low_items": all_low_items,
         "all_agents_count": all_agents_count,
         "all_admins_count": all_admins_count,
         "all_inventory_value": all_inventory_value,

@@ -43,44 +43,23 @@
   </form>
 </div>
 
-<!-- ── DELIVERY KPIs ──────────────────────────────────────────────────────── -->
-<div class="section-title">🚚 Deliveries — All Branches</div>
-<div class="kpi-grid">
-  <div class="kpi kpi-b"><div>📦 Total Orders</div><div class="kv">{{ grand_total_deliveries }}</div><div class="kl">across all branches</div></div>
+<!-- ── KPI ROW 1: Deliveries ─────────────────────────────────────────────── -->
+<div class="kpi-grid" style="margin-bottom:12px;">
+  <div class="kpi kpi-b"><div>📦 Total Orders</div><div class="kv">{{ grand_total_deliveries }}</div><div class="kl">all branches</div></div>
   <div class="kpi kpi-g"><div>✅ Delivered</div><div class="kv">{{ grand_delivered }}</div><div class="kl">completed</div></div>
   <div class="kpi kpi-a"><div>⏳ Pending</div><div class="kv">{{ grand_pending }}</div><div class="kl">awaiting dispatch</div></div>
   <div class="kpi kpi-t"><div>🚚 In Transit</div><div class="kv">{{ grand_out_for_delivery }}</div><div class="kl">out for delivery</div></div>
   <div class="kpi kpi-r"><div>✕ Failed</div><div class="kv">{{ grand_failed }}</div><div class="kl">cancelled/failed</div></div>
 </div>
 
-<!-- ── CASH KPIs ──────────────────────────────────────────────────────────── -->
-<div class="section-title">💰 Cash — All Branches</div>
-<div class="kpi-grid">
+<!-- ── KPI ROW 2: Cash + Inventory + Staff ───────────────────────────────── -->
+<div class="kpi-grid" style="margin-bottom:20px;">
   <div class="kpi kpi-g"><div>💰 Collections</div><div class="kv">₦{{ '{:,.0f}'.format(grand_collections) }}</div><div class="kl">total collected</div></div>
-  <div class="kpi kpi-r"><div>📤 Agent Expenses</div><div class="kv">₦{{ '{:,.0f}'.format(grand_agent_expenses) }}</div><div class="kl">field expenses</div></div>
-  <div class="kpi kpi-r"><div>🏢 Office Expenses</div><div class="kv">₦{{ '{:,.0f}'.format(grand_office_expenses) }}</div><div class="kl">office costs</div></div>
-  <div class="kpi kpi-b"><div>🏦 Operating Cash</div><div class="kv">₦{{ '{:,.0f}'.format(grand_operating_cash) }}</div><div class="kl">issued to agents</div></div>
   <div class="kpi kpi-a"><div>📊 Net Remittance</div><div class="kv">₦{{ '{:,.0f}'.format(grand_remittance) }}</div><div class="kl">estimated remittance</div></div>
-</div>
-
-<!-- ── INVENTORY KPIs ─────────────────────────────────────────────────────── -->
-<div class="section-title">📦 Inventory — All Branches</div>
-<div class="kpi-grid">
-  <div class="kpi kpi-b"><div>📦 Total Items</div><div class="kv">{{ all_items_count if all_items_count is defined else '—' }}</div><div class="kl">products listed</div></div>
-  <div class="kpi kpi-r"><div>⚠️ Low Stock</div><div class="kv">{{ all_low_stock_count if all_low_stock_count is defined else '—' }}</div><div class="kl">need restocking</div></div>
-  <div class="kpi kpi-g"><div>📥 Stock In (7d)</div><div class="kv">{{ all_in7 if all_in7 is defined else '—' }}</div><div class="kl">units received</div></div>
-  <div class="kpi kpi-a"><div>📤 Stock Out (7d)</div><div class="kv">{{ all_out7 if all_out7 is defined else '—' }}</div><div class="kl">units dispatched</div></div>
-  <div class="kpi kpi-p"><div>💼 Inventory Value</div>
-    <div class="kv">₦{{ '{:,.0f}'.format(all_inventory_value) if all_inventory_value is defined else '—' }}</div>
-    <div class="kl">at cost price</div></div>
-</div>
-
-<!-- ── STAFF KPIs ─────────────────────────────────────────────────────────── -->
-<div class="section-title">👥 Staff — All Branches</div>
-<div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));">
-  <div class="kpi kpi-b"><div>👤 Admins (Branch Managers)</div><div class="kv">{{ all_admins_count if all_admins_count is defined else '—' }}</div><div class="kl">total admins</div></div>
-  <div class="kpi kpi-p"><div>🧑‍💼 Field Agents</div><div class="kv">{{ all_agents_count if all_agents_count is defined else '—' }}</div><div class="kl">total agents</div></div>
-  <div class="kpi kpi-t"><div>🏢 Branches</div><div class="kv">{{ rows|length }}</div><div class="kl">active branches</div></div>
+  <div class="kpi kpi-r"><div>📤 Total Expenses</div><div class="kv">₦{{ '{:,.0f}'.format(grand_agent_expenses + grand_office_expenses) }}</div><div class="kl">agent + office</div></div>
+  <div class="kpi kpi-p"><div>💼 Inventory Value</div><div class="kv">₦{{ '{:,.0f}'.format(all_inventory_value if all_inventory_value is defined else 0) }}</div><div class="kl">at cost price</div></div>
+  <div class="kpi kpi-r"><div>⚠️ Low Stock Items</div><div class="kv">{{ all_low_stock_count if all_low_stock_count is defined else 0 }}</div><div class="kl">need restocking</div></div>
+  <div class="kpi kpi-b"><div>👥 Staff</div><div class="kv">{{ (all_admins_count if all_admins_count is defined else 0) + (all_agents_count if all_agents_count is defined else 0) }}</div><div class="kl">{{ all_admins_count if all_admins_count is defined else 0 }} admins · {{ all_agents_count if all_agents_count is defined else 0 }} agents</div></div>
 </div>
 
 <!-- ── CHARTS ─────────────────────────────────────────────────────────────── -->
@@ -186,6 +165,41 @@
     </tfoot>
   </table>
 </div>
+
+<!-- ── LOW STOCK ──────────────────────────────────────────────────────────── -->
+{% if all_low_items %}
+<div class="section-title">⚠️ Low Stock — All Branches</div>
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Branch</th>
+        <th style="text-align:right;">Stock</th>
+        <th style="text-align:right;">Reorder Level</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item, stock in all_low_items %}
+      <tr>
+        <td style="font-weight:600;">{{ item.name }}</td>
+        <td class="muted">{{ item.branch.name if item.branch else '—' }}</td>
+        <td style="text-align:right;">
+          {% if stock <= 0 %}
+          <span style="color:#f87171;font-weight:700;">{{ stock }}</span>
+          {% else %}
+          <span style="color:#fbbf24;font-weight:700;">{{ stock }}</span>
+          {% endif %}
+        </td>
+        <td style="text-align:right;color:var(--muted);">{{ item.reorder_level }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card" style="text-align:center;color:var(--muted);padding:24px;">✅ No low stock items across all branches.</div>
+{% endif %}
 
 <!-- ── TOP AGENTS ─────────────────────────────────────────────────────────── -->
 {% if best_agents %}
