@@ -548,8 +548,7 @@ async def login(
 
 
 @app.post("/logout")
-async def logout(request: Request, csrf_token: str = Form("")):
-    verify_csrf_token(request, csrf_token)
+async def logout(request: Request):
     request.session.clear()
     return redirect("/login")
 
