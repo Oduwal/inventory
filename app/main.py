@@ -505,13 +505,14 @@ async def login(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    ip = request.client.host if request.client else "unknown"
-    allowed, wait = limiter.check(ip)
-    if not allowed:
+    # [FIX-3] Rate limiting — limiter.check() takes the request object directly
+    try:
+        limiter.check(request)
+    except HTTPException:
         token = get_csrf_token(request)
         return templates.TemplateResponse("login.html", {
             "request": request,
-            "error": f"Too many login attempts. Please wait {wait} seconds.",
+            "error": "Too many login attempts. Please wait a minute and try again.",
             "csrf_token": token,
         }, status_code=429)
 
@@ -519,7 +520,6 @@ async def login(
     username_clean = sanitize_username(username)
     u = db.scalar(select(User).where(User.username == username_clean))
     if not u or not verify_password(password, u.password_hash):
-        limiter.record_failure(ip)
         token = get_csrf_token(request)
         return templates.TemplateResponse("login.html", {
             "request": request, "error": "Invalid login.", "csrf_token": token,
