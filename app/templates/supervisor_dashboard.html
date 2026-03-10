@@ -2,7 +2,7 @@
 {% block title %}Supervisor Dashboard{% endblock %}
 {% block page_title %}Supervisor{% endblock %}
 {% block page_subtitle %}Cross-branch performance overview{% endblock %}
-{% set active = 'supervisor' %}
+{% set active = 'dashboard' %}
 
 {% block content %}
 <style>
@@ -198,9 +198,9 @@
     <tbody>
       {% for a in best_agents %}
       <tr>
-        <td style="font-weight:600;">{{ a.agent_name }}</td>
-        <td style="text-align:right;">{{ a.delivery_count }}</td>
-        <td style="text-align:right;color:#4ade80;">₦{{ '{:,.0f}'.format(a.total_collections) }}</td>
+        <td style="font-weight:600;">{{ a.agent_name if a.agent_name is defined else (a.username if a.username is defined else '—') }}</td>
+        <td style="text-align:right;">{{ a.delivery_count if a.delivery_count is defined else '—' }}</td>
+        <td style="text-align:right;color:#4ade80;">₦{{ '{:,.0f}'.format((a.total_collections if a.total_collections is defined else 0) | float) }}</td>
       </tr>
       {% endfor %}
     </tbody>

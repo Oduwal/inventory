@@ -207,6 +207,10 @@
       <a href="/agent-overview" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🏠</span>Overview
       </a>
+      {% elif role == "SUPERVISOR" %}
+      <a href="/supervisor" data-active="{% if active == 'dashboard' or active == 'supervisor' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
+      </a>
       {% else %}
       <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🏠</span>Overview
@@ -215,10 +219,7 @@
 
       {% if role == "SUPERVISOR" %}
       <div class="nav-divider"></div>
-      <div class="nav-section">Analytics</div>
-      <a href="/supervisor" data-active="{% if active == 'supervisor' %}1{% else %}0{% endif %}">
-        <span class="nav-icon">📊</span>Supervisor
-      </a>
+      <div class="nav-section">Branches</div>
       <a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🏢</span>Branches
       </a>
@@ -272,12 +273,14 @@
       </a>
       {% endif %}
 
-      {% if role in ("ADMIN", "AGENT") %}
+      {% if role in ("ADMIN", "AGENT", "SUPERVISOR") %}
       <div class="nav-divider"></div>
       <div class="nav-section">Finance</div>
+      {% if role != "AGENT" %}
       <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
         <span class="nav-icon">💰</span>Cash
       </a>
+      {% endif %}
       <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
         <span class="nav-icon">📄</span>Reports
       </a>

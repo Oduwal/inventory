@@ -571,7 +571,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         return redirect("/supervisor")
 
     if not is_admin(user) and not is_supervisor(user):
-        return redirect("/agent-overview")
+        return redirect("/my-deliveries")
 
     items_count = db.scalar(select(func.count(Item.id)).where(Item.branch_id == branch_id)) or 0
 
@@ -1380,7 +1380,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
     if not is_admin(user) and not is_supervisor(user):
-        return redirect("/agent-overview")
+        return redirect("/my-deliveries")
     branch_id = get_selected_branch_id(request, user)
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()

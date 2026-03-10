@@ -105,19 +105,6 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
 
 <!-- Entry forms — [FIX-4] CSRF on every POST form -->
 <div class="entry-grid">
-  <div class="ec ec-col">
-    <div class="ec-hd"><span class="ec-dot" style="background:#22c55e;"></span>Record Collection</div>
-    <form method="post" action="/cash/new">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-      <input type="hidden" name="kind" value="COLLECTION">
-      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      {% if user and user.role == "ADMIN" %}<label style="margin-top:8px;">Agent</label>
-      <select name="agent_id"><option value="">— select —</option>{% for a in agents %}<option value="{{ a.id }}">{{ a.full_name or a.username }}</option>{% endfor %}</select>{% endif %}
-      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="optional">
-      <button class="ec-btn ec-g" type="submit">💰 Save Collection</button>
-    </form>
-  </div>
-
   <div class="ec ec-exp">
     <div class="ec-hd"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
     <form method="post" action="/cash/new">
