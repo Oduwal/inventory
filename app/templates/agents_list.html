@@ -1,17 +1,23 @@
-﻿<!-- app/templates/agents_list.html -->
+<!-- app/templates/agents_list.html -->
 {% extends "base.html" %}
-{% block title %}Agents{% endblock %}
-{% block page_title %}Agents{% endblock %}
-{% block page_subtitle %}Manage delivery agents and view their cash + delivery summaries.{% endblock %}
+{% block title %}{% if user.role == "SUPERVISOR" %}Admins{% else %}Agents{% endif %}{% endblock %}
+{% block page_title %}{% if user.role == "SUPERVISOR" %}Branch Admins{% else %}Agents{% endif %}{% endblock %}
+{% block page_subtitle %}{% if user.role == "SUPERVISOR" %}All branch administrators across every branch.{% else %}Manage delivery agents and view their summaries.{% endif %}{% endblock %}
 {% set active = 'agents' %}
 
 {% block top_right %}
+{% if user.role == "SUPERVISOR" %}
+<a class="btnPrimary" href="/agents/new">+ New Admin</a>
+{% else %}
 <a class="btnPrimary" href="/agents/new">+ New Agent</a>
+{% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="card">
-    <div class="badge b-purple">AGENTS</div>
+    <div class="badge {% if user.role == 'SUPERVISOR' %}b-purple{% else %}b-blue{% endif %}">
+        {% if user.role == "SUPERVISOR" %}ADMINS{% else %}AGENTS{% endif %}
+    </div>
 
     <div style="margin-top:12px;">
         <table>
@@ -19,8 +25,11 @@
                 <tr>
                     <th>ID</th>
                     <th>Username</th>
-                    <th>Full name</th>
+                    <th>Full Name</th>
                     <th>Phone</th>
+                    {% if user.role == "SUPERVISOR" %}
+                    <th>Branch</th>
+                    {% endif %}
                     <th>Created</th>
                     <th>Open</th>
                 </tr>
@@ -33,15 +42,24 @@
                     <td>{{ a.username }}</td>
                     <td>{{ a.full_name or "-" }}</td>
                     <td>{{ a.phone or "-" }}</td>
-                    <td>{{ a.created_at or "-" }}</td>
+                    {% if user.role == "SUPERVISOR" %}
                     <td>
-                        <a class="btnPrimary" href="/agents/{{ a.id }}">View</a>
+                        {% if a.branch %}
+                        <span class="badge b-blue">{{ a.branch.name }}</span>
+                        {% else %}
+                        <span class="muted">—</span>
+                        {% endif %}
                     </td>
+                    {% endif %}
+                    <td>{{ a.created_at or "-" }}</td>
+                    <td><a class="btnPrimary" href="/agents/{{ a.id }}">View</a></td>
                 </tr>
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="6" class="muted">No agents found.</td>
+                    <td colspan="{% if user.role == 'SUPERVISOR' %}7{% else %}6{% endif %}" class="muted">
+                        {% if user.role == "SUPERVISOR" %}No admins found.{% else %}No agents found.{% endif %}
+                    </td>
                 </tr>
                 {% endif %}
             </tbody>

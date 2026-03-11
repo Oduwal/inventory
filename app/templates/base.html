@@ -223,14 +223,6 @@
       <a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
         <span class="nav-icon">🏢</span>Branches
       </a>
-      {% if branches %}
-        <div class="nav-section">Switch Branch</div>
-        {% for b in branches %}
-        <a href="/?branch_id={{ b.id }}" data-active="{% if selected_branch_id == b.id %}1{% else %}0{% endif %}">
-          <span class="nav-icon">•</span>{{ b.name }}
-        </a>
-        {% endfor %}
-      {% endif %}
       {% endif %}
 
       {% if role in ("ADMIN", "SUPERVISOR") %}
@@ -299,8 +291,8 @@
       {% elif role == "SUPERVISOR" %}
       <div class="nav-divider"></div>
       <div class="nav-section">Admin</div>
-      <a href="/agents/new?role=ADMIN" data-active="0">
-        <span class="nav-icon">➕</span>Create Admin
+      <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">👤</span>Admins
       </a>
       {% endif %}
 

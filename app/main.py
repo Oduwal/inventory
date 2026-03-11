@@ -688,8 +688,19 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_agents_count = db.scalar(select(func.count(User.id)).where(User.role == "AGENT")) or 0
     all_admins_count = db.scalar(select(func.count(User.id)).where(User.role == "ADMIN")) or 0
     all_inventory_value = 0.0
+    all_total_stock = 0
+    all_cat_map: dict = {}
+    all_top_rows_raw = []
     for item, stock in get_items_with_stock(db):
-        all_inventory_value += float(stock or 0) * float(item.cost_price or 0)
+        s = int(stock or 0)
+        all_inventory_value += s * float(item.cost_price or 0)
+        all_total_stock += s
+        cat = item.category or "Uncategorized"
+        all_cat_map[cat] = all_cat_map.get(cat, 0) + s
+        all_top_rows_raw.append((item, s))
+    all_cat_rows = sorted(all_cat_map.items(), key=lambda x: x[1], reverse=True)
+    all_top_rows = sorted(all_top_rows_raw, key=lambda x: x[1], reverse=True)[:5]
+    all_low_rows = [(item, stock) for (item, stock) in get_low_stock(db)]
     all_in7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.type == "IN")
@@ -718,13 +729,16 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "grand_returned_operating_cash": sum(r["returned_operating_cash"] for r in rows),
         "grand_operating_balance": sum(r["operating_balance"] for r in rows),
         "grand_remittance": sum(r["remittance"] for r in rows),
-        # All-branch inventory & staff totals
         "all_items_count": all_items_count,
         "all_low_stock_count": all_low_stock_count,
         "all_low_items": all_low_items,
+        "all_low_rows": all_low_rows,
         "all_agents_count": all_agents_count,
         "all_admins_count": all_admins_count,
         "all_inventory_value": all_inventory_value,
+        "all_total_stock": all_total_stock,
+        "all_cat_rows": all_cat_rows,
+        "all_top_rows": all_top_rows,
         "all_in7": all_in7, "all_out7": all_out7,
         "branches": branches, "selected_branch_id": None, "active": "supervisor",
         "preset": preset or "", "start_date": start_date or "", "end_date": end_date or "",
@@ -1208,10 +1222,20 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
     branch_id = get_selected_branch_id(request, user)
-    agents = db.execute(
-        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
-    ).scalars().all()
-    return templates.TemplateResponse("agents_list.html", {"request": request, "agents": agents, "user": user})
+    if is_supervisor(user):
+        # Supervisor sees all admins across all branches
+        agents = db.execute(
+            select(User).where(User.role == "ADMIN").order_by(User.username.asc())
+        ).scalars().all()
+    else:
+        agents = db.execute(
+            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+        ).scalars().all()
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    return templates.TemplateResponse("agents_list.html", {
+        "request": request, "agents": agents, "user": user,
+        "branches": branches, "selected_branch_id": branch_id,
+    })
 
 
 @app.get("/agents/new", response_class=HTMLResponse)
@@ -1224,10 +1248,12 @@ def agent_new_form(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
     csrf_token = get_csrf_token(request)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return templates.TemplateResponse("agent_new.html", {
         "request": request, "user": user,
         "error": request.query_params.get("error"),
         "active": "agents", "csrf_token": csrf_token,
+        "branches": branches,
     })
 
 
@@ -1256,11 +1282,21 @@ async def agent_create(
         return redirect("/agents/new?error=Username+already+exists")
     if len(password or "") < 8:
         return redirect("/agents/new?error=Password+must+be+at+least+8+characters")
-    if not user.branch_id:
-        return redirect("/agents/new?error=Admin+has+no+branch+assigned")
+    # Supervisor picks branch from form; admin uses their own branch
+    if is_supervisor(user):
+        form_data = await request.form()
+        branch_id_val = form_data.get("branch_id", "")
+        if not branch_id_val or not str(branch_id_val).isdigit():
+            return redirect("/agents/new?error=Please+select+a+branch")
+        assigned_branch_id = int(branch_id_val)
+    else:
+        if not user.branch_id:
+            return redirect("/agents/new?error=Admin+has+no+branch+assigned")
+        assigned_branch_id = user.branch_id
     db.add(User(
-        username=uname, password_hash=hash_password(password), role="AGENT",
-        branch_id=user.branch_id,
+        username=uname, password_hash=hash_password(password),
+        role="ADMIN" if is_supervisor(user) else "AGENT",
+        branch_id=assigned_branch_id,
         full_name=sanitize_text(full_name, 140, "Full name") or None,
         phone=sanitize_phone(phone) or None,
     ))
@@ -1409,10 +1445,21 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    # KPI totals for supervisor banner
+    sup_kpis = None
+    if is_supervisor(user):
+        sup_kpis = {
+            "total": len(rows),
+            "delivered": sum(1 for d in rows if d.status == "DELIVERED"),
+            "pending": sum(1 for d in rows if d.status == "PENDING"),
+            "in_transit": sum(1 for d in rows if d.status == "OUT_FOR_DELIVERY"),
+            "failed": sum(1 for d in rows if d.status in ("FAILED", "RETURNED")),
+        }
     return templates.TemplateResponse("deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
         "branches": branches, "selected_branch_id": branch_id, "user": user, "active": "deliveries",
+        "sup_kpis": sup_kpis,
     })
 
 
