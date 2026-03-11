@@ -691,7 +691,10 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         if "branch_name" not in r or not r.get("branch_name"):
             r["branch_name"] = branch_name_map.get(r.get("branch_id"), "—")
     top_items   = supervisor_top_items(db, start_dt, end_dt)
-    best_agents = supervisor_best_agents(db, start_dt, end_dt)
+    best_agents = [
+        {"agent_name": r[0], "delivery_count": r[1], "total_collections": float(r[2] or 0)}
+        for r in supervisor_best_agents(db, start_dt, end_dt)
+    ]
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
 
     # Daily expenses across all branches for the chart
