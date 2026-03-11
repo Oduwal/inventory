@@ -44,7 +44,7 @@
   <table>
     <thead>
       <tr>
-        <th>ID</th><th>Customer</th><th>Phone</th><th>Status</th><th>Created</th><th></th>
+        <th>ID</th><th>Customer</th><th>Phone</th><th>Items</th><th>Status</th><th>Created</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -54,6 +54,10 @@
         <td><span style="color:var(--muted);">#{{ d.id }}</span></td>
         <td style="font-weight:700;">{{ d.customer_name }}</td>
         <td style="color:var(--muted);">{{ d.customer_phone or "—" }}</td>
+        <td style="max-width:220px;font-size:12px;color:var(--muted);">
+          {% set s = items_summary.get(d.id, "") %}
+          {% if s %}{{ s }}{% else %}—{% endif %}
+        </td>
         <td>
           {% if d.status == "DELIVERED" %}<span class="badge b-green">✓ {{ d.status }}</span>
           {% elif d.status == "OUT_FOR_DELIVERY" %}<span class="badge b-blue">🚚 {{ d.status }}</span>
@@ -67,7 +71,7 @@
       {% endfor %}
       {% else %}
       <tr>
-        <td colspan="6" style="text-align:center;padding:50px;color:var(--muted);">
+        <td colspan="7" style="text-align:center;padding:50px;color:var(--muted);">
           No deliveries yet. <a href="/deliveries/new" style="color:var(--accent);">Create your first order →</a>
         </td>
       </tr>

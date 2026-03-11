@@ -677,6 +677,11 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     start_dt, end_dt = supervisor_date_range(preset, start_date, end_date)
 
     branches, rows = supervisor_branch_stats(db, start_dt, end_dt)
+    # Enrich rows with branch_name from branches list
+    branch_name_map = {b.id: b.name for b in branches}
+    for r in rows:
+        if "branch_name" not in r or not r.get("branch_name"):
+            r["branch_name"] = branch_name_map.get(r.get("branch_id"), "—")
     top_items   = supervisor_top_items(db, start_dt, end_dt)
     best_agents = supervisor_best_agents(db, start_dt, end_dt)
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
@@ -1661,8 +1666,24 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
         .order_by(desc(Delivery.created_at)).limit(300)
     ).scalars().all()
 
+    # Build items summary for each delivery
+    delivery_ids = [d.id for d in rows]
+    items_summary: dict[int, str] = {}
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+        grouped: dict[int, list[str]] = {}
+        for did, iname, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
+        items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
+
     return templates.TemplateResponse("my_deliveries.html", {
         "request": request, "rows": rows, "user": user, "active": "deliveries",
+        "items_summary": items_summary,
     })
 
 
