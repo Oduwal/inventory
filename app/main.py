@@ -681,6 +681,19 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     best_agents = supervisor_best_agents(db, start_dt, end_dt)
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
 
+    # Daily expenses across all branches for the chart
+    exp_by_day: dict = {}
+    for e in db.execute(
+        select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
+        .where(CashEntry.created_at >= (start_dt or datetime.utcnow() - timedelta(days=30)))
+        .where(CashEntry.created_at <= (end_dt or datetime.utcnow()))
+    ).scalars().all():
+        k = e.created_at.date().isoformat() if e.created_at else None
+        if k:
+            exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
+    # Build expense series aligned with delivery chart days
+    chart_days_set = [str(r.day) for r in daily_chart]
+
     # All-branch inventory & agent totals for the enhanced overview
     all_items_count = db.scalar(select(func.count(Item.id))) or 0
     all_low_items = [(item, stock) for (item, stock) in get_low_stock(db)]
@@ -715,8 +728,9 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     return templates.TemplateResponse("supervisor_dashboard.html", {
         "request": request, "user": user, "rows": rows,
         "top_items": top_items, "best_agents": best_agents,
-        "chart_labels": [str(r.day) for r in daily_chart],
+        "chart_labels": chart_days_set,
         "chart_data": [int(r.cnt) for r in daily_chart],
+        "chart_expenses": [round(exp_by_day.get(d, 0), 2) for d in chart_days_set],
         "grand_total_deliveries": sum(r["total_deliveries"] for r in rows),
         "grand_delivered": sum(r["delivered_count"] for r in rows),
         "grand_pending": sum(r["pending_count"] for r in rows),

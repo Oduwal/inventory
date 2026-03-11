@@ -5,17 +5,31 @@
 {% set active = 'dashboard' %}
 
 {% block content %}
+
+<!-- Date filter for remittance chart -->
 <div class="card" style="margin-bottom:14px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div>
-            <span class="badge b-purple">SUPERVISOR OVERVIEW</span>
-            <div class="muted small" style="margin-top:8px;">All figures are across every branch.</div>
-        </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <a class="badge b-blue" href="/branches">Manage Branches</a>
-            <a class="badge b-purple" href="/agents/new">Create Admin</a>
-        </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div>
+      <span class="badge b-purple">SUPERVISOR OVERVIEW</span>
+      <div class="muted small" style="margin-top:8px;">All figures are across every branch.</div>
     </div>
+    <form method="get" action="/supervisor" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div>
+        <label>Quick Filter</label>
+        <select name="preset" onchange="this.form.submit()" style="width:auto;">
+          <option value="">Custom</option>
+          <option value="today"      {% if preset=='today'      %}selected{% endif %}>Today</option>
+          <option value="yesterday"  {% if preset=='yesterday'  %}selected{% endif %}>Yesterday</option>
+          <option value="7d"         {% if preset=='7d'         %}selected{% endif %}>Last 7 days</option>
+          <option value="30d"        {% if preset=='30d'        %}selected{% endif %}>Last 30 days</option>
+          <option value="this_month" {% if preset=='this_month' %}selected{% endif %}>This month</option>
+        </select>
+      </div>
+      <div><label>From</label><input type="date" name="start_date" value="{{ start_date }}" style="width:auto;"></div>
+      <div><label>To</label>  <input type="date" name="end_date"   value="{{ end_date }}"   style="width:auto;"></div>
+      <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Apply</button></div>
+    </form>
+  </div>
 </div>
 
 <!-- KPI cards — same 4-col layout as admin -->
@@ -42,33 +56,35 @@
     </div>
 </div>
 
-<!-- Stock in/out + category chart -->
+<!-- Daily deliveries chart + category chart -->
 <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
-    <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span class="badge b-blue">LAST 7 DAYS — ALL BRANCHES</span>
-            <div>
-                <span class="badge b-green">IN: {{ all_in7 }}</span>
-                <span class="badge b-red" style="margin-left:8px;">OUT: {{ all_out7 }}</span>
-            </div>
+    <div class="card" style="border-top:3px solid #4f7cff;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span class="badge b-blue">📦 DAILY DELIVERIES</span>
+            <span class="muted small">All branches</span>
         </div>
-        <div style="margin-top:12px;" class="muted small">
-            Stock movement across all branches combined.
-        </div>
+        <div style="position:relative;height:200px;"><canvas id="chartDeliveries"></canvas></div>
     </div>
     <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
             <span class="badge b-purple">STOCK BY CATEGORY</span>
             <span class="muted small">All branches</span>
         </div>
-        <div style="height:260px;margin-top:10px;">
+        <div style="height:220px;margin-top:10px;">
             <canvas id="catChart"></canvas>
         </div>
     </div>
 </div>
 
-<!-- Top items + low stock alerts -->
+<!-- Expenses chart + top items -->
 <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
+    <div class="card" style="border-top:3px solid #ef4444;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span class="badge b-red">💸 DAILY EXPENSES</span>
+            <span class="muted small">All branches</span>
+        </div>
+        <div style="position:relative;height:200px;"><canvas id="chartExpenses"></canvas></div>
+    </div>
     <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <span class="badge b-purple">TOP ITEMS BY STOCK</span>
@@ -92,21 +108,16 @@
             </table>
         </div>
     </div>
-    <div class="card" style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:8px;">
-        <span style="font-size:32px;">⚠️</span>
-        <div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;font-weight:700;">Low Stock Items</div>
-        <div style="font-size:48px;font-weight:800;color:#fbbf24;line-height:1;">{{ all_low_stock_count }}</div>
-        <div class="muted small">items need restocking</div>
-        <a class="badge b-yellow" href="/low-stock" style="margin-top:6px;">View All →</a>
-    </div>
 </div>
 
-<!-- Remittance by Branch chart -->
+<!-- Remittance by Branch chart — filtered by date -->
 <div style="margin-top:14px;">
     <div class="card" style="border-top:3px solid #8b5cf6;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
             <span class="badge b-purple">REMITTANCE BY BRANCH</span>
-            <span class="muted small">Net remittance per branch</span>
+            <span class="muted small">
+              {% if preset %}{{ preset }}{% elif start_date or end_date %}{{ start_date or '…' }} → {{ end_date or '…' }}{% else %}All time{% endif %}
+            </span>
         </div>
         <div style="position:relative; height:220px;">
             <canvas id="remitChart"></canvas>
@@ -116,7 +127,7 @@
 
 <!-- Branch breakdown table -->
 <div class="card" style="margin-top:14px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <span class="badge b-blue">BRANCH BREAKDOWN</span>
         <span class="muted small">{{ rows|length }} branches</span>
     </div>
@@ -161,46 +172,73 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 (function(){
+  const axisStyle = {
+    grid: { color: 'rgba(255,255,255,0.04)' },
+    ticks: { color: '#8a9bc4', font: { size: 10 } }
+  };
+  const baseOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { x: axisStyle, y: { ...axisStyle, beginAtZero: true } }
+  };
+
+  // Shorten date labels e.g. "2026-03-11" → "3/11"
+  const rawLabels = {{ chart_labels | tojson }};
+  const shortLabels = rawLabels.map(l => {
+    const d = new Date(l + 'T00:00:00');
+    return (d.getMonth()+1) + '/' + d.getDate();
+  });
+
+  // Daily deliveries chart
+  const elDel = document.getElementById('chartDeliveries');
+  if(elDel) new Chart(elDel, {
+    type: 'bar',
+    data: { labels: shortLabels, datasets: [{ data: {{ chart_data | tojson }},
+      backgroundColor: 'rgba(79,124,255,0.55)', borderColor: '#4f7cff',
+      borderWidth: 1, borderRadius: 4 }] },
+    options: { ...baseOpts, scales: { x: axisStyle,
+      y: { ...axisStyle, beginAtZero: true, ticks: { ...axisStyle.ticks, stepSize: 1 } } } }
+  });
+
+  // Daily expenses chart
+  const elExp = document.getElementById('chartExpenses');
+  if(elExp) new Chart(elExp, {
+    type: 'line',
+    data: { labels: shortLabels, datasets: [{ data: {{ chart_expenses | tojson }},
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.12)',
+      borderWidth: 2, pointBackgroundColor: '#ef4444',
+      pointRadius: 3, fill: true, tension: 0.35 }] },
+    options: { ...baseOpts, scales: { x: axisStyle,
+      y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
+        callback: v => '₦' + Number(v).toLocaleString() } } } }
+  });
+
   // Category chart
-  const catLabels = [{% if all_cat_rows %}{% for c, s in all_cat_rows %}"{{ c }}"{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
-  const catValues = [{% if all_cat_rows %}{% for c, s in all_cat_rows %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
-  const catCtx = document.getElementById("catChart");
-  if(catCtx && catLabels.length){
-    new Chart(catCtx, {
-      type: "bar",
-      data: { labels: catLabels, datasets: [{ label: "Stock", data: catValues,
-        backgroundColor: "rgba(79,124,255,0.6)", borderRadius: 4 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true, grid: { color: "rgba(255,255,255,0.04)" },
-          ticks: { color: "#8a9bc4" } }, x: { grid: { color: "rgba(255,255,255,0.04)" },
-          ticks: { color: "#8a9bc4" } } }
-      }
-    });
-  }
+  const catLabels = [{% if all_cat_rows %}{% for c,s in all_cat_rows %}"{{ c }}"{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
+  const catValues = [{% if all_cat_rows %}{% for c,s in all_cat_rows %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
+  const catCtx = document.getElementById('catChart');
+  if(catCtx && catLabels.length) new Chart(catCtx, {
+    type: 'bar',
+    data: { labels: catLabels, datasets: [{ data: catValues,
+      backgroundColor: 'rgba(79,124,255,0.6)', borderRadius: 4 }] },
+    options: { ...baseOpts, scales: {
+      x: { ...axisStyle }, y: { ...axisStyle, beginAtZero: true } } }
+  });
 
   // Remittance by branch chart
-  const branchLabels = [{% for r in rows %}"{{ r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
-  const branchRemit  = [{% for r in rows %}{{ r.remittance }}{% if not loop.last %},{% endif %}{% endfor %}];
-  const branchColors = ['rgba(139,92,246,0.7)','rgba(79,124,255,0.7)','rgba(34,197,94,0.7)','rgba(245,158,11,0.7)','rgba(20,184,166,0.7)'];
-  const remitCtx = document.getElementById("remitChart");
-  if(remitCtx && branchLabels.length){
-    new Chart(remitCtx, {
-      type: "bar",
-      data: { labels: branchLabels, datasets: [{ data: branchRemit,
-        backgroundColor: branchColors.slice(0, branchLabels.length), borderRadius: 6 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#8a9bc4" } },
-          y: { beginAtZero: true, grid: { color: "rgba(255,255,255,0.04)" },
-            ticks: { color: "#8a9bc4", callback: v => "₦" + Number(v).toLocaleString() } }
-        }
-      }
-    });
-  }
+  const branchLabels  = [{% for r in rows %}"{{ r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
+  const branchRemit   = [{% for r in rows %}{{ r.remittance }}{% if not loop.last %},{% endif %}{% endfor %}];
+  const branchColors  = ['rgba(139,92,246,0.7)','rgba(79,124,255,0.7)','rgba(34,197,94,0.7)','rgba(245,158,11,0.7)','rgba(20,184,166,0.7)'];
+  const remitCtx = document.getElementById('remitChart');
+  if(remitCtx && branchLabels.length) new Chart(remitCtx, {
+    type: 'bar',
+    data: { labels: branchLabels, datasets: [{ data: branchRemit,
+      backgroundColor: branchColors.slice(0, branchLabels.length), borderRadius: 6 }] },
+    options: { ...baseOpts, scales: {
+      x: axisStyle,
+      y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
+        callback: v => '₦' + Number(v).toLocaleString() } } } }
+  });
 })();
 </script>
 {% endblock %}
