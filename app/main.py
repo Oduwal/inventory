@@ -1176,16 +1176,21 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden", status_code=403)
     branch_id = get_selected_branch_id(request, user)
     cutoff = datetime.utcnow() - timedelta(days=days)
-    all_items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name)).scalars().all()
+    # Supervisor sees all branches; admin sees their own branch only
+    items_stmt = select(Item).order_by(Item.name)
+    if not is_supervisor(user):
+        items_stmt = items_stmt.where(Item.branch_id == branch_id)
+    all_items = db.execute(items_stmt).scalars().all()
     stale_rows = []
     for item in all_items:
+        item_branch_id = item.branch_id
         stock = db.scalar(
             select(func.coalesce(func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0))
-            .where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id)
+            .where(Transaction.item_id == item.id).where(Transaction.branch_id == item_branch_id)
         ) or 0
         if stock <= 0:
             continue
-        last_tx = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == item.id).where(Transaction.branch_id == branch_id))
+        last_tx = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == item.id).where(Transaction.branch_id == item_branch_id))
         if last_tx is None or last_tx < cutoff:
             stale_rows.append({"item": item, "stock": int(stock), "last_tx": last_tx,
                                "days_since": (datetime.utcnow() - last_tx).days if last_tx else 9999})

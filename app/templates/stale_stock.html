@@ -57,6 +57,7 @@
         <tr>
           <th>Item</th>
           <th>Category</th>
+          {% if user.role == "SUPERVISOR" %}<th>Branch</th>{% endif %}
           <th style="text-align:right;">Stock</th>
           <th>Last Movement</th>
           <th style="text-align:center;">Days Idle</th>
@@ -72,6 +73,12 @@
             <span class="badge b-blue" style="font-size:11px;">{{ row.item.category }}</span>
             {% else %}<span style="color:var(--muted);">—</span>{% endif %}
           </td>
+          {% if user.role == "SUPERVISOR" %}
+          <td>
+            {% if row.item.branch %}<span class="badge b-purple" style="font-size:11px;">{{ row.item.branch.name }}</span>
+            {% else %}<span style="color:var(--muted);">—</span>{% endif %}
+          </td>
+          {% endif %}
           <td style="text-align:right;font-weight:700;">
             <span style="color:{% if row.stock > 10 %}#4ade80{% elif row.stock > 3 %}#fbbf24{% else %}#f87171{% endif %}">
               {{ row.stock }}
