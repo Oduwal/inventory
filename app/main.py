@@ -1202,7 +1202,11 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
-    rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
+    if is_supervisor(user):
+        # Supervisor sees all branches
+        rows = list(get_low_stock(db))
+    else:
+        rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
     return templates.TemplateResponse("low_stock.html", {
         "request": request, "rows": rows, "user": user, "active": "low",
     })
