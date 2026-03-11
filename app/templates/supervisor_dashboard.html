@@ -63,7 +63,7 @@
             <span class="badge b-blue">📦 DAILY DELIVERIES</span>
             <span class="muted small">All branches</span>
         </div>
-        <div style="position:relative;height:160px;"><canvas id="chartDeliveries"></canvas></div>
+        <div style="position:relative;height:200px;"><canvas id="chartDeliveries"></canvas></div>
     </div>
     <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -83,7 +83,7 @@
             <span class="badge b-red">💸 DAILY EXPENSES</span>
             <span class="muted small">All branches</span>
         </div>
-        <div style="position:relative;height:160px;"><canvas id="chartExpenses"></canvas></div>
+        <div style="position:relative;height:200px;"><canvas id="chartExpenses"></canvas></div>
     </div>
     <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -110,8 +110,8 @@
     </div>
 </div>
 
-<!-- Remittance by Branch chart — filtered by date -->
-<div style="margin-top:14px;">
+<!-- Remittance chart (half) + Top agents (half) -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;">
     <div class="card" style="border-top:3px solid #8b5cf6;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
             <span class="badge b-purple">REMITTANCE BY BRANCH</span>
@@ -119,9 +119,31 @@
               {% if preset %}{{ preset }}{% elif start_date or end_date %}{{ start_date or '…' }} → {{ end_date or '…' }}{% else %}All time{% endif %}
             </span>
         </div>
-        <div style="position:relative; height:160px;">
+        <div style="position:relative;height:180px;">
             <canvas id="remitChart"></canvas>
         </div>
+    </div>
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span class="badge b-yellow">🏆 TOP AGENTS</span>
+            <span class="muted small">By deliveries</span>
+        </div>
+        {% if best_agents %}
+        <table>
+            <thead><tr><th>Agent</th><th style="text-align:right;">Deliveries</th><th style="text-align:right;">Collections</th></tr></thead>
+            <tbody>
+            {% for a in best_agents %}
+            <tr>
+                <td style="font-weight:600;">{{ a.agent_name }}</td>
+                <td style="text-align:right;">{{ a.delivery_count }}</td>
+                <td style="text-align:right;color:#4ade80;">₦{{ '{:,.0f}'.format(a.total_collections | float) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="muted" style="padding:30px;text-align:center;">No agent data for this period.</div>
+        {% endif %}
     </div>
 </div>
 

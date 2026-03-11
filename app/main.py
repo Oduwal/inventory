@@ -1353,20 +1353,53 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     require_agent_access(request, user, agent)
 
     sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
-    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent_id, start=start_dt, end=end_dt)
 
-    _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
-    if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
-    if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
-    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
-    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
-    remittance = float(total_collections) - float(total_office_expenses)
-    net_position = remittance + operating_balance
+    is_admin_profile = (agent.role or "").upper() == "ADMIN"
 
-    d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
-    if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
-    if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
-    deliveries = db.execute(d_stmt).scalars().all()
+    if is_admin_profile and agent.branch_id:
+        # For admin profiles: show branch-level summary via direct queries
+        branch_id_for_admin = agent.branch_id
+
+        def _branch_sum(kind_list):
+            stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
+                CashEntry.kind.in_(kind_list)).where(CashEntry.branch_id == branch_id_for_admin)
+            if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
+            if end_dt: stmt = stmt.where(CashEntry.created_at < end_dt)
+            return float(db.scalar(stmt) or 0)
+
+        total_collections   = _branch_sum(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"])
+        total_expenses      = _branch_sum(["EXPENSE"])
+        total_operating     = _branch_sum(["OPERATING_CASH"])
+        total_office_expenses = _branch_sum(["OFFICE_EXPENSE"])
+        total_return_op_cash  = _branch_sum(["RETURN_OPERATING_CASH"])
+        operating_balance   = total_operating - total_expenses - total_return_op_cash
+        remittance          = total_collections - total_office_expenses
+        net_position        = remittance + operating_balance
+        rows = []  # no per-day rows for branch summary
+
+        d_stmt = select(Delivery).where(Delivery.branch_id == branch_id_for_admin).order_by(desc(Delivery.created_at)).limit(300)
+        if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
+        if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+        deliveries = db.execute(d_stmt).scalars().all()
+        branch_agents = db.execute(
+            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id_for_admin)
+            .order_by(User.username.asc())
+        ).scalars().all()
+    else:
+        is_admin_profile = False
+        branch_agents = []
+        rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent_id, start=start_dt, end=end_dt)
+        _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
+        if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
+        if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+        total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
+        operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
+        remittance = float(total_collections) - float(total_office_expenses)
+        net_position = remittance + operating_balance
+        d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
+        if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
+        if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+        deliveries = db.execute(d_stmt).scalars().all()
 
     delivery_ids = [d.id for d in deliveries]
     items_summary: dict[int, str] = {}
@@ -1391,6 +1424,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
+        "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
         "deliveries": deliveries, "items_summary": items_summary, "cash_entries": cash_entries,
         "total_collections": float(total_collections), "total_expenses": float(total_expenses),
         "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
