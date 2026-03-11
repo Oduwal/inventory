@@ -46,38 +46,9 @@
 {% endif %}
 
 {# ── Totals — shown for both, styled differently for admin ─────────────── #}
-{% if is_admin_profile %}
-<div class="card" style="margin-bottom:14px;">
-  <div class="badge b-green" style="margin-bottom:12px;">BRANCH TOTALS</div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
-    <div style="background:rgba(79,124,255,.1);border:1px solid rgba(79,124,255,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">🏦 Operating Cash</div>
-      <div style="font-size:20px;font-weight:800;color:#7fa8ff;margin-top:4px;">₦{{ '%.2f'|format(total_operating_cash) }}</div>
-    </div>
-    <div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">📤 Agent Expenses</div>
-      <div style="font-size:20px;font-weight:800;color:#f87171;margin-top:4px;">₦{{ '%.2f'|format(total_expenses) }}</div>
-    </div>
-    <div style="background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">🏢 Office Expenses</div>
-      <div style="font-size:20px;font-weight:800;color:#a78bfa;margin-top:4px;">₦{{ '%.2f'|format(total_office_expenses) }}</div>
-    </div>
-    <div style="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">💰 Collections</div>
-      <div style="font-size:20px;font-weight:800;color:#4ade80;margin-top:4px;">₦{{ '%.2f'|format(total_collections) }}</div>
-    </div>
-    <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">📊 Remittance</div>
-      <div style="font-size:20px;font-weight:800;color:#fbbf24;margin-top:4px;">₦{{ '%.2f'|format(remittance) }}</div>
-    </div>
-    <div style="background:rgba(20,184,166,.1);border:1px solid rgba(20,184,166,.22);border-radius:12px;padding:14px;">
-      <div class="muted small">⚖️ Op. Balance</div>
-      <div style="font-size:20px;font-weight:800;color:#2dd4bf;margin-top:4px;">₦{{ '%.2f'|format(operating_balance) }}</div>
-    </div>
-  </div>
-</div>
-{% endif %}
 
+
+{% if not is_admin_profile %}
 <div class="card">
     <div class="badge b-blue">FILTERS</div>
 
@@ -199,6 +170,8 @@
         </table>
     </div>
 </div>
+
+{% endif %}{# end if not is_admin_profile #}
 
 <!-- Reset Password -->
 <div class="card" style="margin-top:16px;border-top:3px solid #f59e0b;">
