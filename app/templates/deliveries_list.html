@@ -59,6 +59,27 @@
                 </select>
             </div>
 
+            {% if user.role == "SUPERVISOR" %}
+            <div>
+                <label>Branch</label>
+                <select name="branch_id">
+                    <option value="">All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b.id }}" {% if branch_id and (branch_id|string == b.id|string) %}selected{% endif %}>
+                        {{ b.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>From</label>
+                <input type="date" name="start_date" value="{{ start_date or '' }}" style="width:auto;">
+            </div>
+            <div>
+                <label>To</label>
+                <input type="date" name="end_date" value="{{ end_date or '' }}" style="width:auto;">
+            </div>
+            {% else %}
             <div>
                 <label>Agent</label>
                 <select name="agent_id">
@@ -70,6 +91,7 @@
                     {% endfor %}
                 </select>
             </div>
+            {% endif %}
 
             <div>
                 <button class="btnPrimary" type="submit">Apply</button>

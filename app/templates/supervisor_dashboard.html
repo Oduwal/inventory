@@ -92,34 +92,12 @@
             </table>
         </div>
     </div>
-    <div class="card">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span class="badge b-yellow">LOW STOCK ALERTS</span>
-            <span class="muted small">{{ all_low_rows|length if all_low_rows else 0 }} items</span>
-        </div>
-        <div style="margin-top:12px;">
-            <table>
-                <thead><tr><th>Item</th><th>Stock</th><th>Reorder</th></tr></thead>
-                <tbody>
-                    {% if not all_low_rows %}
-                    <tr><td colspan="3" class="muted">No low stock items.</td></tr>
-                    {% endif %}
-                    {% for it, stock in (all_low_rows or []) %}
-                    <tr>
-                        <td><a class="badge b-blue" href="/items/{{ it.id }}">{{ it.name }}</a></td>
-                        <td>
-                            {% if stock <= 0 %}
-                            <span class="badge b-red">{{ stock }}</span>
-                            {% else %}
-                            <span class="badge b-yellow">{{ stock }}</span>
-                            {% endif %}
-                        </td>
-                        <td class="muted">{{ it.reorder_level }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+    <div class="card" style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;gap:8px;">
+        <span style="font-size:32px;">⚠️</span>
+        <div class="muted small" style="text-transform:uppercase;letter-spacing:.06em;font-weight:700;">Low Stock Items</div>
+        <div style="font-size:48px;font-weight:800;color:#fbbf24;line-height:1;">{{ all_low_stock_count }}</div>
+        <div class="muted small">items need restocking</div>
+        <a class="badge b-yellow" href="/low-stock" style="margin-top:6px;">View All →</a>
     </div>
 </div>
 

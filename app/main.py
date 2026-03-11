@@ -1417,19 +1417,45 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     user = user_or
     if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
-    branch_id = get_selected_branch_id(request, user)
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
-    stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(300)
-    if not (is_supervisor(user) and not branch_id):
+
+    if is_supervisor(user):
+        # Supervisor filters by branch, status, date range
+        filter_branch = request.query_params.get("branch_id", "").strip()
+        start_date = request.query_params.get("start_date", "").strip()
+        end_date = request.query_params.get("end_date", "").strip()
+        stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(500)
+        if filter_branch and filter_branch.isdigit():
+            stmt = stmt.where(Delivery.branch_id == int(filter_branch))
+        if status:
+            stmt = stmt.where(Delivery.status == status)
+        if start_date:
+            try:
+                stmt = stmt.where(Delivery.created_at >= datetime.fromisoformat(start_date))
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                stmt = stmt.where(Delivery.created_at <= datetime.fromisoformat(end_date + " 23:59:59"))
+            except ValueError:
+                pass
+        rows = db.execute(stmt).scalars().all()
+        branch_id = int(filter_branch) if filter_branch and filter_branch.isdigit() else None
+        agents = []
+    else:
+        branch_id = get_selected_branch_id(request, user)
+        filter_branch = ""
+        start_date = ""
+        end_date = ""
+        stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(300)
         stmt = stmt.where(Delivery.branch_id == branch_id)
-    if status: stmt = stmt.where(Delivery.status == status)
-    if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
-    rows = db.execute(stmt).scalars().all()
-    agents_stmt = select(User).where(User.role == "AGENT").order_by(User.username.asc())
-    if not (is_supervisor(user) and not branch_id):
-        agents_stmt = agents_stmt.where(User.branch_id == branch_id)
-    agents = db.execute(agents_stmt).scalars().all()
+        if status: stmt = stmt.where(Delivery.status == status)
+        if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
+        rows = db.execute(stmt).scalars().all()
+        agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+        agents = db.execute(agents_stmt).scalars().all()
+
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
@@ -1444,8 +1470,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
+
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
-    # KPI totals for supervisor banner
     sup_kpis = None
     if is_supervisor(user):
         sup_kpis = {
@@ -1458,8 +1484,9 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
-        "branches": branches, "selected_branch_id": branch_id, "user": user, "active": "deliveries",
-        "sup_kpis": sup_kpis,
+        "branches": branches, "selected_branch_id": branch_id,
+        "branch_id": filter_branch, "start_date": start_date, "end_date": end_date,
+        "user": user, "active": "deliveries", "sup_kpis": sup_kpis,
     })
 
 
