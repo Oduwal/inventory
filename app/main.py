@@ -198,8 +198,16 @@ def require_delivery_access(request: Request, user: User | None, delivery: Deliv
 
 
 def require_agent_access(request: Request, user: User | None, agent: User | None) -> None:
-    if not agent or (agent.role or "").upper() != "AGENT":
+    if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    role = (agent.role or "").upper()
+    # Supervisor can view admins; admin can only view agents
+    if is_supervisor(user):
+        if role not in ("AGENT", "ADMIN"):
+            raise HTTPException(status_code=404, detail="User not found")
+    else:
+        if role != "AGENT":
+            raise HTTPException(status_code=404, detail="Agent not found")
     branch_id = get_selected_branch_id(request, user)
     require_branch_access(user, agent.branch_id)
     if not is_supervisor(user) and agent.branch_id != branch_id:
