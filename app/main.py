@@ -679,20 +679,21 @@ def debug_deliveries(request: Request, db: Session = Depends(get_db)):
     if not (is_supervisor(user) or is_admin(user)): return HTMLResponse("Forbidden", 403)
     from sqlalchemy import text
     rows = db.execute(text("""
-        SELECT d.id, d.customer_name, d.status, d.payment_method, d.branch_id,
+        SELECT d.id, d.customer_name, d.status, d.branch_id,
                b.name as branch_name,
                COALESCE((SELECT SUM(ce.amount) FROM cash_entries ce WHERE ce.delivery_id = d.id AND ce.kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')), 0) as cash_collected,
-               (SELECT string_agg(ce.kind || ':' || ce.amount::text, ', ') FROM cash_entries ce WHERE ce.delivery_id = d.id) as cash_entries
+               (SELECT string_agg(ce.kind || ':' || ce.amount::text, ', ') FROM cash_entries ce WHERE ce.delivery_id = d.id) as cash_entries,
+               (SELECT string_agg(ce.branch_id::text, ', ') FROM cash_entries ce WHERE ce.delivery_id = d.id) as ce_branch_ids
         FROM deliveries d
         LEFT JOIN branches b ON b.id = d.branch_id
         WHERE d.id IN (1, 2, 22)
         ORDER BY d.id
     """)).fetchall()
     html = "<pre style='font-family:monospace;font-size:12px;padding:20px'>"
-    html += f"{'ID':<5} {'CUSTOMER':<20} {'STATUS':<15} {'PAYMENT':<15} {'BR_ID':<8} {'BRANCH':<20} {'COLLECTED':<12} CASH ENTRIES\n"
-    html += "-"*130 + "\n"
+    html += f"{'ID':<5} {'CUSTOMER':<20} {'STATUS':<15} {'BR_ID':<8} {'BRANCH':<20} {'COLLECTED':<12} {'CE_BRANCH_IDS':<16} CASH ENTRIES\n"
+    html += "-"*140 + "\n"
     for r in rows:
-        html += f"{str(r[0]):<5} {str(r[1] or ''):<20} {str(r[2] or ''):<15} {str(r[3] or ''):<15} {str(r[4]):<8} {str(r[5] or ''):<20} {str(r[6]):<12} {str(r[7] or 'NONE')}\n"
+        html += f"{str(r[0]):<5} {str(r[1] or ''):<20} {str(r[2] or ''):<15} {str(r[3]):<8} {str(r[4] or ''):<20} {str(r[5]):<12} {str(r[7] or ''):<16} {str(r[6] or 'NONE')}\n"
     html += "</pre>"
     return HTMLResponse(html)
 
