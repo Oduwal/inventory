@@ -2372,6 +2372,8 @@ async def merchant_receipt_create(
     request: Request,
     merchant_name: str = Form(...),
     note: str = Form(""),
+    expense_amount: str = Form(""),
+    expense_note: str = Form(""),
     item_ids: list[int] = Form(...),
     quantities: list[int] = Form(...),
     csrf_token: str = Form(""),
@@ -2405,6 +2407,20 @@ async def merchant_receipt_create(
             type="IN", quantity=qty,
             reference=ref, note=full_note,
         ))
+    # Record expense if provided
+    exp_amt = 0.0
+    try:
+        exp_amt = float(expense_amount) if expense_amount else 0.0
+    except ValueError:
+        exp_amt = 0.0
+    if exp_amt > 0:
+        db.add(CashEntry(
+            branch_id=branch_id,
+            agent_id=user.id,
+            kind="OFFICE_EXPENSE",
+            amount=exp_amt,
+            note=sanitize_text(expense_note, 400, "Note") or f"Merchant receipt expense: {merchant_name}",
+        ))
     db.commit()
     return redirect("/merchant-receipt/new?success=Stock+received+and+recorded+successfully")
 
@@ -2416,10 +2432,13 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
         return user_or
     user = user_or
     if is_agent(user):
-        # Agents see transfers delegated to them (send or receive side)
+        # Agents see transfers delegated to them (send or receive side) — hide cancelled from receiver
         transfers = db.execute(
             select(StockTransfer)
-            .where((StockTransfer.delegated_agent_id == user.id) | (StockTransfer.delegated_receiver_id == user.id))
+            .where(
+                (StockTransfer.delegated_agent_id == user.id) |
+                ((StockTransfer.delegated_receiver_id == user.id) & (StockTransfer.status != "CANCELLED"))
+            )
             .order_by(desc(StockTransfer.created_at))
         ).scalars().all()
     elif is_supervisor(user):
@@ -2565,7 +2584,7 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
         return HTMLResponse("Forbidden", status_code=403)
     # For agent receiving, get branch_id from transfer
     recv_branch_id = transfer.to_branch_id
-    if transfer.status != "PENDING":
+    if transfer.status in ("RECEIVED", "CANCELLED"):
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
     for line in transfer.items:
         dest_item = db.scalar(select(Item).where(Item.branch_id == recv_branch_id, Item.name == line.item.name))
@@ -2648,14 +2667,22 @@ async def transfer_expense(
 
     # Also create a CashEntry so it shows in cash section
     cash_kind = "EXPENSE" if expense_kind == "EXPENSE" else "EXPENSE"
-    agent_id = user.id if not is_admin(user) else (transfer.delegated_agent_id or user.id)
-    db.add(CashEntry(
-        branch_id=transfer.from_branch_id,
-        agent_id=agent_id,
-        kind=cash_kind,
-        amount=expense_amount,
-        note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
-    ))
+    if is_admin(user):
+        db.add(CashEntry(
+            branch_id=transfer.from_branch_id,
+            agent_id=user.id,
+            kind="OFFICE_EXPENSE",
+            amount=expense_amount,
+            note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
+        ))
+    else:
+        db.add(CashEntry(
+            branch_id=transfer.from_branch_id,
+            agent_id=user.id,
+            kind="EXPENSE",
+            amount=expense_amount,
+            note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
+        ))
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
 
@@ -2717,14 +2744,22 @@ async def transfer_receive_expense(
     transfer.receive_expense_kind   = receive_expense_kind
     transfer.receive_expense_note   = sanitize_text(receive_expense_note, 400, "Note") or None
 
-    agent_id = user.id if not is_admin(user) else (transfer.delegated_receiver_id or user.id)
-    db.add(CashEntry(
-        branch_id=transfer.to_branch_id,
-        agent_id=agent_id,
-        kind="EXPENSE",
-        amount=receive_expense_amount,
-        note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
-    ))
+    if is_admin(user):
+        db.add(CashEntry(
+            branch_id=transfer.to_branch_id,
+            agent_id=user.id,
+            kind="OFFICE_EXPENSE",
+            amount=receive_expense_amount,
+            note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
+        ))
+    else:
+        db.add(CashEntry(
+            branch_id=transfer.to_branch_id,
+            agent_id=user.id,
+            kind="EXPENSE",
+            amount=receive_expense_amount,
+            note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
+        ))
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
 
@@ -2734,19 +2769,40 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
-    if user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+    is_delegated_cancel = is_agent(user) and transfer.delegated_agent_id == user.id
+    if not is_admin(user) and not is_delegated_cancel:
         return HTMLResponse("Forbidden", status_code=403)
-    if transfer.status != "PENDING":
+    if is_admin(user) and user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
+        return HTMLResponse("Forbidden", status_code=403)
+    if transfer.status in ("RECEIVED", "CANCELLED"):
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
     for line in transfer.items:
         db.add(Transaction(branch_id=transfer.from_branch_id, item_id=line.item_id, type="IN", quantity=line.quantity,
                            reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"))
+    # Reverse send-side expense cash entry if recorded
+    if transfer.expense_amount and transfer.expense_amount > 0:
+        exp_kind = "OFFICE_EXPENSE" if (transfer.expense_kind == "COLLECTION_DEDUCTION" and transfer.delegated_agent_id is None) else "EXPENSE"
+        # Find and delete the original expense entry
+        orig_exp = db.scalar(
+            select(CashEntry).where(CashEntry.branch_id == transfer.from_branch_id)
+            .where(CashEntry.note.like(f"Transfer #{transfer.id} expense:%"))
+            .order_by(CashEntry.created_at.asc())
+        )
+        if orig_exp:
+            db.delete(orig_exp)
+    # Reverse receive-side expense cash entry if recorded
+    if transfer.receive_expense_amount and transfer.receive_expense_amount > 0:
+        orig_recv_exp = db.scalar(
+            select(CashEntry).where(CashEntry.branch_id == transfer.to_branch_id)
+            .where(CashEntry.note.like(f"Transfer #{transfer.id} receive expense:%"))
+            .order_by(CashEntry.created_at.asc())
+        )
+        if orig_recv_exp:
+            db.delete(orig_recv_exp)
     transfer.status = "CANCELLED"
     transfer.cancelled_by_id = user.id
     transfer.cancelled_at = datetime.utcnow()

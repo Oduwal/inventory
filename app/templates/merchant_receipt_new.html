@@ -67,6 +67,22 @@
     </div>
   </div>
 
+  <!-- Expense (optional) -->
+  <div class="card" style="margin-bottom:14px;">
+    <div class="badge b-red" style="margin-bottom:12px;">💸 EXPENSE (optional)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <div>
+        <label>Expense Amount (₦)</label>
+        <input type="number" name="expense_amount" min="0" step="0.01" placeholder="0.00 — leave blank if none" style="width:100%;" />
+      </div>
+      <div>
+        <label>Expense Note</label>
+        <input type="text" name="expense_note" placeholder="e.g. Delivery fee, transport" maxlength="400" />
+      </div>
+    </div>
+    <div style="color:var(--muted);font-size:11px;margin-top:8px;">This will be recorded as an office expense against this branch.</div>
+  </div>
+
   <div style="display:flex;gap:12px;justify-content:flex-end;">
     <a href="/transfers" class="btnGhost">Cancel</a>
     <button type="submit" class="btnPrimary" id="submitBtn" disabled

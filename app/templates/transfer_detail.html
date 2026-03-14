@@ -42,6 +42,15 @@
       </form>
       {% endif %}
 
+      {# AGENT: cancel delegated transfer #}
+      {% if is_delegated and transfer.status in ("PENDING","OUT_FOR_DELIVERY") %}
+      <form method="post" action="/transfers/{{ transfer.id }}/cancel"
+            onsubmit="return confirm('Cancel this transfer? Stock will be returned.')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <button class="btnDanger" type="submit">✕ Cancel</button>
+      </form>
+      {% endif %}
+
       {# DELEGATED RECEIVER AGENT: confirm receipt #}
       {% if is_delegated_receiver and transfer.status in ("PENDING","OUT_FOR_DELIVERY") %}
       <form method="post" action="/transfers/{{ transfer.id }}/receive">
