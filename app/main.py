@@ -2217,6 +2217,72 @@ self.addEventListener("fetch", e => {
 #  STOCK TRANSFERS
 # ────────────────────────────────────────────────
 
+
+# ────────────────────────────────────────────────
+#  MERCHANT RECEIPTS
+# ────────────────────────────────────────────────
+
+@app.get("/merchant-receipt/new", response_class=HTMLResponse)
+def merchant_receipt_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    branch_id = get_selected_branch_id(request, user)
+    items = get_items_with_stock(db, branch_id=branch_id)
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("merchant_receipt_new.html", {
+        "request": request, "user": user, "items": items,
+        "error": request.query_params.get("error"),
+        "success": request.query_params.get("success"),
+        "active": "transfers", "csrf_token": csrf_token,
+    })
+
+
+@app.post("/merchant-receipt/new")
+async def merchant_receipt_create(
+    request: Request,
+    merchant_name: str = Form(...),
+    note: str = Form(""),
+    item_ids: list[int] = Form(...),
+    quantities: list[int] = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    branch_id = get_selected_branch_id(request, user)
+    merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
+    if not merchant_name:
+        return redirect("/merchant-receipt/new?error=Merchant+name+is+required")
+    if not item_ids or not quantities or len(item_ids) != len(quantities):
+        return redirect("/merchant-receipt/new?error=Please+add+at+least+one+item")
+    for qty in quantities:
+        if qty <= 0:
+            return redirect("/merchant-receipt/new?error=Quantities+must+be+greater+than+zero")
+    note_text = sanitize_text(note, 400, "Note") or ""
+    ref = f"MERCHANT: {merchant_name}"
+    full_note = note_text if note_text else f"Stock received from merchant: {merchant_name}"
+    for item_id, qty in zip(item_ids, quantities):
+        item = db.get(Item, item_id)
+        if not item or item.branch_id != branch_id:
+            return redirect("/merchant-receipt/new?error=Invalid+item+selected")
+        db.add(Transaction(
+            branch_id=branch_id, item_id=item_id,
+            type="IN", quantity=qty,
+            reference=ref, note=full_note,
+        ))
+    db.commit()
+    return redirect("/merchant-receipt/new?success=Stock+received+and+recorded+successfully")
+
+
 @app.get("/transfers", response_class=HTMLResponse)
 def transfers_list(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)

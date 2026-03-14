@@ -264,6 +264,11 @@
         <span class="nav-icon">↔️</span>Stock Transfers
       </a>
       {% endif %}
+      {% if role == "ADMIN" %}
+      <a href="/merchant-receipt/new" data-active="{% if active == 'merchant_receipt' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏪</span>Merchant Receipt
+      </a>
+      {% endif %}
 
       {% if role in ("ADMIN", "AGENT") %}
       <div class="nav-divider"></div>
