@@ -172,8 +172,8 @@
   </table>
 </div>
 
-<!-- Expense already recorded -->
-{% if transfer.expense_amount and transfer.expense_amount > 0 %}
+<!-- Send-side expense — only visible to from_branch or sender agent -->
+{% if transfer.expense_amount and transfer.expense_amount > 0 and (user.branch_id == transfer.from_branch_id or is_delegated) %}
 <div class="card" style="margin-bottom:16px;border-top:3px solid #ef4444;">
   <div class="badge b-red" style="margin-bottom:12px;">💸 TRANSFER EXPENSE RECORDED</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
@@ -201,8 +201,8 @@
 </div>
 {% endif %}
 
-<!-- Expense recording forms — only while transfer is active and no expense yet -->
-{% if transfer.status in ("PENDING", "OUT_FOR_DELIVERY") and (not transfer.expense_amount or transfer.expense_amount == 0) %}
+<!-- Send-side expense forms — only for sender branch -->
+{% if transfer.status in ("PENDING", "OUT_FOR_DELIVERY") and (not transfer.expense_amount or transfer.expense_amount == 0) and (user.branch_id == transfer.from_branch_id or is_delegated) %}
 
   {# AGENT: from operating cash OR deduct from collection #}
   {% if is_delegated %}

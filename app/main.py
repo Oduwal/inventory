@@ -2110,10 +2110,23 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch)) or 0)
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    # Include admin's own EXPENSE entries (e.g. transfer expenses recorded as EXPENSE by admin)
+    admin_exp_map = {int(aid): float(t) for aid, t in db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt).where(_ce_branch)
+        .group_by(CashEntry.agent_id)
+    ).all()}
+    # Merge admin entries into agent_exp_map
+    for aid, amt in admin_exp_map.items():
+        agent_exp_map[aid] = agent_exp_map.get(aid, 0.0) + amt
+
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
     if all_agent_ids:
-        uname = {int(u.id): (u.full_name or u.username) for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+        users_map = {int(u.id): u for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
+        uname = {uid: (f"👤 {u.full_name or u.username} (Admin)" if (u.role or "").upper() == "ADMIN" else (u.full_name or u.username))
+                 for uid, u in users_map.items()}
     delivery_rows = []
     grand_total = 0.0
     for idx, d in enumerate(deliveries, 1):
@@ -2596,6 +2609,9 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
             db.flush()
         db.add(Transaction(branch_id=recv_branch_id, item_id=dest_item.id, type="IN", quantity=line.quantity,
                            reference=f"TRANSFER #{transfer.id}", note=f"Stock received from branch {transfer.from_branch.name}"))
+    # Require receive expense to be recorded before confirming receipt
+    if not transfer.receive_expense_amount or float(transfer.receive_expense_amount) <= 0:
+        return redirect(f"/transfers/{transfer_id}?error=Please+record+your+receiving+expenses+before+confirming+receipt")
     transfer.status = "RECEIVED"
     transfer.received_by_id = user.id
     transfer.received_at = datetime.utcnow()
@@ -2620,6 +2636,9 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
         return HTMLResponse("Forbidden", status_code=403)
     if transfer.status != "PENDING":
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+not+pending")
+    # Require expense to be recorded before marking as sent
+    if not transfer.expense_amount or float(transfer.expense_amount) <= 0:
+        return redirect(f"/transfers/{transfer_id}?error=Please+record+your+sending+expenses+before+marking+as+sent")
     transfer.packed_by_id = user.id
     transfer.packed_at = datetime.utcnow()
     transfer.status = "OUT_FOR_DELIVERY"
