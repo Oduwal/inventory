@@ -671,31 +671,45 @@ def home(request: Request, db: Session = Depends(get_db)):
 
 
 
-@app.get("/debug/deliveries", response_class=HTMLResponse)
-def debug_deliveries(request: Request, db: Session = Depends(get_db)):
+
+@app.get("/admin/backfill-collections", response_class=HTMLResponse)
+def backfill_collections(request: Request, db: Session = Depends(get_db)):
+    """One-time: create COLLECTION entries for DELIVERED orders that have none."""
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return user_or
     user = user_or
     if not (is_supervisor(user) or is_admin(user)): return HTMLResponse("Forbidden", 403)
-    from sqlalchemy import text
-    rows = db.execute(text("""
-        SELECT d.id, d.customer_name, d.status, d.branch_id,
-               b.name as branch_name,
-               COALESCE((SELECT SUM(ce.amount) FROM cash_entries ce WHERE ce.delivery_id = d.id AND ce.kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')), 0) as cash_collected,
-               (SELECT string_agg(ce.kind || ':' || ce.amount::text, ', ') FROM cash_entries ce WHERE ce.delivery_id = d.id) as cash_entries,
-               (SELECT string_agg(ce.branch_id::text, ', ') FROM cash_entries ce WHERE ce.delivery_id = d.id) as ce_branch_ids
-        FROM deliveries d
-        LEFT JOIN branches b ON b.id = d.branch_id
-        WHERE d.id IN (1, 2, 22)
-        ORDER BY d.id
-    """)).fetchall()
-    html = "<pre style='font-family:monospace;font-size:12px;padding:20px'>"
-    html += f"{'ID':<5} {'CUSTOMER':<20} {'STATUS':<15} {'BR_ID':<8} {'BRANCH':<20} {'COLLECTED':<12} {'CE_BRANCH_IDS':<16} CASH ENTRIES\n"
-    html += "-"*140 + "\n"
-    for r in rows:
-        html += f"{str(r[0]):<5} {str(r[1] or ''):<20} {str(r[2] or ''):<15} {str(r[3]):<8} {str(r[4] or ''):<20} {str(r[5]):<12} {str(r[7] or ''):<16} {str(r[6] or 'NONE')}\n"
-    html += "</pre>"
-    return HTMLResponse(html)
+
+    delivered = db.execute(
+        select(Delivery).where(Delivery.status == "DELIVERED")
+    ).scalars().all()
+
+    created, skipped = 0, 0
+    for d in delivered:
+        existing = db.scalar(
+            select(func.count(CashEntry.id)).where(
+                CashEntry.delivery_id == d.id,
+                CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"])
+            )
+        ) or 0
+        if existing > 0:
+            skipped += 1
+            continue
+        total = float(db.scalar(
+            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+            .where(DeliveryItem.delivery_id == d.id)
+        ) or 0)
+        if total > 0:
+            db.add(CashEntry(
+                branch_id=d.branch_id, agent_id=d.agent_id,
+                delivery_id=d.id, kind="COLLECTION", amount=total,
+                note=f"Auto-recorded: delivery #{d.id} to {d.customer_name}",
+            ))
+            created += 1
+        else:
+            skipped += 1
+    db.commit()
+    return HTMLResponse(f"<pre>Done. Created: {created} collection entries. Skipped: {skipped} (already had entries or zero value).</pre>")
 
 
 @app.get("/supervisor", response_class=HTMLResponse)
@@ -1849,6 +1863,31 @@ async def update_delivery_status(
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
             d.status = "DELIVERED"
             d.delivered_at = datetime.utcnow()
+
+            # Auto-create COLLECTION cash entry from delivery order total
+            # Only if no collection entry already exists for this delivery
+            existing_col = db.scalar(
+                select(func.count(CashEntry.id)).where(
+                    CashEntry.delivery_id == d.id,
+                    CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"])
+                )
+            ) or 0
+            if existing_col == 0:
+                order_total = db.scalar(
+                    select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+                    .where(DeliveryItem.delivery_id == d.id)
+                ) or 0
+                order_total = float(order_total)
+                if order_total > 0:
+                    db.add(CashEntry(
+                        branch_id=d.branch_id,
+                        agent_id=d.agent_id,
+                        delivery_id=d.id,
+                        kind="COLLECTION",
+                        amount=order_total,
+                        note=f"Auto-recorded: delivery #{d.id} to {d.customer_name}",
+                    ))
+
             db.commit()
         except ValueError as e:
             d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
