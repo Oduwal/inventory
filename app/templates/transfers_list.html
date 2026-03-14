@@ -44,8 +44,9 @@
     <div style="font-size:28px;font-weight:800;color:#f87171;">{{ cancelled|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">✕ Cancelled</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;">
-    <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ merchant_receipts_count or 0 }}</div>
+  <div class="card filter-card" data-filter="MERCHANT" onclick="filterTable('MERCHANT')"
+       style="text-align:center;border-top:3px solid #14b8a6;padding:14px 16px;cursor:pointer;">
+    <div style="font-size:28px;font-weight:800;color:#2dd4bf;">{{ merchant_receipts_count or 0 }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">🏪 Merchant Receipts</div>
   </div>
 </div>
@@ -59,7 +60,7 @@
       <button class="btnGhost" onclick="clearFilters()" style="padding:8px 14px;font-size:12px;">Clear</button>
     </div>
     <div style="padding-bottom:11px;color:var(--muted);font-size:12px;">
-      Showing <strong id="visible-count" style="color:var(--text);">{{ transfers|length }}</strong> transfers
+      Showing <strong id="visible-count" style="color:var(--text);">{{ transfers|length + (merchant_receipts|length if merchant_receipts else 0) }}</strong> transfers
     </div>
   </div>
 </div>
@@ -137,6 +138,19 @@
           <td><a href="/transfers/{{ t.id }}" class="btnGhost" style="padding:6px 12px;font-size:12px;">View</a></td>
         </tr>
         {% endfor %}
+        {# Merchant receipt rows #}
+        {% for mr in merchant_receipts %}
+        <tr data-status="MERCHANT" data-date="{{ mr.created_at.strftime('%Y-%m-%d') if mr.created_at else '' }}">
+          <td><span style="color:var(--muted);font-size:11px;">🏪</span></td>
+          <td style="font-weight:600;color:#2dd4bf;">{{ mr.merchant_name }}</td>
+          <td style="color:var(--muted);">This branch</td>
+          <td style="max-width:220px;font-size:12px;color:var(--muted);">{{ mr.item_names }}</td>
+          <td><span class="badge" style="background:rgba(20,184,166,.15);color:#2dd4bf;border:1px solid rgba(20,184,166,.3);">🏪 Merchant</span></td>
+          <td style="color:var(--muted);white-space:nowrap;">{{ mr.created_at.strftime("%d %b %Y") if mr.created_at else "—" }}</td>
+          <td style="color:var(--muted);">—</td>
+          <td><a href="/merchant-receipt/new" class="btnGhost" style="padding:6px 12px;font-size:12px;">+ New</a></td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
   </div>
@@ -162,7 +176,8 @@ function filterTable(status) {
   if (clicked) clicked.classList.add('active');
   const titles = {
     'all': 'All Transfers', 'PENDING': 'Pending Transfers',
-    'OUT_FOR_DELIVERY': 'Sent Transfers', 'RECEIVED': 'Received Transfers', 'CANCELLED': 'Cancelled Transfers'
+    'OUT_FOR_DELIVERY': 'Sent Transfers', 'RECEIVED': 'Received Transfers',
+    'CANCELLED': 'Cancelled Transfers', 'MERCHANT': 'Merchant Receipts'
   };
   document.getElementById('table-title').textContent = titles[status] || 'All Transfers';
   applyFilters();

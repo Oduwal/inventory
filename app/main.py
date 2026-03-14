@@ -2475,16 +2475,33 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
     else:
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
-    # Count merchant receipts (transactions with reference starting with "MERCHANT:")
-    merchant_receipts_count = db.scalar(
-        select(func.count(func.distinct(Transaction.reference)))
+    # Fetch all merchant transactions, group by reference in Python
+    mr_tx_stmt = (
+        select(Transaction.reference, Transaction.branch_id, Transaction.created_at,
+               Transaction.quantity, Item.name)
+        .join(Item, Item.id == Transaction.item_id)
         .where(Transaction.reference.like("MERCHANT:%"))
-        .where(Transaction.branch_id == (user.branch_id if not is_supervisor(user) else Transaction.branch_id))
-    ) or 0
+        .order_by(Transaction.created_at.desc())
+    )
+    if not is_supervisor(user):
+        mr_tx_stmt = mr_tx_stmt.where(Transaction.branch_id == user.branch_id)
+    mr_tx_rows = db.execute(mr_tx_stmt).all()
+    # Group by reference
+    mr_groups: dict = {}
+    for ref, br_id, created, qty, iname in mr_tx_rows:
+        if ref not in mr_groups:
+            mr_groups[ref] = {"reference": ref, "branch_id": br_id, "created_at": created,
+                               "items": [], "merchant_name": str(ref).replace("MERCHANT:", "").strip()}
+        mr_groups[ref]["items"].append(f"{iname} x{qty}")
+    merchant_receipts = sorted(mr_groups.values(), key=lambda r: r["created_at"], reverse=True)
+    for r in merchant_receipts:
+        r["item_names"] = ", ".join(r["items"])
+    merchant_receipts_count = len(merchant_receipts)
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
+        "merchant_receipts": merchant_receipts,
         "merchant_receipts_count": merchant_receipts_count, "csrf_token": csrf_token,
     })
 
