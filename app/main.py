@@ -1861,17 +1861,43 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if (agent_id or "").isdigit(): selected_agent_id = int(agent_id)
     else:
         selected_agent_id = user.id
-    rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=selected_agent_id, start=start_dt, end=end_dt)
-    branch_delivery_days = set(str(x) for x in db.execute(select(func.date(Delivery.created_at)).where(Delivery.branch_id == branch_id)).scalars().all() if x is not None)
-    branch_cash_days = set(str(x) for x in db.execute(select(func.date(CashEntry.created_at)).where(CashEntry.branch_id == branch_id)).scalars().all() if x is not None)
-    rows = [r for r in rows if r["day"] in (branch_delivery_days | branch_cash_days)]
-    total_collections = float(sum(float(r["collections"]) for r in rows))
-    total_expenses = float(sum(float(r["expenses"]) for r in rows))
-    total_operating = float(sum(float(r["operating_cash"]) for r in rows))
-    total_office_expenses = float(sum(float(r["office_expenses"]) for r in rows))
-    _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH")
+    # Always filter cash entries by branch — admins must only see their own branch
+    def _cash_sum(kind_list, agent_id=None):
+        stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
+            CashEntry.kind.in_(kind_list)).where(CashEntry.branch_id == branch_id)
+        if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
+        if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
+        if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
+        return float(db.scalar(stmt) or 0)
+
+    # Per-day breakdown — only entries from this branch
+    day_stmt = (
+        select(
+            func.date(CashEntry.created_at).label("day"),
+            func.coalesce(func.sum(case((CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]), CashEntry.amount), else_=0)), 0).label("collections"),
+            func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0).label("expenses"),
+            func.coalesce(func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)), 0).label("operating_cash"),
+            func.coalesce(func.sum(case((CashEntry.kind == "OFFICE_EXPENSE", CashEntry.amount), else_=0)), 0).label("office_expenses"),
+        )
+        .where(CashEntry.branch_id == branch_id)
+    )
+    if start_dt: day_stmt = day_stmt.where(CashEntry.created_at >= start_dt)
+    if end_dt:   day_stmt = day_stmt.where(CashEntry.created_at < end_dt)
+    if selected_agent_id: day_stmt = day_stmt.where(CashEntry.agent_id == selected_agent_id)
+    day_stmt = day_stmt.group_by(func.date(CashEntry.created_at)).order_by(func.date(CashEntry.created_at).desc())
+    rows = [{"day": str(r.day), "collections": float(r.collections), "expenses": float(r.expenses),
+             "operating_cash": float(r.operating_cash), "office_expenses": float(r.office_expenses)}
+            for r in db.execute(day_stmt).all()]
+
+    total_collections     = _cash_sum(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"], selected_agent_id)
+    total_expenses        = _cash_sum(["EXPENSE"], selected_agent_id)
+    total_operating       = _cash_sum(["OPERATING_CASH"], selected_agent_id)
+    total_office_expenses = _cash_sum(["OFFICE_EXPENSE"], selected_agent_id)
+
+    _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
+        CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.branch_id == branch_id)
     if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
-    if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
+    if end_dt:   _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
     if selected_agent_id: _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
     total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
     operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
@@ -1946,7 +1972,8 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     user = user_or
     if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
-    agents = db.execute(select(User).where(User.role == "AGENT").order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
+    branch_id = get_selected_branch_id(request, user)
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
     return templates.TemplateResponse("reports_sales.html", {
         "request": request, "user": user, "agents": agents,
@@ -1968,10 +1995,12 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     if d2 and not d1: d1 = d2
     start_dt = datetime.combine(d1, datetime.min.time())
     end_dt   = datetime.combine(d2, datetime.max.time())
+    branch_id = get_selected_branch_id(request, user)
     target_agent_id = None
     if is_agent(user): target_agent_id = int(user.id)
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.delivery_date >= start_dt, Delivery.delivery_date <= end_dt, Delivery.status == "DELIVERED"]
+    if not is_supervisor(user): filters.append(Delivery.branch_id == branch_id)
     if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
@@ -1983,10 +2012,11 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         ).all():
             q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
             items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la if la > 0 else q * sp})
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
-    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
-    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
-    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    _ce_branch = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
+    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
+    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch)) or 0)
+    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
     if all_agent_ids:
@@ -2040,10 +2070,12 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     if d2 and not d1: d1 = d2
     start_dt = datetime.combine(d1, datetime.min.time())
     end_dt   = datetime.combine(d2, datetime.max.time())
+    branch_id = get_selected_branch_id(request, user)
     target_agent_id = None
     if is_agent(user): target_agent_id = int(user.id)
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
     filters = [Delivery.created_at >= start_dt, Delivery.created_at <= end_dt, Delivery.status == "DELIVERED"]
+    if not is_supervisor(user): filters.append(Delivery.branch_id == branch_id)
     if target_agent_id is not None: filters.append(Delivery.agent_id == target_agent_id)
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
@@ -2057,7 +2089,8 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
         ).all():
             q = float(qty or 0); la = float(line_amt or 0); spp = float(sp or 0)
             items_by_delivery.setdefault(int(did), []).append((str(iname), q, la if la > 0 else q * spp))
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
