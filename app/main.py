@@ -364,6 +364,18 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_from ON stock_transfers (from_branch_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_to ON stock_transfers (to_branch_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_status ON stock_transfers (status)")
+        # v2: delegation + expenses
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS delegated_agent_id INTEGER NULL REFERENCES users(id)")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS packed_by_id INTEGER NULL REFERENCES users(id)")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS packed_at TIMESTAMP NULL")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS expense_amount NUMERIC(12,2) NULL DEFAULT 0")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS expense_kind VARCHAR(30) NULL")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS expense_note VARCHAR(400) NULL")
+        # v3: receiving delegation + receive-side expenses
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS delegated_receiver_id INTEGER NULL REFERENCES users(id)")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_amount NUMERIC(12,2) NULL DEFAULT 0")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_kind VARCHAR(30) NULL")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_note VARCHAR(400) NULL")
 
 
 def seed_admin_if_missing() -> None:
@@ -2401,16 +2413,23 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
-    if is_supervisor(user):
+    if is_agent(user):
+        # Agents see transfers delegated to them (send or receive side)
+        transfers = db.execute(
+            select(StockTransfer)
+            .where((StockTransfer.delegated_agent_id == user.id) | (StockTransfer.delegated_receiver_id == user.id))
+            .order_by(desc(StockTransfer.created_at))
+        ).scalars().all()
+    elif is_supervisor(user):
         transfers = db.execute(select(StockTransfer).order_by(desc(StockTransfer.created_at))).scalars().all()
-    else:
+    elif is_admin(user):
         transfers = db.execute(
             select(StockTransfer)
             .where((StockTransfer.from_branch_id == user.branch_id) | (StockTransfer.to_branch_id == user.branch_id))
             .order_by(desc(StockTransfer.created_at))
         ).scalars().all()
+    else:
+        return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
     return templates.TemplateResponse("transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,
@@ -2428,9 +2447,10 @@ def transfer_new_form(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)).scalars().all()
     items = get_items_with_stock(db, branch_id=user.branch_id)
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).order_by(User.username)).scalars().all()
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfer_new.html", {
-        "request": request, "user": user, "branches": branches, "items": items,
+        "request": request, "user": user, "branches": branches, "items": items, "agents": agents,
         "error": request.query_params.get("error"), "active": "transfers",
         "selected_branch_id": user.branch_id, "csrf_token": csrf_token,
     })
@@ -2466,9 +2486,14 @@ async def transfer_create(
         _item, stock = row
         if int(stock) < qty:
             return redirect(f"/transfers/new?error=Insufficient+stock+for+{_item.name}")
+    delegated_agent_id = None
+    raw_agent = (await request.form()).get("delegated_agent_id", "")
+    if str(raw_agent).isdigit():
+        delegated_agent_id = int(raw_agent)
     transfer = StockTransfer(
         from_branch_id=user.branch_id, to_branch_id=to_branch_id, status="PENDING",
         note=sanitize_text(note, 400, "Note") or None, created_by_id=user.id,
+        delegated_agent_id=delegated_agent_id,
     )
     db.add(transfer)
     db.flush()
@@ -2487,19 +2512,35 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    # Allow: admin of from/to branch, supervisor, or delegated agent
+    is_delegated          = is_agent(user) and transfer.delegated_agent_id    == user.id
+    is_delegated_receiver = is_agent(user) and transfer.delegated_receiver_id == user.id
+    if not (is_admin(user) or is_supervisor(user) or is_delegated or is_delegated_receiver):
+        return HTMLResponse("Forbidden", status_code=403)
     if is_admin(user) and user.branch_id not in (transfer.from_branch_id, transfer.to_branch_id):
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    delegated_agent    = db.get(User, transfer.delegated_agent_id)    if transfer.delegated_agent_id    else None
+    delegated_receiver = db.get(User, transfer.delegated_receiver_id) if transfer.delegated_receiver_id else None
+    packed_by          = db.get(User, transfer.packed_by_id)          if transfer.packed_by_id          else None
+    is_delegated_receiver = is_agent(user) and transfer.delegated_receiver_id == user.id
+    # Agents for sender branch (for delegation dropdown — sender admin only)
+    sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
+    receiver_agents = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.to_branch_id).order_by(User.username)).scalars().all()  if (is_admin(user) and user.branch_id==transfer.to_branch_id)   else []
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfer_detail.html", {
         "request": request, "user": user, "transfer": transfer, "branches": branches,
+        "delegated_agent": delegated_agent, "delegated_receiver": delegated_receiver,
+        "packed_by": packed_by,
+        "is_delegated": is_delegated, "is_delegated_receiver": is_delegated_receiver,
+        "sender_agents": sender_agents, "receiver_agents": receiver_agents,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
         "csrf_token": csrf_token,
+        "error": request.query_params.get("error"),
+        "success": request.query_params.get("success"),
     })
 
 
@@ -2509,25 +2550,32 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+    is_recv_agent = is_agent(user)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
-    if transfer.to_branch_id != user.branch_id:
-        return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
+    if is_recv_agent:
+        if transfer.delegated_receiver_id != user.id:
+            return HTMLResponse("Forbidden", status_code=403)
+    elif is_admin(user):
+        if transfer.to_branch_id != user.branch_id:
+            return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
+    else:
+        return HTMLResponse("Forbidden", status_code=403)
+    # For agent receiving, get branch_id from transfer
+    recv_branch_id = transfer.to_branch_id
     if transfer.status != "PENDING":
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
     for line in transfer.items:
-        dest_item = db.scalar(select(Item).where(Item.branch_id == user.branch_id, Item.name == line.item.name))
+        dest_item = db.scalar(select(Item).where(Item.branch_id == recv_branch_id, Item.name == line.item.name))
         if not dest_item:
-            dest_item = Item(branch_id=user.branch_id, name=line.item.name, category=line.item.category,
+            dest_item = Item(branch_id=recv_branch_id, name=line.item.name, category=line.item.category,
                              unit=line.item.unit, reorder_level=line.item.reorder_level,
                              cost_price=line.item.cost_price, selling_price=line.item.selling_price)
             db.add(dest_item)
             db.flush()
-        db.add(Transaction(branch_id=user.branch_id, item_id=dest_item.id, type="IN", quantity=line.quantity,
+        db.add(Transaction(branch_id=recv_branch_id, item_id=dest_item.id, type="IN", quantity=line.quantity,
                            reference=f"TRANSFER #{transfer.id}", note=f"Stock received from branch {transfer.from_branch.name}"))
     transfer.status = "RECEIVED"
     transfer.received_by_id = user.id
@@ -2535,6 +2583,150 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
 
+
+
+
+@app.post("/transfers/{transfer_id}/pack")
+async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    """Agent marks transfer as packed/ready to send."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404)
+    # Only the delegated agent or admin can pack
+    if not is_admin(user) and transfer.delegated_agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+    if transfer.status != "PENDING":
+        return redirect(f"/transfers/{transfer_id}?error=Transfer+is+not+pending")
+    transfer.packed_by_id = user.id
+    transfer.packed_at = datetime.utcnow()
+    transfer.status = "OUT_FOR_DELIVERY"
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
+
+
+@app.post("/transfers/{transfer_id}/expense")
+async def transfer_expense(
+    transfer_id: int, request: Request,
+    expense_amount: float = Form(0),
+    expense_kind: str = Form(""),
+    expense_note: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Record expense against a transfer — agent or admin."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404)
+
+    # Validate kind
+    allowed_agent = {"EXPENSE", "COLLECTION_DEDUCTION"}
+    allowed_admin = {"COLLECTION_DEDUCTION"}
+    if is_admin(user):
+        if expense_kind not in allowed_admin:
+            return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
+    else:
+        if expense_kind not in allowed_agent:
+            return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
+        if transfer.delegated_agent_id != user.id:
+            return HTMLResponse("Forbidden", status_code=403)
+
+    if expense_amount <= 0:
+        return redirect(f"/transfers/{transfer_id}?error=Amount+must+be+greater+than+zero")
+
+    # Save on the transfer record
+    transfer.expense_amount = expense_amount
+    transfer.expense_kind = expense_kind
+    transfer.expense_note = sanitize_text(expense_note, 400, "Note") or None
+
+    # Also create a CashEntry so it shows in cash section
+    cash_kind = "EXPENSE" if expense_kind == "EXPENSE" else "EXPENSE"
+    agent_id = user.id if not is_admin(user) else (transfer.delegated_agent_id or user.id)
+    db.add(CashEntry(
+        branch_id=transfer.from_branch_id,
+        agent_id=agent_id,
+        kind=cash_kind,
+        amount=expense_amount,
+        note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
+    ))
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
+
+
+@app.post("/transfers/{transfer_id}/delegate-receiver")
+async def transfer_delegate_receiver(
+    transfer_id: int, request: Request,
+    delegated_receiver_id: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer: raise HTTPException(status_code=404)
+    if user.branch_id != transfer.to_branch_id:
+        return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
+    transfer.delegated_receiver_id = int(delegated_receiver_id) if delegated_receiver_id.isdigit() else None
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
+
+
+@app.post("/transfers/{transfer_id}/receive-expense")
+async def transfer_receive_expense(
+    transfer_id: int, request: Request,
+    receive_expense_amount: float = Form(0),
+    receive_expense_kind: str = Form(""),
+    receive_expense_note: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    verify_csrf_token(request, csrf_token)
+    transfer = db.get(StockTransfer, transfer_id)
+    if not transfer: raise HTTPException(status_code=404)
+
+    allowed_agent = {"EXPENSE", "COLLECTION_DEDUCTION"}
+    allowed_admin = {"COLLECTION_DEDUCTION"}
+    if is_admin(user):
+        if receive_expense_kind not in allowed_admin:
+            return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
+        if user.branch_id != transfer.to_branch_id:
+            return HTMLResponse("Forbidden", status_code=403)
+    else:
+        if receive_expense_kind not in allowed_agent:
+            return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
+        if transfer.delegated_receiver_id != user.id:
+            return HTMLResponse("Forbidden", status_code=403)
+
+    if receive_expense_amount <= 0:
+        return redirect(f"/transfers/{transfer_id}?error=Amount+must+be+greater+than+zero")
+
+    transfer.receive_expense_amount = receive_expense_amount
+    transfer.receive_expense_kind   = receive_expense_kind
+    transfer.receive_expense_note   = sanitize_text(receive_expense_note, 400, "Note") or None
+
+    agent_id = user.id if not is_admin(user) else (transfer.delegated_receiver_id or user.id)
+    db.add(CashEntry(
+        branch_id=transfer.to_branch_id,
+        agent_id=agent_id,
+        kind="EXPENSE",
+        amount=receive_expense_amount,
+        note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
+    ))
+    db.commit()
+    return redirect(f"/transfers/{transfer_id}")
 
 @app.post("/transfers/{transfer_id}/cancel")
 async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):

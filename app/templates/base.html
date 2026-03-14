@@ -259,7 +259,7 @@
       </a>
       {% endif %}
 
-      {% if role in ("ADMIN", "SUPERVISOR") %}
+      {% if role in ("ADMIN", "SUPERVISOR", "AGENT") %}
       <a href="/transfers" data-active="{% if active == 'transfers' %}1{% else %}0{% endif %}">
         <span class="nav-icon">↔️</span>Stock Transfers
       </a>

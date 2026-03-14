@@ -33,6 +33,16 @@
         <label>Note (optional)</label>
         <input type="text" name="note" placeholder="e.g. Urgent stock replenishment" />
       </div>
+      <div>
+        <label>Delegate to Agent (optional)</label>
+        <select name="delegated_agent_id" style="width:auto;">
+          <option value="">— No delegation —</option>
+          {% for a in agents %}
+          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+        <div style="color:var(--muted);font-size:11px;margin-top:4px;">The selected agent will be responsible for packing and sending this transfer.</div>
+      </div>
     </div>
   </div>
 

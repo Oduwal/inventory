@@ -9,41 +9,66 @@
 
 {% block content %}
 
-{% set error = request.query_params.get("error") %}
 {% if error %}
-<div class="alert alert-danger">⚠ {{ error }}</div>
+<div class="alert alert-danger" style="margin-bottom:14px;">⚠ {{ error }}</div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success" style="margin-bottom:14px;">✅ {{ success }}</div>
 {% endif %}
 
-<!-- Status banner -->
+<!-- Status banner + actions -->
 <div class="card" style="margin-bottom:16px;
-  {% if transfer.status == 'PENDING' %}border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.05);{% endif %}
-  {% if transfer.status == 'RECEIVED' %}border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.05);{% endif %}
-  {% if transfer.status == 'CANCELLED' %}border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.05);{% endif %}">
+  {% if transfer.status == 'PENDING' %}border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.05);
+  {% elif transfer.status == 'OUT_FOR_DELIVERY' %}border-color:rgba(79,124,255,.35);background:rgba(79,124,255,.05);
+  {% elif transfer.status == 'RECEIVED' %}border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.05);
+  {% elif transfer.status == 'CANCELLED' %}border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.05);{% endif %}">
   <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
     <div>
       {% if transfer.status == "PENDING" %}<span class="badge b-yellow" style="font-size:14px;padding:8px 16px;">⏳ PENDING</span>
+      {% elif transfer.status == "OUT_FOR_DELIVERY" %}<span class="badge b-blue" style="font-size:14px;padding:8px 16px;">🚚 OUT FOR DELIVERY</span>
       {% elif transfer.status == "RECEIVED" %}<span class="badge b-green" style="font-size:14px;padding:8px 16px;">✓ RECEIVED</span>
       {% else %}<span class="badge b-red" style="font-size:14px;padding:8px 16px;">✕ CANCELLED</span>
       {% endif %}
     </div>
 
-    {% if transfer.status == "PENDING" and user.role == "ADMIN" %}
-    <div style="display:flex;gap:10px;">
-      {% if user.branch_id == transfer.to_branch_id %}
-      <!-- [FIX-4] CSRF on receive -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      {# AGENT: mark as packed #}
+      {% if is_delegated and transfer.status == "PENDING" and not transfer.packed_at %}
+      <form method="post" action="/transfers/{{ transfer.id }}/pack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#4f7cff,#3b5bdb);">
+          📦 Mark as Packed & Sent
+        </button>
+      </form>
+      {% endif %}
+
+      {# DELEGATED RECEIVER AGENT: confirm receipt #}
+      {% if is_delegated_receiver and transfer.status in ("PENDING","OUT_FOR_DELIVERY") %}
+      <form method="post" action="/transfers/{{ transfer.id }}/receive">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#22c55e,#16a34a);">
+          ✓ Confirm Receipt
+        </button>
+      </form>
+      {% endif %}
+
+      {# ADMIN: confirm receipt #}
+      {% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and user.role == "ADMIN" and user.branch_id == transfer.to_branch_id %}
       <form method="post" action="/transfers/{{ transfer.id }}/receive">
         <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
         <button class="btnPrimary" type="submit">✓ Confirm Receipt</button>
       </form>
       {% endif %}
-      <!-- [FIX-4] CSRF on cancel -->
+
+      {# ADMIN: cancel #}
+      {% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and user.role == "ADMIN" and user.branch_id == transfer.from_branch_id %}
       <form method="post" action="/transfers/{{ transfer.id }}/cancel"
             onsubmit="return confirm('Cancel this transfer? Stock will be returned to the sender.')">
         <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-        <button class="btnDanger" type="submit">✕ Cancel Transfer</button>
+        <button class="btnDanger" type="submit">✕ Cancel</button>
       </form>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 </div>
 
@@ -52,9 +77,23 @@
   <div class="card">
     <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">FROM BRANCH</div>
     <div style="font-size:18px;font-weight:800;margin-bottom:8px;">{{ transfer.from_branch.name }}</div>
-    <div style="color:var(--muted);font-size:12px;">Sent by <strong style="color:var(--text);">{{ transfer.created_by.full_name or transfer.created_by.username }}</strong></div>
+    <div style="color:var(--muted);font-size:12px;">Created by <strong style="color:var(--text);">{{ transfer.created_by.full_name or transfer.created_by.username }}</strong></div>
     <div style="color:var(--muted);font-size:12px;margin-top:2px;">{{ transfer.created_at.strftime("%d %B %Y at %H:%M") }}</div>
+    {% if delegated_agent %}
+    <div style="margin-top:10px;padding:8px 12px;background:rgba(79,124,255,.1);border:1px solid rgba(79,124,255,.2);border-radius:8px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Delegated Agent</div>
+      <div style="font-weight:700;color:#7fa8ff;margin-top:2px;">{{ delegated_agent.full_name or delegated_agent.username }}</div>
+    </div>
+    {% endif %}
+    {% if packed_by %}
+    <div style="margin-top:8px;padding:8px 12px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:8px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Packed & Sent By</div>
+      <div style="font-weight:700;color:#4ade80;margin-top:2px;">{{ packed_by.full_name or packed_by.username }}</div>
+      {% if transfer.packed_at %}<div style="font-size:11px;color:var(--muted);margin-top:2px;">{{ transfer.packed_at.strftime("%d %b %Y %H:%M") }}</div>{% endif %}
+    </div>
+    {% endif %}
   </div>
+
   <div class="card">
     <div style="color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">TO BRANCH</div>
     <div style="font-size:18px;font-weight:800;margin-bottom:8px;">{{ transfer.to_branch.name }}</div>
@@ -67,6 +106,28 @@
     {% else %}
     <div style="color:#fbbf24;font-size:12px;">⏳ Awaiting receipt</div>
     {% endif %}
+    {% if delegated_receiver %}
+    <div style="margin-top:10px;padding:8px 12px;background:rgba(79,124,255,.1);border:1px solid rgba(79,124,255,.2);border-radius:8px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Delegated Receiver</div>
+      <div style="font-weight:700;color:#7fa8ff;margin-top:2px;">{{ delegated_receiver.full_name or delegated_receiver.username }}</div>
+    </div>
+    {% endif %}
+    {# Receiving admin: delegate receiver agent #}
+    {% if user.role == "ADMIN" and user.branch_id == transfer.to_branch_id and transfer.status in ("PENDING","OUT_FOR_DELIVERY") and receiver_agents %}
+    <form method="post" action="/transfers/{{ transfer.id }}/delegate-receiver" style="margin-top:12px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">Delegate Receiver</label>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <select name="delegated_receiver_id" style="flex:1;margin:0;">
+          <option value="">— No delegation —</option>
+          {% for a in receiver_agents %}
+          <option value="{{ a.id }}" {% if delegated_receiver and delegated_receiver.id == a.id %}selected{% endif %}>{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+        <button class="btnGhost" type="submit" style="padding:6px 12px;font-size:12px;white-space:nowrap;">Save</button>
+      </div>
+    </form>
+    {% endif %}
   </div>
 </div>
 
@@ -78,7 +139,7 @@
 {% endif %}
 
 <!-- Items -->
-<div class="card">
+<div class="card" style="margin-bottom:16px;">
   <div style="font-weight:700;margin-bottom:14px;">📦 Transfer Items</div>
   <table>
     <thead>
@@ -101,4 +162,192 @@
     </tbody>
   </table>
 </div>
+
+<!-- Expense already recorded -->
+{% if transfer.expense_amount and transfer.expense_amount > 0 %}
+<div class="card" style="margin-bottom:16px;border-top:3px solid #ef4444;">
+  <div class="badge b-red" style="margin-bottom:12px;">💸 TRANSFER EXPENSE RECORDED</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
+    <div>
+      <div class="muted small">Amount</div>
+      <div style="font-size:22px;font-weight:800;color:#f87171;">₦{{ '{:,.2f}'.format(transfer.expense_amount|float) }}</div>
+    </div>
+    <div>
+      <div class="muted small">Type</div>
+      <div style="font-weight:700;margin-top:4px;">
+        {% if transfer.expense_kind == "EXPENSE" %}
+          <span class="badge b-yellow">From Operating Cash</span>
+        {% else %}
+          <span class="badge b-red">Deducted from Collection</span>
+        {% endif %}
+      </div>
+    </div>
+    {% if transfer.expense_note %}
+    <div>
+      <div class="muted small">Note</div>
+      <div style="color:var(--muted);margin-top:4px;">{{ transfer.expense_note }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Expense recording forms — only while transfer is active and no expense yet -->
+{% if transfer.status in ("PENDING", "OUT_FOR_DELIVERY") and (not transfer.expense_amount or transfer.expense_amount == 0) %}
+
+  {# AGENT: from operating cash OR deduct from collection #}
+  {% if is_delegated %}
+  <div class="card" style="margin-bottom:14px;border-top:3px solid #f59e0b;">
+    <div class="badge b-yellow" style="margin-bottom:12px;">💸 RECORD TRANSFER EXPENSE</div>
+    <form method="post" action="/transfers/{{ transfer.id }}/expense">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <div class="inputs" style="flex-wrap:wrap;">
+        <div>
+          <label>Expense Type</label>
+          <select name="expense_kind" required style="width:auto;">
+            <option value="EXPENSE">From Operating Cash</option>
+            <option value="COLLECTION_DEDUCTION">Deduct from Collection</option>
+          </select>
+        </div>
+        <div>
+          <label>Amount (₦)</label>
+          <input type="number" name="expense_amount" min="0.01" step="0.01" placeholder="0.00" required style="width:140px;" />
+        </div>
+        <div style="flex:1;">
+          <label>Note (optional)</label>
+          <input type="text" name="expense_note" placeholder="e.g. Fuel, packaging" maxlength="400" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#f59e0b,#d97706);">
+            Save Expense
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  {# ADMIN: only deduct from collection — both sending and receiving branch #}
+  {% if user.role == "ADMIN" and user.branch_id in (transfer.from_branch_id, transfer.to_branch_id) %}
+  <div class="card" style="border-top:3px solid #ef4444;">
+    <div class="badge b-red" style="margin-bottom:12px;">💸 RECORD TRANSFER EXPENSE</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">This expense will be deducted from collections.</p>
+    <form method="post" action="/transfers/{{ transfer.id }}/expense">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="expense_kind" value="COLLECTION_DEDUCTION" />
+      <div class="inputs" style="flex-wrap:wrap;">
+        <div>
+          <label>Amount (₦)</label>
+          <input type="number" name="expense_amount" min="0.01" step="0.01" placeholder="0.00" required style="width:140px;" />
+        </div>
+        <div style="flex:1;">
+          <label>Note (optional)</label>
+          <input type="text" name="expense_note" placeholder="e.g. Waybill, logistics" maxlength="400" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#ef4444,#dc2626);">
+            Save Expense
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+{% endif %}
+
+
+<!-- Receive-side expense already recorded -->
+{% if transfer.receive_expense_amount and transfer.receive_expense_amount > 0 %}
+<div class="card" style="margin-top:14px;border-top:3px solid #ef4444;">
+  <div class="badge b-red" style="margin-bottom:12px;">💸 RECEIVE EXPENSE RECORDED</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
+    <div>
+      <div class="muted small">Amount</div>
+      <div style="font-size:22px;font-weight:800;color:#f87171;">₦{{ '{:,.2f}'.format(transfer.receive_expense_amount|float) }}</div>
+    </div>
+    <div>
+      <div class="muted small">Type</div>
+      <div style="font-weight:700;margin-top:4px;">
+        {% if transfer.receive_expense_kind == "EXPENSE" %}
+          <span class="badge b-yellow">From Operating Cash</span>
+        {% else %}
+          <span class="badge b-red">Deducted from Collection</span>
+        {% endif %}
+      </div>
+    </div>
+    {% if transfer.receive_expense_note %}
+    <div>
+      <div class="muted small">Note</div>
+      <div style="color:var(--muted);margin-top:4px;">{{ transfer.receive_expense_note }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Receive-side expense form -->
+{% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and (not transfer.receive_expense_amount or transfer.receive_expense_amount == 0) %}
+
+  {# Delegated receiver agent: op cash or collection #}
+  {% if is_delegated_receiver %}
+  <div class="card" style="margin-top:14px;border-top:3px solid #f59e0b;">
+    <div class="badge b-yellow" style="margin-bottom:12px;">💸 RECORD RECEIVE EXPENSE</div>
+    <form method="post" action="/transfers/{{ transfer.id }}/receive-expense">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <div class="inputs" style="flex-wrap:wrap;">
+        <div>
+          <label>Expense Type</label>
+          <select name="receive_expense_kind" required style="width:auto;">
+            <option value="EXPENSE">From Operating Cash</option>
+            <option value="COLLECTION_DEDUCTION">Deduct from Collection</option>
+          </select>
+        </div>
+        <div>
+          <label>Amount (₦)</label>
+          <input type="number" name="receive_expense_amount" min="0.01" step="0.01" placeholder="0.00" required style="width:140px;" />
+        </div>
+        <div style="flex:1;">
+          <label>Note (optional)</label>
+          <input type="text" name="receive_expense_note" placeholder="e.g. Unloading, transport" maxlength="400" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#f59e0b,#d97706);">Save Expense</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  {# Receiving admin: only deduct from collection #}
+  {% if user.role == "ADMIN" and user.branch_id == transfer.to_branch_id %}
+  <div class="card" style="margin-top:14px;border-top:3px solid #ef4444;">
+    <div class="badge b-red" style="margin-bottom:12px;">💸 RECORD RECEIVE EXPENSE (Admin)</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">This expense will be deducted from collections.</p>
+    <form method="post" action="/transfers/{{ transfer.id }}/receive-expense">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="receive_expense_kind" value="COLLECTION_DEDUCTION" />
+      <div class="inputs" style="flex-wrap:wrap;">
+        <div>
+          <label>Amount (₦)</label>
+          <input type="number" name="receive_expense_amount" min="0.01" step="0.01" placeholder="0.00" required style="width:140px;" />
+        </div>
+        <div style="flex:1;">
+          <label>Note (optional)</label>
+          <input type="text" name="receive_expense_note" placeholder="e.g. Unloading, storage" maxlength="400" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#ef4444,#dc2626);">Save Expense</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+{% endif %}
+
 {% endblock %}
