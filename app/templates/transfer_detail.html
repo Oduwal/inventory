@@ -61,11 +61,21 @@
       </form>
       {% endif %}
 
-      {# ADMIN: confirm receipt #}
-      {% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and user.role == "ADMIN" and user.branch_id == transfer.to_branch_id %}
+      {# ADMIN: confirm receipt — only after stock is marked as sent (OUT_FOR_DELIVERY) #}
+      {% if transfer.status == "OUT_FOR_DELIVERY" and user.role == "ADMIN" and user.branch_id == transfer.to_branch_id %}
       <form method="post" action="/transfers/{{ transfer.id }}/receive">
         <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
         <button class="btnPrimary" type="submit">✓ Confirm Receipt</button>
+      </form>
+      {% endif %}
+
+      {# ADMIN: mark as sent (when no delegated agent) #}
+      {% if transfer.status == "PENDING" and user.role == "ADMIN" and user.branch_id == transfer.from_branch_id and not delegated_agent %}
+      <form method="post" action="/transfers/{{ transfer.id }}/pack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#4f7cff,#3b5bdb);">
+          🚚 Mark as Sent
+        </button>
       </form>
       {% endif %}
 
@@ -268,8 +278,8 @@
 {% endif %}
 
 
-<!-- Receive-side expense already recorded -->
-{% if transfer.receive_expense_amount and transfer.receive_expense_amount > 0 %}
+<!-- Receive-side expense — only visible to to_branch or receiver agent -->
+{% if transfer.receive_expense_amount and transfer.receive_expense_amount > 0 and (user.branch_id == transfer.to_branch_id or is_delegated_receiver) %}
 <div class="card" style="margin-top:14px;border-top:3px solid #ef4444;">
   <div class="badge b-red" style="margin-bottom:12px;">💸 RECEIVE EXPENSE RECORDED</div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;">
@@ -297,8 +307,8 @@
 </div>
 {% endif %}
 
-<!-- Receive-side expense form -->
-{% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and (not transfer.receive_expense_amount or transfer.receive_expense_amount == 0) %}
+<!-- Receive-side expense form — only for to_branch -->
+{% if transfer.status in ("PENDING","OUT_FOR_DELIVERY") and (not transfer.receive_expense_amount or transfer.receive_expense_amount == 0) and (user.branch_id == transfer.to_branch_id or is_delegated_receiver) %}
 
   {# Delegated receiver agent: op cash or collection #}
   {% if is_delegated_receiver %}

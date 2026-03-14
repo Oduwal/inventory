@@ -216,12 +216,30 @@ async function loadPreview() {
     ae.innerHTML = '<div class="expense-row" style="color:var(--muted)">None</div>';
   }
 
-  // Office expenses
-  document.getElementById('office-expenses').innerHTML = `
-    <div class="expense-row"><span>Waybills</span><span style="color:#ef4444">${fmt(data.waybill_total)}</span></div>
-    <div class="expense-row"><span>Other Office Expenses</span><span style="color:#ef4444">${fmt(data.other_office_expenses)}</span></div>
-    <div class="expense-row" style="font-weight:700"><span>Total Office Expenses</span><span style="color:#ef4444">${fmt(data.total_office_expenses)}</span></div>
-  `;
+  // Office expenses — individual waybill lines then total
+  const oe = document.getElementById('office-expenses');
+  let offHtml = '';
+  if (data.waybill_entries && data.waybill_entries.length > 0) {
+    offHtml += `<div class="section-header" style="background:rgba(239,68,68,.08);color:#f87171;">Waybill Breakdown</div>`;
+    data.waybill_entries.forEach(w => {
+      // Strip "waybill - " prefix for display
+      const label = w.note.replace(/^waybill\s*[-–]\s*/i, '');
+      offHtml += `<div class="expense-row" style="font-size:12px;">
+        <span style="color:var(--muted)">${w.date} &nbsp;·&nbsp; ${label || 'Waybill'}</span>
+        <span style="color:#ef4444">−${fmt(w.amount)}</span>
+      </div>`;
+    });
+    offHtml += `<div class="expense-row" style="font-weight:700;border-top:2px solid var(--border);margin-top:4px;">
+      <span>Waybills Total</span><span style="color:#ef4444">${fmt(data.waybill_total)}</span>
+    </div>`;
+  } else {
+    offHtml += `<div class="expense-row"><span>Waybills</span><span style="color:#ef4444">${fmt(data.waybill_total)}</span></div>`;
+  }
+  if (data.other_office_expenses > 0) {
+    offHtml += `<div class="expense-row"><span>Other Office Expenses</span><span style="color:#ef4444">${fmt(data.other_office_expenses)}</span></div>`;
+  }
+  offHtml += `<div class="expense-row" style="font-weight:700"><span>Total Office Expenses</span><span style="color:#ef4444">${fmt(data.total_office_expenses)}</span></div>`;
+  oe.innerHTML = offHtml;
 
   // Remittance
   document.getElementById('remittance-val').textContent = fmt(data.remittance);
@@ -276,7 +294,12 @@ function copyReport() {
       txt += `  ${a.name}: ${fmt(a.expenses)}\n`;
     });
     txt += `Total Agent Expenses: ${fmt(d.total_agent_expenses)}\n`;
-    txt += `Waybills: ${fmt(d.waybill_total)}\nOther Office: ${fmt(d.other_office_expenses)}\nTotal Office: ${fmt(d.total_office_expenses)}\n`;
+    txt += `\nWaybill Breakdown:\n`;
+    (d.waybill_entries || []).forEach(w => {
+      const label = w.note.replace(/^waybill\s*[-–]\s*/i, '');
+      txt += `  ${w.date}  ${label || 'Waybill'}  ${fmt(w.amount)}\n`;
+    });
+    txt += `Waybills Total: ${fmt(d.waybill_total)}\nOther Office: ${fmt(d.other_office_expenses)}\nTotal Office: ${fmt(d.total_office_expenses)}\n`;
     txt += `\nRemittance: ${fmt(d.grand_total)} - ${fmt(d.total_expenses)} = ${fmt(d.remittance)}`;
   }
   navigator.clipboard.writeText(txt).then(() => alert('Copied to clipboard!'));

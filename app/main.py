@@ -2109,7 +2109,16 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch)) or 0)
-    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    waybill_entries_raw = db.execute(
+        select(CashEntry.amount, CashEntry.note, CashEntry.created_at)
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
+        .where(_ce_branch)
+        .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
+        .order_by(CashEntry.created_at.asc())
+    ).all()
+    waybill_entries = [{"amount": float(r[0]), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
+    waybill_total = sum(e["amount"] for e in waybill_entries)
     # Include admin's own EXPENSE entries (e.g. transfer expenses recorded as EXPENSE by admin)
     admin_exp_map = {int(aid): float(t) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
@@ -2156,6 +2165,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         "total_op_cash_balance_returned": total_op_cash_balance_returned,
         "expenses_from_collections": expenses_from_collections,
         "total_agent_expenses": total_agent_exp, "waybill_total": waybill_total,
+        "waybill_entries": waybill_entries,
         "other_office_expenses": office_total - waybill_total,
         "total_office_expenses": office_total, "total_expenses": total_expenses,
         "remittance": remittance, "is_agent": is_agent(user),
@@ -2432,7 +2442,7 @@ async def merchant_receipt_create(
             agent_id=user.id,
             kind="OFFICE_EXPENSE",
             amount=exp_amt,
-            note=sanitize_text(expense_note, 400, "Note") or f"Merchant receipt expense: {merchant_name}",
+            note=f"waybill - from {merchant_name}: {sanitize_text(expense_note, 200, 'Note') or ''}".strip().rstrip(':'),
         ))
     db.commit()
     return redirect("/merchant-receipt/new?success=Stock+received+and+recorded+successfully")
@@ -2465,9 +2475,17 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
     else:
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
+    # Count merchant receipts (transactions with reference starting with "MERCHANT:")
+    merchant_receipts_count = db.scalar(
+        select(func.count(func.distinct(Transaction.reference)))
+        .where(Transaction.reference.like("MERCHANT:%"))
+        .where(Transaction.branch_id == (user.branch_id if not is_supervisor(user) else Transaction.branch_id))
+    ) or 0
+    csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
+        "merchant_receipts_count": merchant_receipts_count, "csrf_token": csrf_token,
     })
 
 
@@ -2686,13 +2704,16 @@ async def transfer_expense(
 
     # Also create a CashEntry so it shows in cash section
     cash_kind = "EXPENSE" if expense_kind == "EXPENSE" else "EXPENSE"
+    to_branch_name = transfer.to_branch.name if transfer.to_branch else f"Branch {transfer.to_branch_id}"
+    exp_note = f"waybill - to {to_branch_name}: {sanitize_text(expense_note, 200, 'Note') or ''}"
     if is_admin(user):
+        target_agent = transfer.delegated_agent_id or user.id
         db.add(CashEntry(
             branch_id=transfer.from_branch_id,
-            agent_id=user.id,
+            agent_id=target_agent,
             kind="OFFICE_EXPENSE",
             amount=expense_amount,
-            note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
+            note=exp_note,
         ))
     else:
         db.add(CashEntry(
@@ -2700,7 +2721,7 @@ async def transfer_expense(
             agent_id=user.id,
             kind="EXPENSE",
             amount=expense_amount,
-            note=f"Transfer #{transfer_id} expense: {sanitize_text(expense_note, 200, 'Note') or expense_kind}",
+            note=exp_note,
         ))
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
@@ -2763,13 +2784,16 @@ async def transfer_receive_expense(
     transfer.receive_expense_kind   = receive_expense_kind
     transfer.receive_expense_note   = sanitize_text(receive_expense_note, 400, "Note") or None
 
+    from_branch_name = transfer.from_branch.name if transfer.from_branch else f"Branch {transfer.from_branch_id}"
+    recv_exp_note = f"waybill - from {from_branch_name}: {sanitize_text(receive_expense_note, 200, 'Note') or ''}"
     if is_admin(user):
+        target_recv_agent = transfer.delegated_receiver_id or user.id
         db.add(CashEntry(
             branch_id=transfer.to_branch_id,
-            agent_id=user.id,
+            agent_id=target_recv_agent,
             kind="OFFICE_EXPENSE",
             amount=receive_expense_amount,
-            note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
+            note=recv_exp_note,
         ))
     else:
         db.add(CashEntry(
@@ -2777,7 +2801,7 @@ async def transfer_receive_expense(
             agent_id=user.id,
             kind="EXPENSE",
             amount=receive_expense_amount,
-            note=f"Transfer #{transfer_id} receive expense: {sanitize_text(receive_expense_note, 200, 'Note') or receive_expense_kind}",
+            note=recv_exp_note,
         ))
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
