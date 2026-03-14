@@ -670,6 +670,31 @@ def home(request: Request, db: Session = Depends(get_db)):
     })
 
 
+@app.get("/debug/cash", response_class=HTMLResponse)
+def debug_cash(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not (is_supervisor(user) or is_admin(user)): return HTMLResponse("Forbidden", 403)
+    from sqlalchemy import text
+    rows = db.execute(text("""
+        SELECT ce.id, ce.kind, ce.amount, ce.branch_id, ce.agent_id, ce.delivery_id,
+               b.name as branch_name, u.username,
+               ce.created_at
+        FROM cash_entries ce
+        LEFT JOIN branches b ON b.id = ce.branch_id
+        LEFT JOIN users u ON u.id = ce.agent_id
+        ORDER BY ce.created_at DESC LIMIT 50
+    """)).fetchall()
+    html = "<pre style='font-family:monospace;font-size:12px;'>"
+    html += f"{'ID':<5} {'KIND':<25} {'AMT':<10} {'BRANCH_ID':<10} {'AGENT_ID':<10} {'DEL_ID':<8} {'BRANCH':<20} {'USER':<15} DATE\n"
+    html += "-"*120 + "\n"
+    for r in rows:
+        html += f"{str(r[0]):<5} {str(r[1]):<25} {str(r[2]):<10} {str(r[3]):<10} {str(r[4]):<10} {str(r[5]):<8} {str(r[6] or ''):<20} {str(r[7] or ''):<15} {str(r[8])}\n"
+    html += "</pre>"
+    return HTMLResponse(html)
+
+
 @app.get("/supervisor", response_class=HTMLResponse)
 def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = ""):
     user_or = require_login_or_redirect(db, request)
