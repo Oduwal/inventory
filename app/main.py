@@ -1861,16 +1861,26 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if (agent_id or "").isdigit(): selected_agent_id = int(agent_id)
     else:
         selected_agent_id = user.id
-    # Always filter cash entries by branch — admins must only see their own branch
+    # Branch agent IDs — used to catch entries saved with NULL branch_id
+    branch_agent_ids = [u.id for u in db.execute(
+        select(User).where(User.branch_id == branch_id)
+    ).scalars().all()]
+
+    # Match entries that either have this branch_id OR have NULL branch_id but belong to a branch agent
+    def _branch_filter():
+        return (CashEntry.branch_id == branch_id) | (
+            (CashEntry.branch_id == None) & (CashEntry.agent_id.in_(branch_agent_ids))
+        )
+
     def _cash_sum(kind_list, agent_id=None):
         stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
-            CashEntry.kind.in_(kind_list)).where(CashEntry.branch_id == branch_id)
+            CashEntry.kind.in_(kind_list)).where(_branch_filter())
         if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
         if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
         if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
         return float(db.scalar(stmt) or 0)
 
-    # Per-day breakdown — only entries from this branch
+    # Per-day breakdown — entries from this branch (including NULL branch_id for branch agents)
     day_stmt = (
         select(
             func.date(CashEntry.created_at).label("day"),
@@ -1879,7 +1889,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
             func.coalesce(func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)), 0).label("operating_cash"),
             func.coalesce(func.sum(case((CashEntry.kind == "OFFICE_EXPENSE", CashEntry.amount), else_=0)), 0).label("office_expenses"),
         )
-        .where(CashEntry.branch_id == branch_id)
+        .where(_branch_filter())
     )
     if start_dt: day_stmt = day_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt:   day_stmt = day_stmt.where(CashEntry.created_at < end_dt)
@@ -1895,7 +1905,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     total_office_expenses = _cash_sum(["OFFICE_EXPENSE"], selected_agent_id)
 
     _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
-        CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.branch_id == branch_id)
+        CashEntry.kind == "RETURN_OPERATING_CASH").where(_branch_filter())
     if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt:   _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
     if selected_agent_id: _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
