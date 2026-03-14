@@ -365,6 +365,8 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_to ON stock_transfers (to_branch_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_transfers_status ON stock_transfers (status)")
         # v2: delegation + expenses
+        _ddl(conn, "ALTER TABLE stock_transfers DROP CONSTRAINT IF EXISTS ck_transfer_status")
+        _ddl(conn, "ALTER TABLE stock_transfers ADD CONSTRAINT ck_transfer_status CHECK (status IN ('PENDING','OUT_FOR_DELIVERY','RECEIVED','CANCELLED'))")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS delegated_agent_id INTEGER NULL REFERENCES users(id)")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS packed_by_id INTEGER NULL REFERENCES users(id)")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS packed_at TIMESTAMP NULL")
