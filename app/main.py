@@ -726,6 +726,73 @@ def backfill_collections(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse(f"<pre>Done. Created: {created} collection entries. Skipped: {skipped} (already had entries or zero value).</pre>")
 
 
+@app.get("/admin/reset-data", response_class=HTMLResponse)
+def reset_data_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_supervisor(user): return HTMLResponse("Forbidden", status_code=403)
+    csrf_token = get_csrf_token(request)
+    return HTMLResponse(f"""
+    <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
+    <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:40px;max-width:480px;width:100%;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+      <h2 style="color:#f87171;margin-bottom:8px;">Clear All Operational Data</h2>
+      <p style="color:#8a9bc4;font-size:14px;margin-bottom:24px;">
+        This will permanently delete all <strong style="color:#e7eefc;">deliveries, cash entries, stock transactions, and stock transfers</strong>.<br><br>
+        Branches, users, and items will be kept.<br><br>
+        <strong style="color:#f87171;">This cannot be undone.</strong>
+      </p>
+      <form method="post" action="/admin/reset-data">
+        <input type="hidden" name="csrf_token" value="{csrf_token}" />
+        <input type="text" name="confirm" placeholder='Type RESET to confirm'
+               style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#e7eefc;font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
+        <button type="submit"
+                style="width:100%;padding:12px;background:linear-gradient(135deg,#ef4444,#dc2626);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">
+          🗑 Delete All Operational Data
+        </button>
+      </form>
+      <a href="/supervisor" style="display:block;margin-top:16px;color:#8a9bc4;font-size:13px;text-decoration:none;">← Cancel</a>
+    </div></body></html>
+    """)
+
+
+@app.post("/admin/reset-data", response_class=HTMLResponse)
+async def reset_data_execute(
+    request: Request,
+    confirm: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_supervisor(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    if confirm.strip() != "RESET":
+        return HTMLResponse("<script>alert('You must type RESET to confirm.');history.back();</script>")
+
+    from sqlalchemy import text as _text
+    with db.bind.connect() as conn:
+        conn.execute(_text("DELETE FROM stock_transfer_items"))
+        conn.execute(_text("DELETE FROM stock_transfers"))
+        conn.execute(_text("DELETE FROM cash_entries"))
+        conn.execute(_text("DELETE FROM delivery_items"))
+        conn.execute(_text("DELETE FROM deliveries"))
+        conn.execute(_text("DELETE FROM transactions"))
+        conn.commit()
+
+    return HTMLResponse("""
+    <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
+    <div style="background:rgba(255,255,255,.04);border:1px solid rgba(34,197,94,.3);border-radius:16px;padding:40px;max-width:400px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h2 style="color:#4ade80;margin-bottom:8px;">Data Cleared</h2>
+      <p style="color:#8a9bc4;font-size:14px;margin-bottom:24px;">All operational data has been deleted. Branches, users, and items are intact.</p>
+      <a href="/supervisor" style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#4f7cff,#3b5bdb);border-radius:10px;color:#fff;text-decoration:none;font-weight:700;">Go to Dashboard</a>
+    </div></body></html>
+    """)
+
+
 @app.get("/supervisor", response_class=HTMLResponse)
 def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = ""):
     user_or = require_login_or_redirect(db, request)
