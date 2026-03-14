@@ -12,32 +12,37 @@
 
 {% block content %}
 
-{% set pending   = transfers | selectattr("status","eq","PENDING")        | list %}
+{% set pending    = transfers | selectattr("status","eq","PENDING")          | list %}
 {% set in_transit = transfers | selectattr("status","eq","OUT_FOR_DELIVERY") | list %}
-{% set received  = transfers | selectattr("status","eq","RECEIVED")         | list %}
-{% set cancelled = transfers | selectattr("status","eq","CANCELLED")        | list %}
+{% set received   = transfers | selectattr("status","eq","RECEIVED")         | list %}
+{% set cancelled  = transfers | selectattr("status","eq","CANCELLED")        | list %}
 
-<!-- Summary strip -->
+<!-- Summary cards — clickable filters -->
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px;">
-  <div class="card" style="text-align:center;border-top:3px solid #f59e0b;padding:14px 16px;">
+  <div class="card filter-card" data-filter="all" onclick="filterTable('all')"
+       style="text-align:center;border-top:3px solid #8b5cf6;padding:14px 16px;cursor:pointer;">
+    <div style="font-size:28px;font-weight:800;color:#a78bfa;">{{ transfers|length }}</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:4px;">All</div>
+  </div>
+  <div class="card filter-card" data-filter="PENDING" onclick="filterTable('PENDING')"
+       style="text-align:center;border-top:3px solid #f59e0b;padding:14px 16px;cursor:pointer;">
     <div style="font-size:28px;font-weight:800;color:#fbbf24;">{{ pending|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">⏳ Pending</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #4f7cff;padding:14px 16px;">
+  <div class="card filter-card" data-filter="OUT_FOR_DELIVERY" onclick="filterTable('OUT_FOR_DELIVERY')"
+       style="text-align:center;border-top:3px solid #4f7cff;padding:14px 16px;cursor:pointer;">
     <div style="font-size:28px;font-weight:800;color:#7fa8ff;">{{ in_transit|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">🚚 Sent</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;">
+  <div class="card filter-card" data-filter="RECEIVED" onclick="filterTable('RECEIVED')"
+       style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;cursor:pointer;">
     <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ received|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">✓ Received</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:14px 16px;">
+  <div class="card filter-card" data-filter="CANCELLED" onclick="filterTable('CANCELLED')"
+       style="text-align:center;border-top:3px solid #ef4444;padding:14px 16px;cursor:pointer;">
     <div style="font-size:28px;font-weight:800;color:#f87171;">{{ cancelled|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">✕ Cancelled</div>
-  </div>
-  <div class="card" style="text-align:center;border-top:3px solid #8b5cf6;padding:14px 16px;">
-    <div style="font-size:28px;font-weight:800;color:#a78bfa;">{{ transfers|length }}</div>
-    <div style="color:var(--muted);font-size:11px;margin-top:4px;">Total</div>
   </div>
   <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;">
     <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ merchant_receipts_count or 0 }}</div>
@@ -45,30 +50,35 @@
   </div>
 </div>
 
-<!-- Incoming action required (for receiving branch admin) -->
+<!-- Date filter -->
+<div class="card" style="margin-bottom:16px;">
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+    <div><label>From</label><input type="date" id="date_from" oninput="applyFilters()" style="width:auto;"></div>
+    <div><label>To</label>  <input type="date" id="date_to"   oninput="applyFilters()" style="width:auto;"></div>
+    <div><label>&nbsp;</label>
+      <button class="btnGhost" onclick="clearFilters()" style="padding:8px 14px;font-size:12px;">Clear</button>
+    </div>
+    <div style="padding-bottom:11px;color:var(--muted);font-size:12px;">
+      Showing <strong id="visible-count" style="color:var(--text);">{{ transfers|length }}</strong> transfers
+    </div>
+  </div>
+</div>
+
+<!-- Incoming action required — only after stock is marked sent -->
 {% if user.role == "ADMIN" %}
 {% set incoming = transfers | selectattr("status","eq","OUT_FOR_DELIVERY") | selectattr("to_branch_id","eq", user.branch_id) | list %}
 {% if incoming %}
 <div class="card" style="border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.04);margin-bottom:20px;">
   <div style="font-weight:700;margin-bottom:12px;color:#fbbf24;font-size:15px;">📦 Incoming — Action Required</div>
   <table>
-    <thead>
-      <tr>
-        <th>#</th><th>From</th><th>Items</th><th>Sent</th><th>Note</th><th></th>
-      </tr>
-    </thead>
+    <thead><tr><th>#</th><th>From</th><th>Items</th><th>Sent</th><th></th></tr></thead>
     <tbody>
       {% for t in incoming %}
       <tr>
         <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
         <td style="font-weight:600;">{{ t.from_branch.name }}</td>
-        <td>
-          {% for line in t.items %}
-          <span class="badge b-blue" style="margin:2px;">{{ line.quantity }} × {{ line.item.name }}</span>
-          {% endfor %}
-        </td>
+        <td>{% for line in t.items %}<span class="badge b-blue" style="margin:2px;">{{ line.quantity }} × {{ line.item.name }}</span>{% endfor %}</td>
         <td style="color:var(--muted);">{{ t.created_at.strftime("%d %b %Y") }}</td>
-        <td style="color:var(--muted);">{{ t.note or "—" }}</td>
         <td><a href="/transfers/{{ t.id }}" class="btnPrimary" style="padding:7px 14px;font-size:12px;">View →</a></td>
       </tr>
       {% endfor %}
@@ -78,25 +88,27 @@
 {% endif %}
 {% endif %}
 
-<!-- All transfers -->
+<!-- All transfers table -->
 <div class="card">
-  <div style="font-weight:700;margin-bottom:14px;">All Transfers</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+    <div style="font-weight:700;" id="table-title">All Transfers</div>
+  </div>
   {% if transfers %}
   <div style="overflow-x:auto;">
-    <table>
+    <table id="transfers-table">
       <thead>
         <tr>
           <th>#</th><th>From</th><th>To</th><th>Items</th>
-          <th>Status</th><th>Sent</th><th>Note</th><th></th>
+          <th>Status</th><th>Date</th><th>Note</th><th></th>
         </tr>
       </thead>
       <tbody>
         {% for t in transfers %}
-        <tr>
+        <tr data-status="{{ t.status }}" data-date="{{ t.created_at.strftime('%Y-%m-%d') }}">
           <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
           <td style="font-weight:600;">{{ t.from_branch.name }}</td>
           <td style="font-weight:600;">{{ t.to_branch.name }}</td>
-          <td style="max-width:240px;">
+          <td style="max-width:220px;">
             {% for line in t.items %}
             <span class="badge b-blue" style="margin:2px;font-size:11px;">{{ line.quantity }} × {{ line.item.name }}</span>
             {% endfor %}
@@ -105,11 +117,7 @@
             {% if t.status == "CANCELLED" %}
               <span class="badge b-red">✕ Cancelled</span>
             {% elif t.status == "RECEIVED" %}
-              {% if user.branch_id == t.from_branch_id %}
-                <span class="badge b-green">✓ Sent & Received</span>
-              {% else %}
-                <span class="badge b-green">✓ Received</span>
-              {% endif %}
+              <span class="badge b-green">✓ Received</span>
             {% elif t.status == "OUT_FOR_DELIVERY" %}
               {% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}
                 <span class="badge b-blue">🚚 Sent</span>
@@ -118,7 +126,7 @@
               {% endif %}
             {% else %}
               {% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}
-                <span class="badge b-yellow">⏳ Pending Send</span>
+                <span class="badge b-yellow">⏳ Pending</span>
               {% else %}
                 <span class="badge b-yellow">⏳ Incoming</span>
               {% endif %}
@@ -132,8 +140,64 @@
       </tbody>
     </table>
   </div>
+  <div id="no-results" style="display:none;text-align:center;padding:40px;color:var(--muted);">No transfers match the current filter.</div>
   {% else %}
   <div style="text-align:center;padding:50px;color:var(--muted);">No transfers yet.</div>
   {% endif %}
 </div>
+
+<style>
+  .filter-card { transition: transform .15s, box-shadow .15s; }
+  .filter-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.2); }
+  .filter-card.active { outline: 2px solid var(--accent); }
+</style>
+
+<script>
+let _activeStatus = 'all';
+
+function filterTable(status) {
+  _activeStatus = status;
+  document.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
+  const clicked = document.querySelector(`.filter-card[data-filter="${status}"]`);
+  if (clicked) clicked.classList.add('active');
+  const titles = {
+    'all': 'All Transfers', 'PENDING': 'Pending Transfers',
+    'OUT_FOR_DELIVERY': 'Sent Transfers', 'RECEIVED': 'Received Transfers', 'CANCELLED': 'Cancelled Transfers'
+  };
+  document.getElementById('table-title').textContent = titles[status] || 'All Transfers';
+  applyFilters();
+}
+
+function applyFilters() {
+  const from = document.getElementById('date_from').value;
+  const to   = document.getElementById('date_to').value;
+  const rows = document.querySelectorAll('#transfers-table tbody tr');
+  let visible = 0;
+  rows.forEach(row => {
+    const rowStatus = row.dataset.status;
+    const rowDate   = row.dataset.date;
+    const statusOk  = _activeStatus === 'all' || rowStatus === _activeStatus;
+    const fromOk    = !from || rowDate >= from;
+    const toOk      = !to   || rowDate <= to;
+    const show = statusOk && fromOk && toOk;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('visible-count').textContent = visible;
+  document.getElementById('no-results').style.display = visible === 0 ? 'block' : 'none';
+}
+
+function clearFilters() {
+  document.getElementById('date_from').value = '';
+  document.getElementById('date_to').value   = '';
+  _activeStatus = 'all';
+  document.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
+  document.querySelector('.filter-card[data-filter="all"]').classList.add('active');
+  document.getElementById('table-title').textContent = 'All Transfers';
+  applyFilters();
+}
+
+// Activate "All" card on load
+document.querySelector('.filter-card[data-filter="all"]').classList.add('active');
+</script>
 {% endblock %}
