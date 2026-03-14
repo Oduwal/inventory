@@ -670,30 +670,6 @@ def home(request: Request, db: Session = Depends(get_db)):
     })
 
 
-@app.get("/debug/cash", response_class=HTMLResponse)
-def debug_cash(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not (is_supervisor(user) or is_admin(user)): return HTMLResponse("Forbidden", 403)
-    from sqlalchemy import text
-    rows = db.execute(text("""
-        SELECT ce.id, ce.kind, ce.amount, ce.branch_id, ce.agent_id, ce.delivery_id,
-               b.name as branch_name, u.username,
-               ce.created_at
-        FROM cash_entries ce
-        LEFT JOIN branches b ON b.id = ce.branch_id
-        LEFT JOIN users u ON u.id = ce.agent_id
-        ORDER BY ce.created_at DESC LIMIT 50
-    """)).fetchall()
-    html = "<pre style='font-family:monospace;font-size:12px;'>"
-    html += f"{'ID':<5} {'KIND':<25} {'AMT':<10} {'BRANCH_ID':<10} {'AGENT_ID':<10} {'DEL_ID':<8} {'BRANCH':<20} {'USER':<15} DATE\n"
-    html += "-"*120 + "\n"
-    for r in rows:
-        html += f"{str(r[0]):<5} {str(r[1]):<25} {str(r[2]):<10} {str(r[3]):<10} {str(r[4]):<10} {str(r[5]):<8} {str(r[6] or ''):<20} {str(r[7] or ''):<15} {str(r[8])}\n"
-    html += "</pre>"
-    return HTMLResponse(html)
-
 
 @app.get("/supervisor", response_class=HTMLResponse)
 def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = ""):
@@ -1905,24 +1881,26 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
         return float(db.scalar(stmt) or 0)
 
-    # Per-day breakdown — entries from this branch (including NULL branch_id for branch agents)
-    day_stmt = (
-        select(
+    # Per-day breakdown — query each kind separately then merge by day
+    def _day_kind_map(kind_list, agent_id=None):
+        stmt = select(
             func.date(CashEntry.created_at).label("day"),
-            func.coalesce(func.sum(case((CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]), CashEntry.amount), else_=0)), 0).label("collections"),
-            func.coalesce(func.sum(case((CashEntry.kind == "EXPENSE", CashEntry.amount), else_=0)), 0).label("expenses"),
-            func.coalesce(func.sum(case((CashEntry.kind == "OPERATING_CASH", CashEntry.amount), else_=0)), 0).label("operating_cash"),
-            func.coalesce(func.sum(case((CashEntry.kind == "OFFICE_EXPENSE", CashEntry.amount), else_=0)), 0).label("office_expenses"),
-        )
-        .where(_branch_filter())
-    )
-    if start_dt: day_stmt = day_stmt.where(CashEntry.created_at >= start_dt)
-    if end_dt:   day_stmt = day_stmt.where(CashEntry.created_at < end_dt)
-    if selected_agent_id: day_stmt = day_stmt.where(CashEntry.agent_id == selected_agent_id)
-    day_stmt = day_stmt.group_by(func.date(CashEntry.created_at)).order_by(func.date(CashEntry.created_at).desc())
-    rows = [{"day": str(r.day), "collections": float(r.collections), "expenses": float(r.expenses),
-             "operating_cash": float(r.operating_cash), "office_expenses": float(r.office_expenses)}
-            for r in db.execute(day_stmt).all()]
+            func.coalesce(func.sum(CashEntry.amount), 0).label("total")
+        ).where(CashEntry.kind.in_(kind_list)).where(_branch_filter())
+        if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
+        if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
+        if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
+        stmt = stmt.group_by(func.date(CashEntry.created_at))
+        return {str(r.day): float(r.total) for r in db.execute(stmt).all()}
+
+    col_map  = _day_kind_map(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"], selected_agent_id)
+    exp_map  = _day_kind_map(["EXPENSE"], selected_agent_id)
+    op_map   = _day_kind_map(["OPERATING_CASH"], selected_agent_id)
+    off_map  = _day_kind_map(["OFFICE_EXPENSE"], selected_agent_id)
+    all_days = sorted(set(list(col_map) + list(exp_map) + list(op_map) + list(off_map)), reverse=True)
+    rows = [{"day": d, "collections": col_map.get(d, 0), "expenses": exp_map.get(d, 0),
+             "operating_cash": op_map.get(d, 0), "office_expenses": off_map.get(d, 0)}
+            for d in all_days]
 
     total_collections     = _cash_sum(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"], selected_agent_id)
     total_expenses        = _cash_sum(["EXPENSE"], selected_agent_id)
