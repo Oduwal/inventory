@@ -2461,6 +2461,7 @@ async def transfer_create(
     request: Request,
     to_branch_id: int = Form(...),
     note: str = Form(""),
+    delegated_agent_id: str = Form(""),
     item_ids: list[int] = Form(...),
     quantities: list[int] = Form(...),
     csrf_token: str = Form(""),
@@ -2486,14 +2487,11 @@ async def transfer_create(
         _item, stock = row
         if int(stock) < qty:
             return redirect(f"/transfers/new?error=Insufficient+stock+for+{_item.name}")
-    delegated_agent_id = None
-    raw_agent = (await request.form()).get("delegated_agent_id", "")
-    if str(raw_agent).isdigit():
-        delegated_agent_id = int(raw_agent)
+    del_agent_id = int(delegated_agent_id) if delegated_agent_id.isdigit() else None
     transfer = StockTransfer(
         from_branch_id=user.branch_id, to_branch_id=to_branch_id, status="PENDING",
         note=sanitize_text(note, 400, "Note") or None, created_by_id=user.id,
-        delegated_agent_id=delegated_agent_id,
+        delegated_agent_id=del_agent_id,
     )
     db.add(transfer)
     db.flush()
