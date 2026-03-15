@@ -2182,13 +2182,15 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     branch_agent_ids = [u.id for u in db.execute(
         select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
     ).scalars().all()] if not is_supervisor(user) else []
-    # agent_exp_map: only AGENT-role users' expenses
     _agent_ce_filter = (CashEntry.agent_id.in_(branch_agent_ids)) if branch_agent_ids else (CashEntry.agent_id == -1)
+    # agent_exp_map: AGENT expenses EXCLUDING waybill-tagged ones (those go to waybill section)
     agent_exp_map = {int(aid): float(t) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt)
-        .where(CashEntry.created_at <= end_dt).where(_ce_branch)
+        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
+        .where(_ce_branch)
         .where(_agent_ce_filter if not is_supervisor(user) else True)
+        .where(func.lower(func.coalesce(CashEntry.note, "")).notlike("%waybill%"))
         .group_by(CashEntry.agent_id)
     ).all()}
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(
@@ -2198,10 +2200,10 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         .where(_agent_ce_filter if not is_supervisor(user) else True)
         .group_by(CashEntry.agent_id)
     ).all()}
-    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch)) or 0)
+    # Waybill entries = OFFICE_EXPENSE tagged waybill + EXPENSE tagged waybill (agent transfer expenses)
     waybill_entries_raw = db.execute(
         select(CashEntry.amount, CashEntry.note, CashEntry.created_at)
-        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(CashEntry.kind.in_(["OFFICE_EXPENSE", "EXPENSE"]))
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
         .where(_ce_branch)
         .where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))
@@ -2209,6 +2211,15 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     ).all()
     waybill_entries = [{"amount": float(r[0]), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
     waybill_total = sum(e["amount"] for e in waybill_entries)
+    # office_total = non-waybill OFFICE_EXPENSE + waybill_total
+    office_non_waybill = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OFFICE_EXPENSE")
+        .where(func.lower(func.coalesce(CashEntry.note, "")).notlike("%waybill%"))
+        .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
+        .where(_ce_branch)
+    ) or 0)
+    office_total = office_non_waybill + waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
     if all_agent_ids:
