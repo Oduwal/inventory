@@ -2178,11 +2178,17 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
             items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la if la > 0 else q * sp})
     _ce_branch = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
-    # Get all agent IDs for this branch (role=AGENT only, not admin)
-    branch_agent_ids = [u.id for u in db.execute(
-        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
-    ).scalars().all()] if not is_supervisor(user) else []
-    _agent_ce_filter = (CashEntry.agent_id.in_(branch_agent_ids)) if branch_agent_ids else (CashEntry.agent_id == -1)
+    # Get agent IDs to include in cash queries
+    # If a specific agent is selected, only show that agent's data
+    if target_agent_id:
+        _agent_ce_filter = (CashEntry.agent_id == target_agent_id)
+    elif not is_supervisor(user):
+        branch_agent_ids = [u.id for u in db.execute(
+            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
+        ).scalars().all()]
+        _agent_ce_filter = (CashEntry.agent_id.in_(branch_agent_ids)) if branch_agent_ids else (CashEntry.agent_id == -1)
+    else:
+        _agent_ce_filter = True  # supervisor: no agent filter
     # agent_exp_map: AGENT expenses EXCLUDING waybill-tagged ones (those go to waybill section)
     agent_exp_map = {int(aid): float(t) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
@@ -2212,6 +2218,8 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     )
     if is_agent(user):
         _wb_stmt = _wb_stmt.where(CashEntry.agent_id == user.id)
+    elif target_agent_id:
+        _wb_stmt = _wb_stmt.where(CashEntry.agent_id == target_agent_id)
     waybill_entries_raw = db.execute(_wb_stmt).all()
     waybill_entries = [{"amount": float(r[0]), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
     waybill_total = sum(e["amount"] for e in waybill_entries)
@@ -2225,6 +2233,8 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     )
     if is_agent(user):
         _off_stmt = _off_stmt.where(CashEntry.agent_id == user.id)
+    elif target_agent_id:
+        _off_stmt = _off_stmt.where(CashEntry.agent_id == target_agent_id)
     office_non_waybill = float(db.scalar(_off_stmt) or 0)
     office_total = office_non_waybill + waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
