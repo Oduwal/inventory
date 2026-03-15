@@ -166,9 +166,10 @@
 </div>
 
 <style>
-  .filter-card { transition: transform .15s, box-shadow .15s; }
-  .filter-card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,.2); }
-  .filter-card.active { outline: 2px solid var(--accent); }
+  .filter-card { transition: transform .15s, border-color .15s; border: 1px solid var(--border2) !important; }
+  .filter-card:hover { transform: translateY(-2px); border-color: rgba(0,212,255,.3) !important; }
+  .filter-card.active { border-color: var(--cyan) !important; box-shadow: 0 0 16px rgba(0,212,255,.15); }
+  .filter-card.active div:first-child { text-shadow: 0 0 20px currentColor; }
 </style>
 
 <script>

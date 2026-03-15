@@ -12,9 +12,10 @@
 <style>
   .item-row { display:grid; grid-template-columns:1fr 120px 40px; gap:10px; align-items:center; margin-bottom:8px; }
   .item-row select, .item-row input[type=number] { margin:0; }
-  .remove-btn { background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3); color:#f87171;
-    border-radius:8px; padding:6px 10px; cursor:pointer; font-size:14px; line-height:1; }
-  .remove-btn:hover { background:rgba(239,68,68,.3); }
+  .remove-btn { background:rgba(255,61,90,.1); border:1px solid rgba(255,61,90,.3); color:var(--red);
+    padding:6px 10px; cursor:pointer; font-family:var(--font-mono); font-size:12px; font-weight:700; line-height:1;
+    transition:all .15s; }
+  .remove-btn:hover { background:rgba(255,61,90,.2); }
 </style>
 
 {% if success %}

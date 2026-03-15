@@ -1,45 +1,260 @@
-{% extends "base.html" %}
-{% block title %}Login — Inventory Keeper{% endblock %}
-{% block page_title %}{% endblock %}
-{% block page_subtitle %}{% endblock %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inventory Keeper — Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #050c1a; --panel: #0a1628; --border: rgba(0,212,255,.12);
+      --cyan: #00d4ff; --amber: #ffb800; --red: #ff3d5a; --green: #00ff88;
+      --text: #d8eaf8; --muted: #4a6882;
+      --font-mono: 'Space Mono', monospace;
+      --font-ui: 'Syne', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-ui);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-image:
+        repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,212,255,.007) 2px, rgba(0,212,255,.007) 4px),
+        radial-gradient(ellipse 900px 700px at 20% 20%, rgba(0,50,100,.5) 0%, transparent 65%),
+        radial-gradient(ellipse 700px 500px at 80% 80%, rgba(0,20,60,.5) 0%, transparent 65%);
+    }
 
-{% block content %}
-<div style="max-width:420px;margin:60px auto;">
-  <div style="text-align:center;margin-bottom:28px;">
-    <div style="width:52px;height:52px;border-radius:16px;margin:0 auto 14px;
-      background:linear-gradient(135deg,#4f7cff,#8b5cf6);
-      box-shadow:0 8px 24px rgba(79,124,255,.4);
-      display:flex;align-items:center;justify-content:center;font-size:22px;">📦</div>
-    <h1 style="font-size:22px;font-weight:800;margin-bottom:4px;">Inventory Keeper</h1>
-    <p style="color:var(--muted);font-size:13px;">Sign in to your account</p>
+    .login-wrap {
+      width: 100%;
+      max-width: 420px;
+      padding: 20px;
+    }
+
+    /* Logo block */
+    .login-logo {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .login-logo svg {
+      width: 52px; height: 52px;
+      display: block;
+      margin: 0 auto 14px;
+    }
+    .login-logo h1 {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      color: var(--cyan);
+    }
+    .login-logo p {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+
+    /* Panel */
+    .login-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      position: relative;
+      padding: 28px;
+    }
+    .login-panel::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--cyan), transparent 70%);
+    }
+    /* Corner marks */
+    .login-panel::after {
+      content: '';
+      position: absolute;
+      bottom: 0; right: 0;
+      width: 20px; height: 20px;
+      border-bottom: 1px solid rgba(0,212,255,.3);
+      border-right: 1px solid rgba(0,212,255,.3);
+    }
+
+    .panel-header {
+      margin-bottom: 24px;
+    }
+    .panel-header .tag {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--amber);
+      background: rgba(255,184,0,.08);
+      border: 1px solid rgba(255,184,0,.2);
+      padding: 3px 8px;
+      display: inline-block;
+      margin-bottom: 10px;
+    }
+    .panel-header h2 {
+      font-family: var(--font-ui);
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: -.2px;
+    }
+    .panel-header p {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 5px;
+      letter-spacing: .05em;
+    }
+
+    /* Error */
+    .login-error {
+      background: rgba(255,61,90,.08);
+      border: 1px solid rgba(255,61,90,.3);
+      border-left: 3px solid var(--red);
+      padding: 10px 12px;
+      margin-bottom: 18px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--red);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    /* Form */
+    .field { margin-bottom: 16px; }
+    label {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      background: rgba(0,0,0,.4);
+      border: 1px solid rgba(0,212,255,.15);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(0,212,255,.1), 0 0 20px rgba(0,212,255,.08);
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 12px;
+      background: var(--cyan);
+      border: none;
+      color: var(--bg);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all .15s;
+      box-shadow: 0 0 24px rgba(0,212,255,.35);
+      margin-top: 8px;
+    }
+    .btn-login:hover {
+      background: #33dcff;
+      box-shadow: 0 0 40px rgba(0,212,255,.55);
+    }
+
+    /* Bottom info */
+    .login-footer {
+      margin-top: 20px;
+      text-align: center;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: .08em;
+    }
+    .login-footer span {
+      display: inline-block;
+      width: 6px; height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+      vertical-align: middle;
+      margin-right: 5px;
+      box-shadow: 0 0 6px var(--green);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .3; }
+    }
+  </style>
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-logo">
+      <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="1" width="50" height="50" rx="2" stroke="rgba(0,212,255,.4)" stroke-width="1"/>
+        <line x1="26" y1="1" x2="26" y2="51" stroke="rgba(0,212,255,.2)" stroke-width=".5"/>
+        <line x1="1" y1="26" x2="51" y2="26" stroke="rgba(0,212,255,.2)" stroke-width=".5"/>
+        <circle cx="26" cy="26" r="9" stroke="#00d4ff" stroke-width="1.5"/>
+        <circle cx="26" cy="26" r="2.5" fill="#00d4ff"/>
+        <line x1="26" y1="5" x2="26" y2="16" stroke="#00d4ff" stroke-width="2"/>
+        <line x1="26" y1="36" x2="26" y2="47" stroke="#00d4ff" stroke-width="2"/>
+        <line x1="5" y1="26" x2="16" y2="26" stroke="#00d4ff" stroke-width="2"/>
+        <line x1="36" y1="26" x2="47" y2="26" stroke="#00d4ff" stroke-width="2"/>
+        <rect x="8" y="8" width="6" height="6" fill="rgba(255,184,0,.7)"/>
+        <rect x="38" y="38" width="6" height="6" fill="rgba(255,184,0,.7)"/>
+      </svg>
+      <h1>Inventory Keeper</h1>
+      <p>Logistics &amp; stock management system</p>
+    </div>
+
+    <div class="login-panel">
+      <div class="panel-header">
+        <div class="tag">// Auth Required</div>
+        <h2>Sign In</h2>
+        <p>Enter credentials to access the system</p>
+      </div>
+
+      {% if error %}
+      <div class="login-error">⚠ {{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <div class="field">
+          <label>Username</label>
+          <input name="username" required autocomplete="username" placeholder="Enter username" />
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+        </div>
+        <button class="btn-login" type="submit">▶ Access System</button>
+      </form>
+    </div>
+
+    <div class="login-footer">
+      <span></span>System Online — Secure Connection
+    </div>
   </div>
-
-  <div class="card" style="padding:28px;">
-    {% if error %}
-    <div class="alert alert-danger" style="margin-bottom:20px;">⚠ {{ error }}</div>
-    {% endif %}
-
-    <form method="post" action="/login">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-
-      <div style="margin-bottom:16px;">
-        <label>Username</label>
-        <input name="username" required autocomplete="username" placeholder="Enter your username" />
-      </div>
-
-      <div style="margin-bottom:8px;">
-        <label>Password</label>
-        <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
-      </div>
-
-      <div style="text-align:right;margin-bottom:22px;">
-        <a href="/forgot-password" style="font-size:12px;color:var(--accent);">Forgot password?</a>
-      </div>
-
-      <button class="btnPrimary" type="submit" style="width:100%;justify-content:center;padding:12px;">
-        Sign In →
-      </button>
-    </form>
-  </div>
-</div>
-{% endblock %}
+</body>
+</html>
