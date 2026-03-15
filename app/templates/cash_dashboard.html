@@ -79,15 +79,99 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
 
 <!-- KPIs -->
 <div class="kpi-grid">
-  <div class="kpi kpi-g"><span style="font-size:20px;">💰</span><div class="kv">₦{{ "{:,.0f}".format(total_collections) }}</div><div class="kl">Collections</div></div>
-  <div class="kpi kpi-b"><span style="font-size:20px;">🏦</span><div class="kv">₦{{ "{:,.0f}".format(total_operating_cash) }}</div><div class="kl">Op. Cash Given</div></div>
-  <div class="kpi kpi-r"><span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div><div class="kl">Agent Expenses</div></div>
+  <div class="kpi kpi-g" style="cursor:pointer;" onclick="showDrawer('collections')">
+    <span style="font-size:20px;">💰</span><div class="kv">₦{{ "{:,.0f}".format(total_collections) }}</div>
+    <div class="kl">Collections <span style="opacity:.6;font-size:9px;">▼ details</span></div>
+  </div>
+  <div class="kpi kpi-b" style="cursor:pointer;" onclick="showDrawer('op_cash')">
+    <span style="font-size:20px;">🏦</span><div class="kv">₦{{ "{:,.0f}".format(total_operating_cash) }}</div>
+    <div class="kl">Op. Cash Given <span style="opacity:.6;font-size:9px;">▼ details</span></div>
+  </div>
+  <div class="kpi kpi-r" style="cursor:pointer;" onclick="showDrawer('expenses')">
+    <span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div>
+    <div class="kl">Agent Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
+  </div>
   <div class="kpi kpi-t"><span style="font-size:20px;">↩️</span><div class="kv">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div><div class="kl">Op. Cash Returned</div></div>
   <div class="kpi {% if operating_balance >= 0 %}kpi-g{% else %}kpi-r{% endif %}"><span style="font-size:20px;">⚖️</span><div class="kv">₦{{ "{:,.0f}".format(operating_balance) }}</div><div class="kl">Op. Balance</div></div>
   {% if user and user.role == "ADMIN" %}
-  <div class="kpi kpi-a"><span style="font-size:20px;">🏢</span><div class="kv">₦{{ "{:,.0f}".format(total_office_expenses) }}</div><div class="kl">Office Expenses</div></div>
+  <div class="kpi kpi-a" style="cursor:pointer;" onclick="showDrawer('office')">
+    <span style="font-size:20px;">🏢</span><div class="kv">₦{{ "{:,.0f}".format(total_office_expenses) }}</div>
+    <div class="kl">Office Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
+  </div>
   {% endif %}
 </div>
+
+<!-- Detail Drawer -->
+<div id="detail-drawer" style="display:none;margin-bottom:20px;">
+  <div class="card" style="border-top:3px solid var(--accent);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <span id="drawer-title" class="badge b-blue"></span>
+      <button onclick="closeDrawer()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;">✕</button>
+    </div>
+    <div style="overflow-x:auto;">
+      <table id="drawer-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            {% if user and user.role == "ADMIN" %}<th>Agent</th>{% endif %}
+            <th style="text-align:right;">Amount</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="drawer-body"></tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--border);font-weight:800;">
+            <td {% if user and user.role == "ADMIN" %}colspan="2"{% endif %}>Total</td>
+            <td style="text-align:right;color:#4ade80;" id="drawer-total"></td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div id="drawer-empty" style="display:none;text-align:center;padding:30px;color:var(--muted);">No entries for this period.</div>
+  </div>
+</div>
+
+<script>
+const _data = {
+  expenses:    {{ expense_entries    | tojson }},
+  collections: {{ collection_entries | tojson }},
+  op_cash:     {{ op_cash_entries    | tojson }},
+  office:      {{ office_entries     | tojson }},
+};
+const _titles = {
+  expenses: '📤 Agent Expenses', collections: '💰 Collections',
+  op_cash: '🏦 Operating Cash Given', office: '🏢 Office Expenses'
+};
+const isAdmin = {{ 'true' if user and user.role in ('ADMIN','SUPERVISOR') else 'false' }};
+const fmt = n => '₦' + parseFloat(n).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+function showDrawer(kind) {
+  const entries = _data[kind] || [];
+  const title   = _titles[kind] || kind;
+  document.getElementById('drawer-title').textContent = title;
+  const body = document.getElementById('drawer-body');
+  body.innerHTML = '';
+  let total = 0;
+  entries.forEach(e => {
+    total += e.amount;
+    body.innerHTML += `<tr>
+      <td style="color:var(--muted);white-space:nowrap;">${e.date}</td>
+      ${isAdmin ? `<td style="font-size:12px;">${e.agent}</td>` : ''}
+      <td style="text-align:right;font-weight:700;color:#f87171;">−${fmt(e.amount)}</td>
+      <td style="color:var(--muted);font-size:12px;">${e.note}</td>
+    </tr>`;
+  });
+  document.getElementById('drawer-total').textContent = fmt(total);
+  document.getElementById('drawer-empty').style.display = entries.length === 0 ? 'block' : 'none';
+  document.getElementById('drawer-table').style.display = entries.length === 0 ? 'none' : '';
+  document.getElementById('detail-drawer').style.display = 'block';
+  document.getElementById('detail-drawer').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+function closeDrawer() {
+  document.getElementById('detail-drawer').style.display = 'none';
+}
+</script>
 
 {% if user and user.role == "ADMIN" %}
 <div class="remit">

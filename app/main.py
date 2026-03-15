@@ -2069,6 +2069,30 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     remittance = float(total_collections) - float(total_office_expenses)
     net_position = remittance + operating_balance
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
+
+    # Fetch individual expense entries for the drill-down modal
+    def _entries(kind_list):
+        stmt = select(CashEntry).where(CashEntry.kind.in_(kind_list)).where(_branch_filter())
+        if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
+        if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
+        if selected_agent_id: stmt = stmt.where(CashEntry.agent_id == selected_agent_id)
+        return db.execute(stmt.order_by(desc(CashEntry.created_at)).limit(200)).scalars().all()
+
+    # Build serialisable entry dicts for JSON embedding in template
+    def _entry_list(kind_list):
+        umap = {u.id: (u.full_name or u.username) for u in agents} if agents else {}
+        return [
+            {"date": e.created_at.strftime("%d %b %Y") if e.created_at else "—",
+             "amount": float(e.amount), "note": e.note or "—",
+             "agent": umap.get(e.agent_id, "—"), "kind": e.kind}
+            for e in _entries(kind_list)
+        ]
+
+    expense_entries     = _entry_list(["EXPENSE"])
+    collection_entries  = _entry_list(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"])
+    op_cash_entries     = _entry_list(["OPERATING_CASH"])
+    office_entries      = _entry_list(["OFFICE_EXPENSE"])
+
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("cash_dashboard.html", {
         "request": request, "user": user, "rows": rows,
@@ -2077,6 +2101,10 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         "operating_balance": float(operating_balance), "total_office_expenses": float(total_office_expenses),
         "remittance": float(remittance), "net_position": float(net_position),
         "agents": agents, "agent_id": agent_id,
+        "expense_entries": expense_entries,
+        "collection_entries": collection_entries,
+        "op_cash_entries": op_cash_entries,
+        "office_entries": office_entries,
         "preset": preset_norm or (preset or ""),
         "start_date": sd.isoformat() if sd else "",
         "end_date": ed.isoformat() if ed else "",
