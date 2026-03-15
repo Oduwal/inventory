@@ -2595,12 +2595,24 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
         for r in merchant_receipts:
             r["item_names"] = ", ".join(r["items"])
         merchant_receipts_count = len(merchant_receipts)
+    # Count sent (from this branch) and received (to this branch) — for cards
+    if is_supervisor(user):
+        sent_count     = sum(1 for t in transfers if t.status in ("OUT_FOR_DELIVERY", "RECEIVED"))
+        received_count = sum(1 for t in transfers if t.status == "RECEIVED")
+    elif is_agent(user):
+        sent_count     = sum(1 for t in transfers if t.delegated_agent_id == user.id and t.status in ("OUT_FOR_DELIVERY", "RECEIVED"))
+        received_count = sum(1 for t in transfers if t.delegated_receiver_id == user.id and t.status == "RECEIVED")
+    else:
+        sent_count     = sum(1 for t in transfers if t.from_branch_id == user.branch_id and t.status in ("OUT_FOR_DELIVERY", "RECEIVED"))
+        received_count = sum(1 for t in transfers if t.to_branch_id == user.branch_id and t.status == "RECEIVED")
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
         "merchant_receipts": merchant_receipts,
-        "merchant_receipts_count": merchant_receipts_count, "csrf_token": csrf_token,
+        "merchant_receipts_count": merchant_receipts_count,
+        "sent_count": sent_count, "received_count": received_count,
+        "csrf_token": csrf_token,
     })
 
 

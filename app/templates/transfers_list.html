@@ -29,14 +29,14 @@
     <div style="font-size:28px;font-weight:800;color:#fbbf24;">{{ pending|length }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">⏳ Pending</div>
   </div>
-  <div class="card filter-card" data-filter="OUT_FOR_DELIVERY" onclick="filterTable('OUT_FOR_DELIVERY')"
+  <div class="card filter-card" data-filter="SENT" onclick="filterTable('SENT')"
        style="text-align:center;border-top:3px solid #4f7cff;padding:14px 16px;cursor:pointer;">
-    <div style="font-size:28px;font-weight:800;color:#7fa8ff;">{{ in_transit|length }}</div>
+    <div style="font-size:28px;font-weight:800;color:#7fa8ff;">{{ sent_count }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">🚚 Sent</div>
   </div>
   <div class="card filter-card" data-filter="RECEIVED" onclick="filterTable('RECEIVED')"
        style="text-align:center;border-top:3px solid #22c55e;padding:14px 16px;cursor:pointer;">
-    <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ received|length }}</div>
+    <div style="font-size:28px;font-weight:800;color:#4ade80;">{{ received_count }}</div>
     <div style="color:var(--muted);font-size:11px;margin-top:4px;">✓ Received</div>
   </div>
   <div class="card filter-card" data-filter="CANCELLED" onclick="filterTable('CANCELLED')"
@@ -105,7 +105,8 @@
       </thead>
       <tbody>
         {% for t in transfers %}
-        <tr data-status="{{ t.status }}" data-date="{{ t.created_at.strftime('%Y-%m-%d') }}">
+        <tr data-status="{{ t.status }}" data-date="{{ t.created_at.strftime('%Y-%m-%d') }}"
+            data-side="{% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}sender{% else %}receiver{% endif %}">
           <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
           <td style="font-weight:600;">{{ t.from_branch.name }}</td>
           <td style="font-weight:600;">{{ t.to_branch.name }}</td>
@@ -118,7 +119,11 @@
             {% if t.status == "CANCELLED" %}
               <span class="badge b-red">✕ Cancelled</span>
             {% elif t.status == "RECEIVED" %}
-              <span class="badge b-green">✓ Received</span>
+              {% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}
+                <span class="badge b-green">✓ Sent</span>
+              {% else %}
+                <span class="badge b-green">✓ Received</span>
+              {% endif %}
             {% elif t.status == "OUT_FOR_DELIVERY" %}
               {% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}
                 <span class="badge b-blue">🚚 Sent</span>
@@ -169,6 +174,9 @@
 <script>
 let _activeStatus = 'all';
 
+// Maps DB status values that qualify as "sent" from sender perspective
+const SENT_STATUSES = ['OUT_FOR_DELIVERY', 'RECEIVED'];
+
 function filterTable(status) {
   _activeStatus = status;
   document.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
@@ -176,7 +184,7 @@ function filterTable(status) {
   if (clicked) clicked.classList.add('active');
   const titles = {
     'all': 'All Transfers', 'PENDING': 'Pending Transfers',
-    'OUT_FOR_DELIVERY': 'Sent Transfers', 'RECEIVED': 'Received Transfers',
+    'SENT': 'Sent Transfers', 'RECEIVED': 'Received Transfers',
     'CANCELLED': 'Cancelled Transfers', 'MERCHANT': 'Merchant Receipts'
   };
   document.getElementById('table-title').textContent = titles[status] || 'All Transfers';
@@ -190,10 +198,20 @@ function applyFilters() {
   let visible = 0;
   rows.forEach(row => {
     const rowStatus = row.dataset.status;
+    const rowSide   = row.dataset.side;   // 'sender', 'receiver', or 'merchant'
     const rowDate   = row.dataset.date;
-    const statusOk  = _activeStatus === 'all' || rowStatus === _activeStatus;
-    const fromOk    = !from || rowDate >= from;
-    const toOk      = !to   || rowDate <= to;
+    let statusOk = false;
+    if (_activeStatus === 'all') {
+      statusOk = true;
+    } else if (_activeStatus === 'SENT') {
+      statusOk = SENT_STATUSES.includes(rowStatus) && rowSide === 'sender';
+    } else if (_activeStatus === 'RECEIVED') {
+      statusOk = rowStatus === 'RECEIVED' && rowSide === 'receiver';
+    } else {
+      statusOk = rowStatus === _activeStatus;
+    }
+    const fromOk = !from || rowDate >= from;
+    const toOk   = !to   || rowDate <= to;
     const show = statusOk && fromOk && toOk;
     row.style.display = show ? '' : 'none';
     if (show) visible++;
