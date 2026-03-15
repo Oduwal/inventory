@@ -70,7 +70,13 @@
         {% endif %}
       {% endif %}
     </div>
+    {% if user and user.role == "SUPERVISOR" and view != "combined" %}
+    {# Per-branch: count unique names #}
+    {% set unique_names = rows | map(attribute='0') | map(attribute='name') | list | unique | list %}
+    <span style="color:var(--muted);font-size:12px;">{{ unique_names|length }} unique item{% if unique_names|length != 1 %}s{% endif %} ({{ rows|length }} records)</span>
+    {% else %}
     <span style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} item{% if rows|length != 1 %}s{% endif %}</span>
+    {% endif %}
   </div>
 
   <div style="overflow-x:auto;">

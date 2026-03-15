@@ -850,7 +850,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     chart_days_set = [str(r.day) for r in daily_chart]
 
     # All-branch inventory & agent totals for the enhanced overview
-    all_items_count = db.scalar(select(func.count(Item.id))) or 0
+    all_items_count = db.scalar(select(func.count(func.distinct(func.lower(Item.name))))) or 0
     all_low_items = [(item, stock) for (item, stock) in get_low_stock(db)]
     all_low_stock_count = len(all_low_items)
     all_agents_count = db.scalar(select(func.count(User.id)).where(User.role == "AGENT")) or 0
