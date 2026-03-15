@@ -2006,7 +2006,12 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if ed: end_dt = datetime.combine(ed, datetime.min.time()) + timedelta(days=1)
     selected_agent_id = None
     if is_admin(user):
-        if (agent_id or "").isdigit(): selected_agent_id = int(agent_id)
+        if agent_id == "all":
+            selected_agent_id = None  # show all agents
+        elif (agent_id or "").isdigit():
+            selected_agent_id = int(agent_id)
+        else:
+            selected_agent_id = user.id  # default: admin sees own entries
     else:
         selected_agent_id = user.id
     # Branch agent IDs — used to catch entries saved with NULL branch_id
@@ -2173,8 +2178,26 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
             items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la if la > 0 else q * sp})
     _ce_branch = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
-    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch).group_by(CashEntry.agent_id)).all()}
+    # Get all agent IDs for this branch (role=AGENT only, not admin)
+    branch_agent_ids = [u.id for u in db.execute(
+        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
+    ).scalars().all()] if not is_supervisor(user) else []
+    # agent_exp_map: only AGENT-role users' expenses
+    _agent_ce_filter = (CashEntry.agent_id.in_(branch_agent_ids)) if branch_agent_ids else (CashEntry.agent_id == -1)
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt).where(_ce_branch)
+        .where(_agent_ce_filter if not is_supervisor(user) else True)
+        .group_by(CashEntry.agent_id)
+    ).all()}
+    op_cash_map = {int(aid): float(t) for aid, t in db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt)
+        .where(CashEntry.created_at <= end_dt).where(_ce_branch)
+        .where(_agent_ce_filter if not is_supervisor(user) else True)
+        .group_by(CashEntry.agent_id)
+    ).all()}
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_branch)) or 0)
     waybill_entries_raw = db.execute(
         select(CashEntry.amount, CashEntry.note, CashEntry.created_at)
@@ -2186,23 +2209,11 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     ).all()
     waybill_entries = [{"amount": float(r[0]), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
     waybill_total = sum(e["amount"] for e in waybill_entries)
-    # Include admin's own EXPENSE entries (e.g. transfer expenses recorded as EXPENSE by admin)
-    admin_exp_map = {int(aid): float(t) for aid, t in db.execute(
-        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt)
-        .where(CashEntry.created_at <= end_dt).where(_ce_branch)
-        .group_by(CashEntry.agent_id)
-    ).all()}
-    # Merge admin entries into agent_exp_map
-    for aid, amt in admin_exp_map.items():
-        agent_exp_map[aid] = agent_exp_map.get(aid, 0.0) + amt
-
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
     if all_agent_ids:
         users_map = {int(u.id): u for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
-        uname = {uid: (f"👤 {u.full_name or u.username} (Admin)" if (u.role or "").upper() == "ADMIN" else (u.full_name or u.username))
-                 for uid, u in users_map.items()}
+        uname = {uid: (u.full_name or u.username) for uid, u in users_map.items()}
     delivery_rows = []
     grand_total = 0.0
     for idx, d in enumerate(deliveries, 1):
@@ -2542,28 +2553,30 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
     else:
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
-    # Fetch all merchant transactions, group by reference in Python
-    mr_tx_stmt = (
-        select(Transaction.reference, Transaction.branch_id, Transaction.created_at,
-               Transaction.quantity, Item.name)
-        .join(Item, Item.id == Transaction.item_id)
-        .where(Transaction.reference.like("MERCHANT:%"))
-        .order_by(Transaction.created_at.desc())
-    )
-    if not is_supervisor(user):
-        mr_tx_stmt = mr_tx_stmt.where(Transaction.branch_id == user.branch_id)
-    mr_tx_rows = db.execute(mr_tx_stmt).all()
-    # Group by reference
-    mr_groups: dict = {}
-    for ref, br_id, created, qty, iname in mr_tx_rows:
-        if ref not in mr_groups:
-            mr_groups[ref] = {"reference": ref, "branch_id": br_id, "created_at": created,
-                               "items": [], "merchant_name": str(ref).replace("MERCHANT:", "").strip()}
-        mr_groups[ref]["items"].append(f"{iname} x{qty}")
-    merchant_receipts = sorted(mr_groups.values(), key=lambda r: r["created_at"], reverse=True)
-    for r in merchant_receipts:
-        r["item_names"] = ", ".join(r["items"])
-    merchant_receipts_count = len(merchant_receipts)
+    # Fetch merchant receipts — admin and supervisor only
+    merchant_receipts = []
+    merchant_receipts_count = 0
+    if is_admin(user) or is_supervisor(user):
+        mr_tx_stmt = (
+            select(Transaction.reference, Transaction.branch_id, Transaction.created_at,
+                   Transaction.quantity, Item.name)
+            .join(Item, Item.id == Transaction.item_id)
+            .where(Transaction.reference.like("MERCHANT:%"))
+            .order_by(Transaction.created_at.desc())
+        )
+        if not is_supervisor(user):
+            mr_tx_stmt = mr_tx_stmt.where(Transaction.branch_id == user.branch_id)
+        mr_tx_rows = db.execute(mr_tx_stmt).all()
+        mr_groups: dict = {}
+        for ref, br_id, created, qty, iname in mr_tx_rows:
+            if ref not in mr_groups:
+                mr_groups[ref] = {"reference": ref, "branch_id": br_id, "created_at": created,
+                                   "items": [], "merchant_name": str(ref).replace("MERCHANT:", "").strip()}
+            mr_groups[ref]["items"].append(f"{iname} x{qty}")
+        merchant_receipts = sorted(mr_groups.values(), key=lambda r: r["created_at"], reverse=True)
+        for r in merchant_receipts:
+            r["item_names"] = ", ".join(r["items"])
+        merchant_receipts_count = len(merchant_receipts)
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,

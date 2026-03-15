@@ -58,11 +58,12 @@
     </div>
     {% if user and user.role == "ADMIN" %}
     <div>
-      <label>Agent</label>
+      <label>View</label>
       <select name="agent_id" style="width:auto;">
-        <option value="" {% if not agent_id %}selected{% endif %}>All</option>
+        <option value="" {% if not agent_id %}selected{% endif %}>My entries</option>
+        <option value="all" {% if agent_id == "all" %}selected{% endif %}>All agents</option>
         {% for a in agents %}
-        <option value="{{ a.id }}" {% if agent_id and (agent_id|int == a.id) %}selected{% endif %}>{{ a.username }}</option>
+        <option value="{{ a.id }}" {% if agent_id and agent_id != "all" and (agent_id|int == a.id) %}selected{% endif %}>{{ a.full_name or a.username }}</option>
         {% endfor %}
       </select>
     </div>

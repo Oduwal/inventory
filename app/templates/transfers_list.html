@@ -94,7 +94,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
     <div style="font-weight:700;" id="table-title">All Transfers</div>
   </div>
-  {% if transfers %}
+  {% if transfers or merchant_receipts %}
   <div style="overflow-x:auto;">
     <table id="transfers-table">
       <thead>
