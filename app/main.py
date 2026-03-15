@@ -2676,9 +2676,7 @@ async def transfer_create(
     db.flush()
     for item_id, qty in zip(item_ids, quantities):
         db.add(StockTransferItem(transfer_id=transfer.id, item_id=item_id, quantity=qty))
-    for item_id, qty in zip(item_ids, quantities):
-        db.add(Transaction(branch_id=user.branch_id, item_id=item_id, type="OUT", quantity=qty,
-                           reference=f"TRANSFER #{transfer.id}", note=f"Stock transfer to branch ID {to_branch_id}"))
+    # Stock is NOT deducted here — deducted when agent/admin marks as packed & sent
     db.commit()
     return redirect(f"/transfers/{transfer.id}")
 
@@ -2784,6 +2782,21 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
     # Require expense to be recorded before marking as sent
     if not transfer.expense_amount or float(transfer.expense_amount) <= 0:
         return redirect(f"/transfers/{transfer_id}?error=Please+record+your+sending+expenses+before+marking+as+sent")
+    # Deduct stock from sender branch — only if not already deducted (guard against old transfers)
+    already_deducted = db.scalar(
+        select(func.count(Transaction.id))
+        .where(Transaction.reference == f"TRANSFER #{transfer.id}")
+        .where(Transaction.type == "OUT")
+        .where(Transaction.branch_id == transfer.from_branch_id)
+    ) or 0
+    if not already_deducted:
+        for line in transfer.items:
+            db.add(Transaction(
+                branch_id=transfer.from_branch_id, item_id=line.item_id,
+                type="OUT", quantity=line.quantity,
+                reference=f"TRANSFER #{transfer.id}",
+                note=f"Stock sent to {transfer.to_branch.name}"
+            ))
     transfer.packed_by_id = user.id
     transfer.packed_at = datetime.utcnow()
     transfer.status = "OUT_FOR_DELIVERY"
@@ -2950,9 +2963,13 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
         return HTMLResponse("Forbidden", status_code=403)
     if transfer.status in ("RECEIVED", "CANCELLED"):
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+already+{transfer.status}")
-    for line in transfer.items:
-        db.add(Transaction(branch_id=transfer.from_branch_id, item_id=line.item_id, type="IN", quantity=line.quantity,
-                           reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"))
+    # Only return stock if it was already deducted (i.e. packed/sent)
+    if transfer.status == "OUT_FOR_DELIVERY":
+        for line in transfer.items:
+            db.add(Transaction(
+                branch_id=transfer.from_branch_id, item_id=line.item_id, type="IN", quantity=line.quantity,
+                reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"
+            ))
     # Reverse send-side expense cash entry if recorded
     if transfer.expense_amount and transfer.expense_amount > 0:
         exp_kind = "OFFICE_EXPENSE" if (transfer.expense_kind == "COLLECTION_DEDUCTION" and transfer.delegated_agent_id is None) else "EXPENSE"
