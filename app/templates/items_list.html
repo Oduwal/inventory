@@ -15,7 +15,36 @@
 
 {% block content %}
 
-<!-- Search -->
+<!-- Supervisor filters -->
+{% if user and user.role == "SUPERVISOR" %}
+<div class="card" style="margin-bottom:16px;">
+  <form method="get" action="/items" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="flex:1;min-width:200px;">
+      <label>Search</label>
+      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search by name or category…" />
+    </div>
+    <div>
+      <label>View Mode</label>
+      <select name="view" onchange="this.form.submit()" style="width:auto;">
+        <option value="combined" {% if view == "combined" %}selected{% endif %}>All Branches Combined</option>
+        <option value="branch"   {% if view == "branch"   %}selected{% endif %}>Per Branch</option>
+      </select>
+    </div>
+    <div>
+      <label>Branch</label>
+      <select name="branch_filter" onchange="this.form.submit()" style="width:auto;">
+        <option value="">All Branches</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}" {% if branch_filter and branch_filter|int == b.id %}selected{% endif %}>{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Apply</button></div>
+    <div><label>&nbsp;</label><a class="btnGhost" href="/items">Reset</a></div>
+  </form>
+</div>
+{% else %}
+<!-- Admin/Agent search -->
 <div class="card" style="margin-bottom:16px;">
   <form method="get" action="/items" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
     <div style="flex:1;min-width:220px;">
@@ -26,20 +55,87 @@
     <div><label>&nbsp;</label><a class="btnGhost" href="/items">Reset</a></div>
   </form>
 </div>
+{% endif %}
 
 <!-- Items table -->
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-    <span class="badge b-purple">ITEMS</span>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="badge b-purple">ITEMS</span>
+      {% if user and user.role == "SUPERVISOR" %}
+        {% if view == "combined" %}
+        <span class="badge b-blue">Combined View</span>
+        {% else %}
+        <span class="badge b-teal">Per-Branch View</span>
+        {% endif %}
+      {% endif %}
+    </div>
     <span style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} item{% if rows|length != 1 %}s{% endif %}</span>
   </div>
 
   <div style="overflow-x:auto;">
+
+    {# ── SUPERVISOR COMBINED VIEW ── #}
+    {% if user and user.role == "SUPERVISOR" and view == "combined" %}
     <table>
       <thead>
         <tr>
           <th>Name</th>
-          <th>SKU</th>
+          <th>Category</th>
+          <th>Unit</th>
+          <th style="text-align:right;">Total Stock</th>
+          <th>Branch Breakdown</th>
+          <th style="text-align:right;">Cost</th>
+          <th style="text-align:right;">Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if rows and rows|length > 0 %}
+        {% for r in rows %}
+        <tr>
+          <td style="font-weight:700;">{{ r.name }}</td>
+          <td>
+            {% if r.category %}
+            <span class="badge b-blue" style="font-size:11px;">{{ r.category }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="color:var(--muted);">{{ r.unit or "pcs" }}</td>
+          <td style="text-align:right;">
+            {% set rl = r.reorder_level|int %}
+            {% if r.total_stock <= 0 %}
+              <span class="badge b-red" style="font-size:12px;font-weight:800;">{{ r.total_stock }}</span>
+            {% elif r.total_stock <= rl %}
+              <span class="badge b-yellow" style="font-size:12px;font-weight:800;">{{ r.total_stock }}</span>
+            {% else %}
+              <span class="badge b-green" style="font-size:12px;font-weight:800;">{{ r.total_stock }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <div style="display:flex;flex-wrap:wrap;gap:4px;">
+              {% for bs in r.branch_stocks %}
+              <span style="font-size:11px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:6px;padding:2px 8px;color:var(--muted);">
+                {{ bs.branch }}: <strong style="color:var(--text);">{{ bs.stock }}</strong>
+              </span>
+              {% endfor %}
+            </div>
+          </td>
+          <td style="text-align:right;color:var(--muted);">₦{{ '%.0f'|format(r.cost_price|float) }}</td>
+          <td style="text-align:right;font-weight:600;">₦{{ '%.0f'|format(r.selling_price|float) }}</td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No items found.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    {# ── NORMAL / PER-BRANCH VIEW ── #}
+    {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          {% if user and user.role == "SUPERVISOR" %}<th>Branch</th>{% endif %}
           <th>Category</th>
           <th>Unit</th>
           <th style="text-align:right;">Stock</th>
@@ -54,11 +150,11 @@
         {% for item, stock in rows %}
         <tr>
           <td>
-            <a href="/items/{{ item.id }}" style="font-weight:700;color:var(--text);">
-              {{ item.name }}
-            </a>
+            <a href="/items/{{ item.id }}" style="font-weight:700;color:var(--text);">{{ item.name }}</a>
           </td>
-          <td style="color:var(--muted);">{{ item.sku or "—" }}</td>
+          {% if user and user.role == "SUPERVISOR" %}
+          <td style="color:var(--muted);font-size:12px;">{{ item.branch.name if item.branch else "—" }}</td>
+          {% endif %}
           <td>
             {% if item.category %}
             <span class="badge b-blue" style="font-size:11px;">{{ item.category }}</span>
@@ -68,11 +164,11 @@
           <td style="text-align:right;">
             {% set rl = (item.reorder_level or 0)|int %}
             {% if stock|int <= 0 %}
-            <span class="badge b-red">{{ stock }}</span>
+              <span class="badge b-red">{{ stock }}</span>
             {% elif stock|int <= rl %}
-            <span class="badge b-yellow">{{ stock }}</span>
+              <span class="badge b-yellow">{{ stock }}</span>
             {% else %}
-            <span class="badge b-green">{{ stock }}</span>
+              <span class="badge b-green">{{ stock }}</span>
             {% endif %}
           </td>
           <td style="text-align:right;color:var(--muted);">{{ item.reorder_level or 0 }}</td>
@@ -95,6 +191,8 @@
         {% endif %}
       </tbody>
     </table>
+    {% endif %}
+
   </div>
 </div>
 {% endblock %}

@@ -1001,24 +1001,61 @@ def forgot_password_page(request: Request):
 
 
 @app.get("/items", response_class=HTMLResponse)
-def items_list(request: Request, q: str = "", db: Session = Depends(get_db)):
+def items_list(request: Request, q: str = "", view: str = "combined", branch_filter: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
-    all_rows = get_items_with_stock(db)
-    # Supervisor with no branch selected sees all branches
-    if is_supervisor(user) and not branch_id:
-        rows = list(all_rows)
+    all_rows = list(get_items_with_stock(db))
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
+
+    if is_supervisor(user):
+        # Apply branch filter if selected
+        if branch_filter and branch_filter.isdigit():
+            filtered_rows = [(item, stock) for (item, stock) in all_rows if item.branch_id == int(branch_filter)]
+        else:
+            filtered_rows = all_rows
+
+        if view == "combined":
+            # Aggregate: merge items with same name across branches
+            combined: dict = {}
+            for item, stock in filtered_rows:
+                key = (item.name or "").strip().lower()
+                if key not in combined:
+                    combined[key] = {
+                        "name": item.name, "category": item.category, "unit": item.unit,
+                        "reorder_level": item.reorder_level or 0,
+                        "cost_price": float(item.cost_price or 0),
+                        "selling_price": float(item.selling_price or 0),
+                        "total_stock": 0, "branch_stocks": [], "item_id": item.id,
+                    }
+                combined[key]["total_stock"] += int(stock or 0)
+                branch_name = item.branch.name if item.branch else f"Branch {item.branch_id}"
+                combined[key]["branch_stocks"].append({"branch": branch_name, "stock": int(stock or 0)})
+            rows = list(combined.values())
+            # Apply search
+            q_lower = q.strip().lower()
+            if q_lower:
+                rows = [r for r in rows if q_lower in (r["name"] or "").lower() or q_lower in (r["category"] or "").lower()]
+        else:
+            # Per-branch view
+            rows = filtered_rows
+            q_lower = q.strip().lower()
+            if q_lower:
+                rows = [(item, stock) for (item, stock) in rows
+                        if q_lower in (item.name or "").lower() or q_lower in (item.category or "").lower()]
     else:
         rows = [(item, stock) for (item, stock) in all_rows if item.branch_id == branch_id]
-    q_lower = q.strip().lower()
-    if q_lower:
-        rows = [(item, stock) for (item, stock) in rows
-                if q_lower in (item.name or "").lower() or q_lower in (item.category or "").lower()]
+        q_lower = q.strip().lower()
+        if q_lower:
+            rows = [(item, stock) for (item, stock) in rows
+                    if q_lower in (item.name or "").lower() or q_lower in (item.category or "").lower()]
+        view = "branch"
+
     return templates.TemplateResponse("items_list.html", {
         "request": request, "rows": rows, "q": q, "user": user, "active": "items",
+        "view": view, "branches": branches, "branch_filter": branch_filter,
     })
 
 
