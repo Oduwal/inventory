@@ -866,6 +866,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
 
     # Daily expenses across all branches for the chart
+    # Exclude "waybill - from ..." entries (receiver side) to avoid double-counting transfer expenses
     _range_start = start_dt or datetime.utcnow() - timedelta(days=30)
     _range_end   = end_dt   or datetime.utcnow()
     exp_by_day: dict = {}
@@ -873,16 +874,19 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
         .where(CashEntry.created_at >= _range_start)
         .where(CashEntry.created_at <= _range_end)
+        .where(func.lower(func.coalesce(CashEntry.note, "")).notlike("waybill - from %"))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
             exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
-    # Build chart days from UNION of delivery days and expense days so neither is missed
-    delivery_days = {str(r.day) for r in daily_chart}
+    # Normalise day keys: strip time component so "2026-03-10 00:00:00" → "2026-03-10"
+    def _day_key(v):
+        s = str(v)
+        return s[:10]  # always "YYYY-MM-DD"
+    delivery_days = {_day_key(r.day) for r in daily_chart}
     expense_days  = set(exp_by_day.keys())
     all_chart_days = sorted(delivery_days | expense_days)
-    # Fill delivery counts for days that only have expenses
-    delivery_cnt = {str(r.day): int(r.cnt) for r in daily_chart}
+    delivery_cnt = {_day_key(r.day): int(r.cnt) for r in daily_chart}
     chart_days_set = all_chart_days
 
     # All-branch inventory & agent totals for the enhanced overview
