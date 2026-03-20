@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Parse WhatsApp Order{% endblock %}
 {% block page_title %}WhatsApp Order Parser{% endblock %}
-{% block page_subtitle %}Paste a WhatsApp chat and AI will extract the order details automatically{% endblock %}
+{% block page_subtitle %}Paste a WhatsApp chat and AI will extract all customer orders automatically{% endblock %}
 {% set active = "parse_order" %}
 
 {% block top_right %}
@@ -18,176 +18,96 @@
 {% endblock %}
 
 {% block content %}
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.order-card { border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; background:rgba(255,255,255,.03); }
+.order-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px; }
+.item-row-wrap { display:grid; grid-template-columns:1fr 80px 110px 32px; gap:8px; align-items:center; margin-bottom:8px; }
+</style>
 
-{% if user and user.role == "SUPERVISOR" and not selected_branch_id %}
-<div class="alert alert-danger">Please select a branch above to load its item catalog.</div>
-{% endif %}
-
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
-
-  <!-- LEFT: Paste box -->
-  <div>
-    <div class="card" style="margin-bottom:16px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <span class="badge b-green">💬 Step 1 — Paste Chat</span>
-        {% if user and user.role == "SUPERVISOR" %}
-        <span class="badge b-blue">{{ branches | selectattr('id','eq', selected_branch_id) | map(attribute='name') | first | default('—') }}</span>
-        {% endif %}
-      </div>
-      <label>WhatsApp Message</label>
-      <textarea id="wa-input" rows="12"
-        placeholder="Paste the WhatsApp message here...
-
-Example:
-Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. My name is Chidi Obi, I'm at 14 Adeola Street Lagos. Call me on 08012345678"
-        style="resize:vertical;font-size:13px;line-height:1.6;"></textarea>
-      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
-        <button class="btnPrimary" onclick="parseOrder()" id="parse-btn">
-          ✨ Parse Order
-        </button>
-        <button class="btnGhost" onclick="clearAll()">Clear</button>
-      </div>
-      <div id="parse-error" style="display:none;margin-top:10px;" class="alert alert-danger"></div>
-    </div>
-
-    <div id="parse-status" style="display:none;" class="card">
-      <div style="text-align:center;padding:20px;">
-        <div style="font-size:28px;margin-bottom:10px;display:inline-block;animation:spin 1s linear infinite;">⚙️</div>
-        <div style="color:var(--muted);font-size:13px;">AI is reading the message...</div>
-      </div>
-    </div>
+<!-- Step 1: Paste -->
+<div class="card" style="margin-bottom:20px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+    <span class="badge b-green">💬 Step 1 — Paste WhatsApp Chat</span>
+    {% if user and user.role == "SUPERVISOR" %}
+    <span class="badge b-blue">{{ branches | selectattr('id','eq', selected_branch_id) | map(attribute='name') | first | default('Select branch above') }}</span>
+    {% endif %}
   </div>
+  <textarea id="wa-input" rows="10" style="resize:vertical;font-size:13px;line-height:1.6;"
+    placeholder="Paste the full WhatsApp conversation here. The AI will detect each separate customer order automatically.
 
-  <!-- RIGHT: Order form pre-filled by AI -->
-  <div id="order-form-wrap" style="display:none;">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
-        <span class="badge b-blue">📋 Step 2 — Review &amp; Confirm</span>
-        <span id="confidence-badge" style="font-size:12px;"></span>
-      </div>
-
-      <form method="post" action="/deliveries/new" id="order-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-        {# For supervisor: pass branch_id as hidden so delivery is created in the right branch #}
-        {% if user and user.role == "SUPERVISOR" %}
-        <input type="hidden" name="branch_id" value="{{ selected_branch_id }}" />
-        {% endif %}
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-          <div>
-            <label>Customer Name *</label>
-            <input type="text" name="customer_name" id="f-name" required placeholder="Full name" />
-          </div>
-          <div>
-            <label>Phone</label>
-            <input type="text" name="customer_phone" id="f-phone" placeholder="08012345678" />
-          </div>
-        </div>
-
-        <div style="margin-bottom:12px;">
-          <label>Delivery Address</label>
-          <input type="text" name="address" id="f-address" placeholder="Street, area, city" />
-        </div>
-
-        {% if user and user.role == "SUPERVISOR" %}
-        <div class="alert alert-success" style="margin-bottom:12px;font-size:12px;">
-          ℹ️ This order will be created for <strong>{{ branches | selectattr('id','eq', selected_branch_id) | map(attribute='name') | first | default('selected branch') }}</strong>. The branch admin will assign it to an agent.
-        </div>
-        {# Supervisor doesn't assign agent — admin of that branch will delegate #}
-        <input type="hidden" name="agent_id" value="" />
-        {% elif user and user.role == "ADMIN" %}
-        <div style="margin-bottom:12px;">
-          <label>Assign Agent *</label>
-          <select name="agent_id" required>
-            <option value="">— select agent —</option>
-            {% for a in agents %}
-            <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        {% endif %}
-
-        <div style="margin-bottom:12px;">
-          <label>Delivery Date</label>
-          <input type="date" name="delivery_date" id="f-date" value="{{ today }}" />
-        </div>
-
-        <div style="margin-bottom:12px;">
-          <label>Note</label>
-          <input type="text" name="note" id="f-note" placeholder="Any extra instructions..." />
-        </div>
-
-        <div style="margin-bottom:12px;">
-          <label>Items</label>
-          <div id="items-container"></div>
-          <button type="button" class="btnGhost" onclick="addItemRow()" style="margin-top:8px;font-size:12px;padding:6px 14px;">+ Add Item</button>
-        </div>
-
-        <div id="unmatched-warn" style="display:none;" class="alert alert-danger"></div>
-
-        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
-          <button type="submit" class="btnPrimary" style="flex:1;justify-content:center;">✓ Create Order</button>
-          <button type="button" class="btnGhost" onclick="resetForm()">Reset</button>
-        </div>
-      </form>
-    </div>
+Example with multiple orders:
+John: I want 2 packs of paracetamol, deliver to 5 Marina Street Lagos, 08011111111
+Sarah: Please send me 3 bottles vitamin C and 1 cream. Address: 22 Allen Avenue Ikeja. Call 08022222222
+Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
+  <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+    <button class="btnPrimary" onclick="parseOrders()" id="parse-btn">✨ Parse All Orders</button>
+    <button class="btnGhost" onclick="clearAll()">Clear</button>
   </div>
+  <div id="parse-error" style="display:none;margin-top:10px;" class="alert alert-danger"></div>
+  <div id="parse-status" style="display:none;margin-top:12px;text-align:center;padding:14px;color:var(--muted);font-size:13px;">
+    <span style="display:inline-block;animation:spin 1s linear infinite;">⚙️</span> AI is reading the messages...
+  </div>
+</div>
+
+<!-- Step 2: Order cards -->
+<div id="orders-wrap" style="display:none;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+    <span class="badge b-blue">📋 Step 2 — Review &amp; Create Orders</span>
+    <span id="orders-count" style="color:var(--muted);font-size:13px;"></span>
+  </div>
+  <div id="orders-container"></div>
 </div>
 
 <!-- Hidden item row template -->
 <template id="item-row-tpl">
-  <div class="item-row-wrap" style="display:grid;grid-template-columns:1fr 80px 110px 32px;gap:8px;align-items:center;margin-bottom:8px;">
+  <div class="item-row-wrap">
     <select name="item_id" required style="margin:0;">
       <option value="">— select item —</option>
       {% for i in items %}
       <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}">{{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}</option>
       {% endfor %}
     </select>
-    <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" oninput="recalcRow(this)" />
+    <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" />
     <input type="number" name="line_amount" step="0.01" style="margin:0;" placeholder="₦ Amount" />
     <button type="button" onclick="this.closest('.item-row-wrap').remove()"
-      style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:13px;line-height:1;">✕</button>
+      style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:13px;">✕</button>
   </div>
 </template>
-
-<style>
-@keyframes spin { to { transform: rotate(360deg); } }
-</style>
 
 <script>
 const ITEMS = {{ items_json | tojson }};
 const ITEMS_BY_ID = {};
 ITEMS.forEach(i => { ITEMS_BY_ID[i.id] = i; });
+const IS_SUPERVISOR = {{ 'true' if user and user.role == 'SUPERVISOR' else 'false' }};
+const SELECTED_BRANCH = {{ selected_branch_id or 0 }};
+const CSRF = {{ csrf_token | tojson }};
+const AGENTS = [{% for a in agents %}{"id":{{ a.id }},"name":{{ (a.full_name or a.username) | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
+const TODAY = "{{ today }}";
 
-function addItemRow(itemId, qty, amount) {
-  const tpl = document.getElementById('item-row-tpl').content.cloneNode(true);
-  const wrap = tpl.querySelector('.item-row-wrap');
-  const sel  = wrap.querySelector('select[name="item_id"]');
-  const qIn  = wrap.querySelector('input[name="quantity"]');
-  const aIn  = wrap.querySelector('input[name="line_amount"]');
-  if (itemId) {
-    sel.value = itemId;
-    const item = ITEMS_BY_ID[itemId];
-    if (item) {
-      qIn.value = qty || 1;
-      aIn.value = amount !== undefined ? amount : ((qty || 1) * item.price).toFixed(2);
+function extractFirstArray(str) {
+  const start = str.indexOf('[');
+  const objStart = str.indexOf('{');
+  // If no array but single object, wrap it
+  if (start === -1 || (objStart !== -1 && objStart < start)) {
+    const obj = extractFirstObject(str);
+    return obj ? [obj] : null;
+  }
+  let depth = 0;
+  for (let i = start; i < str.length; i++) {
+    if (str[i] === '[') depth++;
+    else if (str[i] === ']') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(str.slice(start, i + 1)); }
+        catch(e) { return null; }
+      }
     }
   }
-  sel.addEventListener('change', () => recalcRow(qIn));
-  document.getElementById('items-container').appendChild(tpl);
+  return null;
 }
 
-function recalcRow(qEl) {
-  const row  = qEl.closest('.item-row-wrap');
-  const sel  = row.querySelector('select[name="item_id"]');
-  const qty  = parseFloat(qEl.value) || 1;
-  const opt  = sel.options[sel.selectedIndex];
-  const price = opt ? parseFloat(opt.dataset.price || 0) : 0;
-  if (price > 0) row.querySelector('input[name="line_amount"]').value = (qty * price).toFixed(2);
-}
-
-function extractFirstJSON(str) {
-  // Find the first { and count brackets to find the matching }
+function extractFirstObject(str) {
   const start = str.indexOf('{');
   if (start === -1) return null;
   let depth = 0;
@@ -204,34 +124,45 @@ function extractFirstJSON(str) {
   return null;
 }
 
-async function parseOrder() {
+async function parseOrders() {
   const text = document.getElementById('wa-input').value.trim();
   if (!text) { showError('Please paste a WhatsApp message first.'); return; }
-
   setBusy(true);
   document.getElementById('parse-error').style.display = 'none';
   document.getElementById('parse-status').style.display = 'block';
-  document.getElementById('order-form-wrap').style.display = 'none';
+  document.getElementById('orders-wrap').style.display = 'none';
 
   const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${i.price}`).join('\n');
 
-  const prompt = `Extract order details from this WhatsApp message and return ONLY a JSON object. No explanation, no markdown, no code blocks — raw JSON only.
+  const prompt = `You are an order parser for a Nigerian logistics business. A WhatsApp message may contain MULTIPLE separate customer orders. Extract each order separately.
 
-Available products (use exact id numbers from this list):
+PRODUCT CATALOG (id|name|category|unit|price):
 ${catalog}
 
-Message to parse:
+WHATSAPP MESSAGE:
 "${text}"
 
-Required JSON format (fill every field you can find):
-{"customer_name":"full name from message or null","customer_phone":"phone number or null","address":"delivery address or null","note":"any special instructions or null","items":[{"item_id":1,"item_name":"exact product name","quantity":2,"unit_price":500.0,"matched":true}],"unmatched_items":["product name if not in catalog"],"confidence":"high"}
+Return ONLY a raw JSON array of orders — no markdown, no explanation:
+[
+  {
+    "customer_name": "string or null",
+    "customer_phone": "string or null",
+    "address": "string or null",
+    "note": "string or null",
+    "items": [
+      {"item_id": 1, "item_name": "catalog name", "quantity": 2, "unit_price": 500.0, "matched": true}
+    ],
+    "unmatched_items": [],
+    "confidence": "high"
+  }
+]
 
-Important:
-- item_id MUST be the number from the catalog list above
-- quantity must be a whole number greater than 0
-- If a product is mentioned but not in the catalog, add its name to unmatched_items
-- confidence is "high" if clear, "medium" if guessing, "low" if very unclear
-- Return ONLY the JSON, nothing else`;
+CRITICAL RULES:
+1. Each customer = one object in the array. If 5 customers, return 5 objects.
+2. Every product mentioned for each customer goes in that customer items array.
+3. item_id must be the exact number from the catalog above. If no match, set matched:false and item_id:null.
+4. quantity must be a positive whole number.
+5. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
   try {
     const res = await fetch('/parse-order/api', {
@@ -241,57 +172,126 @@ Important:
     });
     const data = await res.json();
     if (data.error) { showError(data.error); return; }
-    let raw = (data.text || '').trim();
-    // Strip markdown code blocks
-    raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-    // Extract first complete JSON object using bracket counting
-    const parsed = extractFirstJSON(raw);
-    if (!parsed) { showError('Could not extract JSON from response. Got: ' + raw.substring(0, 300)); return; }
-    fillForm(parsed);
+    let raw = (data.text || '').trim().replace(/```json/gi,'').replace(/```/g,'').trim();
+    const orders = extractFirstArray(raw);
+    if (!orders || orders.length === 0) {
+      showError('Could not extract orders. Got: ' + raw.substring(0, 300));
+      return;
+    }
+    renderOrders(orders);
   } catch(e) {
-    showError('Could not parse the message. Please try again. (' + e.message + ')');
+    showError('Error: ' + e.message);
   } finally {
     setBusy(false);
     document.getElementById('parse-status').style.display = 'none';
   }
 }
 
-function fillForm(data) {
-  document.getElementById('f-name').value    = data.customer_name  || '';
-  document.getElementById('f-phone').value   = data.customer_phone || '';
-  document.getElementById('f-address').value = data.address        || '';
-  document.getElementById('f-note').value    = data.note           || '';
+function renderOrders(orders) {
+  const container = document.getElementById('orders-container');
+  container.innerHTML = '';
+  document.getElementById('orders-count').textContent = `${orders.length} order${orders.length !== 1 ? 's' : ''} detected`;
 
-  const conf = data.confidence || 'medium';
-  const confColor = { high: '#4ade80', medium: '#fbbf24', low: '#f87171' };
-  document.getElementById('confidence-badge').innerHTML =
-    `<span style="color:${confColor[conf]}">● ${conf} confidence</span>`;
+  orders.forEach((order, idx) => {
+    const conf = order.confidence || 'medium';
+    const confColor = { high:'#4ade80', medium:'#fbbf24', low:'#f87171' }[conf] || '#8a9bc4';
+    const unmatched = order.unmatched_items || [];
 
-  document.getElementById('items-container').innerHTML = '';
-  (data.items || []).forEach(item => {
-    if (item.matched && item.item_id) {
-      addItemRow(item.item_id, item.quantity, (item.quantity * (item.unit_price || 0)).toFixed(2));
+    const card = document.createElement('div');
+    card.className = 'order-card';
+    card.id = `order-card-${idx}`;
+
+    // Agent dropdown or supervisor note
+    const agentField = IS_SUPERVISOR
+      ? `<input type="hidden" name="branch_id" value="${SELECTED_BRANCH}" /><div style="font-size:12px;color:var(--muted);margin-bottom:10px;">ℹ️ Will be created for selected branch — admin will assign agent.</div>`
+      : `<div style="margin-bottom:10px;"><label>Assign Agent *</label><select name="agent_id" required style="margin-top:4px;">${AGENTS.map(a=>`<option value="${a.id}">${a.name}</option>`).join('')}</select></div>`;
+
+    card.innerHTML = `
+      <div class="order-card-header">
+        <span class="badge b-purple">Order ${idx + 1}</span>
+        <span style="font-size:11px;color:${confColor}">● ${conf} confidence</span>
+        <button type="button" onclick="removeOrder(${idx})" class="btnDanger" style="padding:4px 10px;font-size:11px;">✕ Remove</button>
+      </div>
+      ${unmatched.length ? `<div class="alert alert-danger" style="font-size:12px;margin-bottom:10px;">⚠️ Could not match: <strong>${unmatched.join(', ')}</strong></div>` : ''}
+      <form method="post" action="/deliveries/new" id="form-${idx}" onsubmit="return confirmCreate(${idx})">
+        <input type="hidden" name="csrf_token" value="${CSRF}" />
+        ${agentField}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div><label>Customer Name *</label><input type="text" name="customer_name" value="${escHtml(order.customer_name||'')}" required placeholder="Full name" style="margin-top:4px;" /></div>
+          <div><label>Phone</label><input type="text" name="customer_phone" value="${escHtml(order.customer_phone||'')}" placeholder="08012345678" style="margin-top:4px;" /></div>
+        </div>
+        <div style="margin-bottom:10px;"><label>Delivery Address</label><input type="text" name="address" value="${escHtml(order.address||'')}" placeholder="Street, area, city" style="margin-top:4px;" /></div>
+        <div style="margin-bottom:10px;"><label>Note</label><input type="text" name="note" value="${escHtml(order.note||'')}" placeholder="Extra instructions" style="margin-top:4px;" /></div>
+        <div style="margin-bottom:10px;"><label>Delivery Date</label><input type="date" name="delivery_date" value="${TODAY}" style="margin-top:4px;" /></div>
+        <label>Items</label>
+        <div id="items-${idx}" style="margin-top:6px;"></div>
+        <button type="button" onclick="addItemRow(${idx})" class="btnGhost" style="margin-top:6px;font-size:12px;padding:5px 12px;">+ Add Item</button>
+        <div style="display:flex;gap:10px;margin-top:14px;">
+          <button type="submit" class="btnPrimary" style="flex:1;justify-content:center;">✓ Create Order ${idx+1}</button>
+        </div>
+      </form>`;
+
+    container.appendChild(card);
+
+    // Add item rows
+    const itemsToAdd = (order.items || []).filter(i => i.matched && i.item_id);
+    if (itemsToAdd.length === 0) {
+      addItemRow(idx);
+    } else {
+      itemsToAdd.forEach(item => addItemRow(idx, item.item_id, item.quantity, (item.quantity * (item.unit_price||0)).toFixed(2)));
     }
   });
-  if (!data.items || data.items.length === 0) addItemRow();
 
-  const unmatched = data.unmatched_items || [];
-  const warn = document.getElementById('unmatched-warn');
-  if (unmatched.length > 0) {
-    warn.style.display = 'block';
-    warn.innerHTML = `⚠️ Could not match these — add manually: <strong>${unmatched.join(', ')}</strong>`;
-  } else {
-    warn.style.display = 'none';
+  document.getElementById('orders-wrap').style.display = 'block';
+  document.getElementById('orders-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function addItemRow(orderIdx, itemId, qty, amount) {
+  const tpl = document.getElementById('item-row-tpl').content.cloneNode(true);
+  const wrap = tpl.querySelector('.item-row-wrap');
+  const sel  = wrap.querySelector('select[name="item_id"]');
+  const qIn  = wrap.querySelector('input[name="quantity"]');
+  const aIn  = wrap.querySelector('input[name="line_amount"]');
+  if (itemId) {
+    sel.value = itemId;
+    const item = ITEMS_BY_ID[itemId];
+    if (item) {
+      qIn.value = qty || 1;
+      aIn.value = amount !== undefined ? amount : ((qty||1) * item.price).toFixed(2);
+    }
   }
+  sel.addEventListener('change', () => {
+    const opt = sel.options[sel.selectedIndex];
+    const price = opt ? parseFloat(opt.dataset.price||0) : 0;
+    if (price > 0) aIn.value = (parseFloat(qIn.value)||1) * price;
+  });
+  qIn.addEventListener('input', () => {
+    const opt = sel.options[sel.selectedIndex];
+    const price = opt ? parseFloat(opt.dataset.price||0) : 0;
+    if (price > 0) aIn.value = ((parseFloat(qIn.value)||1) * price).toFixed(2);
+  });
+  document.getElementById(`items-${orderIdx}`).appendChild(tpl);
+}
 
-  document.getElementById('order-form-wrap').style.display = 'block';
-  document.getElementById('order-form-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+function removeOrder(idx) {
+  document.getElementById(`order-card-${idx}`).remove();
+  const remaining = document.querySelectorAll('.order-card').length;
+  document.getElementById('orders-count').textContent = `${remaining} order${remaining !== 1 ? 's' : ''} detected`;
+  if (remaining === 0) document.getElementById('orders-wrap').style.display = 'none';
+}
+
+function confirmCreate(idx) {
+  return confirm(`Create Order ${idx+1}? It will be saved and assigned.`);
+}
+
+function escHtml(str) {
+  return (str||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 function setBusy(busy) {
   const btn = document.getElementById('parse-btn');
   btn.disabled = busy;
-  btn.textContent = busy ? '⚙️ Parsing...' : '✨ Parse Order';
+  btn.textContent = busy ? '⚙️ Parsing...' : '✨ Parse All Orders';
 }
 
 function showError(msg) {
@@ -302,17 +302,8 @@ function showError(msg) {
 
 function clearAll() {
   document.getElementById('wa-input').value = '';
-  document.getElementById('order-form-wrap').style.display = 'none';
+  document.getElementById('orders-wrap').style.display = 'none';
   document.getElementById('parse-error').style.display = 'none';
-  document.getElementById('parse-status').style.display = 'none';
 }
-
-function resetForm() {
-  document.getElementById('items-container').innerHTML = '';
-  addItemRow();
-  ['f-name','f-phone','f-address','f-note'].forEach(id => document.getElementById(id).value = '');
-}
-
-addItemRow();
 </script>
 {% endblock %}
