@@ -8,3 +8,4 @@ openpyxl
 psycopg2-binary
 passlib[bcrypt]
 itsdangerous
+httpx
