@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block title %}Parse WhatsApp Order{% endblock %}
+{% block page_title %}WhatsApp Order Parser{% endblock %}
+{% block page_subtitle %}Paste a WhatsApp chat and AI will extract the order details automatically{% endblock %}
+{% set active = "parse_order" %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
+
+  <!-- LEFT: Paste box -->
+  <div>
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <span class="badge b-green">💬 Step 1 — Paste Chat</span>
+      </div>
+      <label>WhatsApp Message</label>
+      <textarea id="wa-input" rows="12"
+        placeholder="Paste the WhatsApp message here...
+
+Example:
+Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. My name is Chidi Obi, I'm at 14 Adeola Street Lagos. Call me on 08012345678"
+        style="resize:vertical;font-size:13px;line-height:1.6;"></textarea>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btnPrimary" onclick="parseOrder()" id="parse-btn">
+          ✨ Parse Order
+        </button>
+        <button class="btnGhost" onclick="clearAll()">Clear</button>
+      </div>
+      <div id="parse-error" style="display:none;" class="alert alert-danger" style="margin-top:10px;"></div>
+    </div>
+
+    <!-- Parsing status -->
+    <div id="parse-status" style="display:none;" class="card" style="text-align:center;padding:28px;">
+      <div style="font-size:28px;margin-bottom:10px;animation:spin 1s linear infinite;display:inline-block;">⚙️</div>
+      <div style="color:var(--muted);font-size:13px;">AI is reading the message...</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Order form (pre-filled by AI) -->
+  <div id="order-form-wrap" style="display:none;">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <span class="badge b-blue">📋 Step 2 — Review &amp; Confirm</span>
+        <span id="confidence-badge" style="font-size:11px;color:var(--muted);"></span>
+      </div>
+
+      <form method="post" action="/deliveries/new" id="order-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <div>
+            <label>Customer Name *</label>
+            <input type="text" name="customer_name" id="f-name" required placeholder="Full name" />
+          </div>
+          <div>
+            <label>Phone</label>
+            <input type="text" name="customer_phone" id="f-phone" placeholder="08012345678" />
+          </div>
+        </div>
+
+        <div style="margin-bottom:12px;">
+          <label>Delivery Address</label>
+          <input type="text" name="address" id="f-address" placeholder="Street, area, city" />
+        </div>
+
+        {% if user and user.role == "ADMIN" %}
+        <div style="margin-bottom:12px;">
+          <label>Assign Agent *</label>
+          <select name="agent_id" required>
+            <option value="">— select agent —</option>
+            {% for a in agents %}
+            <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endif %}
+
+        <div style="margin-bottom:12px;">
+          <label>Delivery Date</label>
+          <input type="date" name="delivery_date" id="f-date" value="{{ today }}" />
+        </div>
+
+        <div style="margin-bottom:12px;">
+          <label>Note</label>
+          <input type="text" name="note" id="f-note" placeholder="Any extra instructions..." />
+        </div>
+
+        <!-- Items -->
+        <div style="margin-bottom:12px;">
+          <label>Items</label>
+          <div id="items-container"></div>
+          <button type="button" class="btnGhost" onclick="addItemRow()" style="margin-top:8px;font-size:12px;padding:6px 14px;">
+            + Add Item
+          </button>
+        </div>
+
+        <!-- Unmatched warning -->
+        <div id="unmatched-warn" style="display:none;" class="alert alert-danger"></div>
+
+        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
+          <button type="submit" class="btnPrimary" style="flex:1;justify-content:center;">
+            ✓ Create Order
+          </button>
+          <button type="button" class="btnGhost" onclick="resetForm()">Reset</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Item row template (hidden) -->
+<template id="item-row-tpl">
+  <div class="item-row-wrap" style="display:grid;grid-template-columns:1fr 90px 110px 32px;gap:8px;align-items:center;margin-bottom:8px;">
+    <select name="item_id" required style="margin:0;">
+      <option value="">— select item —</option>
+      {% for i in items %}
+      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}">{{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" oninput="recalcRow(this)"/>
+    <input type="number" name="line_amount" step="0.01" style="margin:0;" placeholder="Amount ₦" />
+    <button type="button" onclick="this.closest('.item-row-wrap').remove()" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:14px;line-height:1;">✕</button>
+  </div>
+</template>
+
+<style>
+@keyframes spin { to { transform:rotate(360deg); } }
+</style>
+
+<script>
+const ITEMS = {{ items_json | tojson }};
+const ITEMS_MAP = {};
+ITEMS.forEach(i => { ITEMS_MAP[i.id] = i; ITEMS_MAP[i.name.toLowerCase()] = i; });
+
+function addItemRow(itemId, qty, amount) {
+  const tpl = document.getElementById('item-row-tpl').content.cloneNode(true);
+  const wrap = tpl.querySelector('.item-row-wrap');
+  const sel = wrap.querySelector('select[name="item_id"]');
+  const qtyIn = wrap.querySelector('input[name="quantity"]');
+  const amtIn = wrap.querySelector('input[name="line_amount"]');
+  if (itemId) {
+    sel.value = itemId;
+    const item = ITEMS_MAP[itemId];
+    if (item) {
+      qtyIn.value = qty || 1;
+      amtIn.value = amount || ((qty || 1) * item.price).toFixed(2);
+    }
+  }
+  sel.addEventListener('change', function() { recalcRow(this); });
+  document.getElementById('items-container').appendChild(tpl);
+}
+
+function recalcRow(el) {
+  const row = el.closest('.item-row-wrap');
+  const sel = row.querySelector('select[name="item_id"]');
+  const qty = parseFloat(row.querySelector('input[name="quantity"]').value) || 1;
+  const opt = sel.options[sel.selectedIndex];
+  const price = opt ? parseFloat(opt.dataset.price || 0) : 0;
+  if (price > 0) row.querySelector('input[name="line_amount"]').value = (qty * price).toFixed(2);
+}
+
+async function parseOrder() {
+  const text = document.getElementById('wa-input').value.trim();
+  if (!text) { showError('Please paste a WhatsApp message first.'); return; }
+
+  document.getElementById('parse-btn').disabled = true;
+  document.getElementById('parse-btn').textContent = '⚙️ Parsing...';
+  document.getElementById('parse-error').style.display = 'none';
+  document.getElementById('parse-status').style.display = 'block';
+  document.getElementById('order-form-wrap').style.display = 'none';
+
+  const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${i.price}`).join('\n');
+
+  const prompt = `You are an order parser for a Nigerian logistics/inventory business. Extract order details from the WhatsApp message below and return ONLY valid JSON, no markdown, no explanation.
+
+PRODUCT CATALOG (id|name|category|unit|price):
+${catalog}
+
+WHATSAPP MESSAGE:
+${text}
+
+Return this exact JSON structure:
+{
+  "customer_name": "string or null",
+  "customer_phone": "string or null",
+  "address": "string or null",
+  "note": "string or null",
+  "items": [
+    {"item_id": 123, "item_name": "matched name", "quantity": 1, "unit_price": 0.0, "matched": true}
+  ],
+  "unmatched_items": ["item name that could not be matched"],
+  "confidence": "high|medium|low"
+}
+
+Rules:
+- Match item names flexibly (abbreviations, informal names, pidgin). If unsure, still try.
+- If an item cannot be matched to the catalog AT ALL, put it in unmatched_items.
+- quantity must be a positive integer.
+- unit_price should come from the catalog price.
+- Return null for fields not found in the message.
+- confidence: high if name+items clear, medium if some guessing, low if very unclear.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await res.json();
+    const raw = data.content?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    fillForm(parsed);
+  } catch(e) {
+    showError('Could not parse the message. Please check your API key or try again. (' + e.message + ')');
+  } finally {
+    document.getElementById('parse-btn').disabled = false;
+    document.getElementById('parse-btn').textContent = '✨ Parse Order';
+    document.getElementById('parse-status').style.display = 'none';
+  }
+}
+
+function fillForm(data) {
+  document.getElementById('f-name').value    = data.customer_name  || '';
+  document.getElementById('f-phone').value   = data.customer_phone || '';
+  document.getElementById('f-address').value = data.address        || '';
+  document.getElementById('f-note').value    = data.note           || '';
+
+  // Confidence badge
+  const conf = data.confidence || 'medium';
+  const confColors = { high: '#4ade80', medium: '#fbbf24', low: '#f87171' };
+  document.getElementById('confidence-badge').innerHTML =
+    `<span style="color:${confColors[conf] || '#8a9bc4'}">● ${conf} confidence</span>`;
+
+  // Items
+  document.getElementById('items-container').innerHTML = '';
+  (data.items || []).forEach(item => {
+    if (item.matched && item.item_id) {
+      addItemRow(item.item_id, item.quantity, (item.quantity * item.unit_price).toFixed(2));
+    }
+  });
+  if (!data.items || data.items.length === 0) addItemRow();
+
+  // Unmatched warning
+  const unmatched = data.unmatched_items || [];
+  const warn = document.getElementById('unmatched-warn');
+  if (unmatched.length > 0) {
+    warn.style.display = 'block';
+    warn.innerHTML = `⚠️ Could not match these items — add manually: <strong>${unmatched.join(', ')}</strong>`;
+  } else {
+    warn.style.display = 'none';
+  }
+
+  document.getElementById('order-form-wrap').style.display = 'block';
+  document.getElementById('order-form-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function showError(msg) {
+  const el = document.getElementById('parse-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function clearAll() {
+  document.getElementById('wa-input').value = '';
+  document.getElementById('order-form-wrap').style.display = 'none';
+  document.getElementById('parse-error').style.display = 'none';
+  document.getElementById('parse-status').style.display = 'none';
+}
+
+function resetForm() {
+  document.getElementById('items-container').innerHTML = '';
+  addItemRow();
+  ['f-name','f-phone','f-address','f-note'].forEach(id => document.getElementById(id).value = '');
+}
+
+// Start with one empty item row
+addItemRow();
+</script>
+{% endblock %}

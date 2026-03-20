@@ -1859,6 +1859,27 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     })
 
 
+@app.get("/parse-order", response_class=HTMLResponse)
+def parse_order_form(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    branch_id = get_selected_branch_id(request, user)
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
+    items  = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    csrf_token = get_csrf_token(request)
+    items_json = [{"id": i.id, "name": i.name, "category": i.category or "", "unit": i.unit or "pcs", "price": float(i.selling_price or 0)} for i in items]
+    return templates.TemplateResponse("parse_order.html", {
+        "request": request, "user": user, "active": "parse_order",
+        "agents": agents, "items": items, "items_json": items_json,
+        "branches": branches, "selected_branch_id": branch_id,
+        "today": date.today().isoformat(), "csrf_token": csrf_token,
+    })
+
+
 @app.get("/deliveries/new", response_class=HTMLResponse)
 def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
