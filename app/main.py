@@ -2150,7 +2150,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     if selected_agent_id: _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
     total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
     operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
-    remittance = float(total_collections) - float(total_office_expenses)
+    remittance = float(total_collections) - float(total_expenses) - float(total_office_expenses)
     net_position = remittance + operating_balance
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
 
