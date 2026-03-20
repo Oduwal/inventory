@@ -268,9 +268,9 @@ class AuditLog(Base):
     """[SEC-7] Immutable audit trail — never update or delete rows."""
     __tablename__ = "audit_logs"
 
-    id:         Mapped[int]           = mapped_column(Integer, primary_key=True)
-    user_id:    Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    action:     Mapped[str]           = mapped_column(String(100), nullable=False)
-    detail:     Mapped[str]           = mapped_column(String(500), default="")
-    ip:         Mapped[str]           = mapped_column(String(45), default="")
-    created_at: Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)
+    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action:     Mapped[str]      = mapped_column(String(100), nullable=False)
+    detail:     Mapped[str]      = mapped_column(String(500), default="")
+    ip:         Mapped[str]      = mapped_column(String(45), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
