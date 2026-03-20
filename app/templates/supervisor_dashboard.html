@@ -80,8 +80,13 @@
 <div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
     <div class="card" style="border-top:3px solid #ef4444;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <span class="badge b-red">💸 DAILY EXPENSES</span>
-            <span class="muted small">All branches</span>
+            <div>
+                <span class="badge b-red">💸 DAILY EXPENSES</span>
+                <span class="muted small" style="margin-left:8px;">All branches combined</span>
+            </div>
+            <span style="font-size:13px;font-weight:700;color:#f87171;">
+                ₦{{ '{:,.0f}'.format(grand_agent_expenses + grand_office_expenses) }} total
+            </span>
         </div>
         <div style="position:relative;height:200px;"><canvas id="chartExpenses"></canvas></div>
     </div>
@@ -180,18 +185,34 @@
       y: { ...axisStyle, beginAtZero: true, ticks: { ...axisStyle.ticks, stepSize: 1 } } } }
   });
 
-  // Daily expenses chart
+  // Daily expenses chart — all branches combined
+  const expData = {{ chart_expenses | tojson }};
   const elExp = document.getElementById('chartExpenses');
-  if(elExp) new Chart(elExp, {
-    type: 'line',
-    data: { labels: shortLabels, datasets: [{ data: {{ chart_expenses | tojson }},
-      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.12)',
-      borderWidth: 2, pointBackgroundColor: '#ef4444',
-      pointRadius: 3, fill: true, tension: 0.35 }] },
-    options: { ...baseOpts, scales: { x: axisStyle,
-      y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
-        callback: v => '₦' + Number(v).toLocaleString() } } } }
-  });
+  if(elExp) {
+    // Create gradient fill
+    const ctx2 = elExp.getContext('2d');
+    const grad = ctx2.createLinearGradient(0, 0, 0, 200);
+    grad.addColorStop(0, 'rgba(239,68,68,0.35)');
+    grad.addColorStop(1, 'rgba(239,68,68,0.01)');
+    new Chart(elExp, {
+      type: 'line',
+      data: { labels: shortLabels, datasets: [{ data: expData,
+        borderColor: '#ef4444', backgroundColor: grad,
+        borderWidth: 2, pointBackgroundColor: '#ef4444',
+        pointHoverBackgroundColor: '#fff', pointHoverBorderColor: '#ef4444',
+        pointRadius: 3, pointHoverRadius: 5,
+        fill: true, tension: 0.35 }] },
+      options: { ...baseOpts,
+        plugins: { legend: { display: false },
+          tooltip: { callbacks: {
+            label: ctx => '₦' + Number(ctx.parsed.y).toLocaleString()
+          }}
+        },
+        scales: { x: axisStyle,
+          y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
+            callback: v => '₦' + Number(v).toLocaleString() } } } }
+    });
+  }
 
   // Category chart
   const catLabels = [{% if all_cat_rows %}{% for c,s in all_cat_rows %}"{{ c }}"{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
