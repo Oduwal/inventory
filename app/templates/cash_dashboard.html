@@ -212,26 +212,40 @@ function closeDrawer() {
   </form>
 </div>
 {% else %}
-<div class="ec ec-exp" style="margin-bottom:20px;">
-  <div class="ec-hd"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
-  <form method="post" action="/cash/new">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-    <input type="hidden" name="kind" value="EXPENSE">
-    <div class="inputs">
-      <div>
-        <label>Amount (₦)</label>
-        <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      </div>
-      <div style="flex:2;">
-        <label>Note</label>
-        <input type="text" name="note" placeholder="e.g. fuel, food">
-      </div>
-      <div>
-        <label>&nbsp;</label>
-        <button class="ec-btn ec-r" type="submit">📤 Save Expense</button>
-      </div>
-    </div>
-  </form>
+<div class="entry-grid">
+  <div class="ec ec-exp">
+    <div class="ec-hd"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
+    <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="kind" value="EXPENSE">
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. fuel, food">
+      <button class="ec-btn ec-r" type="submit">📤 Save Expense</button>
+    </form>
+  </div>
+
+  <div class="ec ec-op">
+    <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash</div>
+    <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="kind" value="OPERATING_CASH">
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. morning float">
+      <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
+    </form>
+  </div>
+
+  <div class="ec ec-ret">
+    <div class="ec-hd"><span class="ec-dot" style="background:#14b8a6;"></span>Agent Returns Balance</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Record the balance an agent returns after deducting their expenses from operating cash.</p>
+    <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="kind" value="RETURN_OPERATING_CASH">
+      <label>Amount Returned (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. balance returned by John">
+      <button class="ec-btn ec-t" type="submit">↩️ Record Return</button>
+    </form>
+  </div>
 </div>
 {% endif %}
 
