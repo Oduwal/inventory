@@ -216,7 +216,7 @@
   }
 
   // Remittance by branch chart
-  const branchLabels  = [{% for r in rows %}"{{ r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
+  const branchLabels  = [{% for r in rows %}"{{ r.branch.name if r.branch else r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
   const branchRemit   = [{% for r in rows %}{{ r.remittance }}{% if not loop.last %},{% endif %}{% endfor %}];
   const branchColors  = ['rgba(139,92,246,0.7)','rgba(79,124,255,0.7)','rgba(34,197,94,0.7)','rgba(245,158,11,0.7)','rgba(20,184,166,0.7)'];
   const remitCtx = document.getElementById('remitChart');

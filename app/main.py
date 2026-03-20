@@ -837,16 +837,11 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     start_dt, end_dt = supervisor_date_range(preset, start_date, end_date)
 
     branches, rows = supervisor_branch_stats(db, start_dt, end_dt)
-    # Convert rows to dicts and enrich with branch_name
-    branch_name_map = {b.id: b.name for b in branches}
-    dict_rows = []
+    # Enrich each row dict with branch_name from the branch object
     for r in rows:
-        # Handle both dict and SQLAlchemy Row objects
-        d = dict(r) if not isinstance(r, dict) else r
-        if not d.get("branch_name"):
-            d["branch_name"] = branch_name_map.get(d.get("branch_id"), "—")
-        dict_rows.append(d)
-    rows = dict_rows
+        if isinstance(r, dict) and "branch" in r and not r.get("branch_name"):
+            r["branch_name"] = r["branch"].name if r["branch"] else "—"
+            r["branch_id"] = r["branch"].id if r["branch"] else None
     top_items   = supervisor_top_items(db, start_dt, end_dt)
     _raw_best_agents = list(supervisor_best_agents(db, start_dt, end_dt))
     best_agents = []
