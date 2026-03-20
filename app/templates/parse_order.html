@@ -53,9 +53,15 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
 <!-- Step 2: Order cards -->
 <div id="orders-wrap" style="display:none;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-    <span class="badge b-blue">📋 Step 2 — Review &amp; Create Orders</span>
-    <span id="orders-count" style="color:var(--muted);font-size:13px;"></span>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <span class="badge b-blue">📋 Step 2 — Review &amp; Create Orders</span>
+      <span id="orders-count" style="color:var(--muted);font-size:13px;"></span>
+    </div>
+    <button class="btnPrimary" onclick="createAllOrders()" id="create-all-btn" style="background:linear-gradient(135deg,#22c55e,#16a34a);">
+      ✓ Create All Orders
+    </button>
   </div>
+  <div id="create-all-status" style="display:none;" class="alert alert-success"></div>
   <div id="orders-container"></div>
 </div>
 
@@ -322,6 +328,63 @@ function clearAll() {
   document.getElementById('wa-input').value = '';
   document.getElementById('orders-wrap').style.display = 'none';
   document.getElementById('parse-error').style.display = 'none';
+}
+
+async function createAllOrders() {
+  const forms = document.querySelectorAll('[id^="form-"]');
+  if (forms.length === 0) return;
+  const btn = document.getElementById('create-all-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating...';
+
+  let created = 0;
+  let failed = 0;
+
+  for (const form of forms) {
+    // Validate required fields
+    const nameInput = form.querySelector('input[name="customer_name"]');
+    if (!nameInput || !nameInput.value.trim()) {
+      failed++;
+      nameInput && (nameInput.style.border = '1px solid #ef4444');
+      continue;
+    }
+    // Check at least one item selected
+    const itemSelects = form.querySelectorAll('select[name="item_id"]');
+    const hasItem = Array.from(itemSelects).some(s => s.value);
+    if (!hasItem) { failed++; continue; }
+
+    // Submit via fetch (not page navigation)
+    try {
+      const data = new FormData(form);
+      const resp = await fetch('/deliveries/new', { method: 'POST', body: data });
+      if (resp.ok || resp.redirected) {
+        created++;
+        // Mark card as done
+        const card = form.closest('.order-card');
+        if (card) {
+          card.style.opacity = '0.5';
+          card.style.border = '1px solid rgba(34,197,94,.4)';
+          const hdr = card.querySelector('.order-card-header');
+          if (hdr) hdr.insertAdjacentHTML('beforeend', '<span class="badge b-green">✓ Created</span>');
+          form.querySelector('button[type="submit"]') && (form.querySelector('button[type="submit"]').disabled = true);
+        }
+      } else {
+        failed++;
+      }
+    } catch(e) {
+      failed++;
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '✓ Create All Orders';
+  const status = document.getElementById('create-all-status');
+  if (created > 0) {
+    status.style.display = 'block';
+    status.className = failed > 0 ? 'alert alert-danger' : 'alert alert-success';
+    status.textContent = `✓ ${created} order${created !== 1 ? 's' : ''} created successfully.${failed > 0 ? ` ${failed} failed — check highlighted cards.` : ''}`;
+    status.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 </script>
 {% endblock %}
