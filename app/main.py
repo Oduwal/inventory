@@ -869,7 +869,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_inventory_value = 0.0
     all_total_stock = 0
     all_cat_map: dict = {}
-    all_cat_items_map: dict = {}
+    all_cat_items_map: dict = {}  # cat -> {name_lower -> {name, stock, unit, reorder_level}}
     all_top_rows_raw = []
     for item, stock in get_items_with_stock(db):
         s = int(stock or 0)
@@ -877,10 +877,17 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         all_total_stock += s
         cat = item.category or "Uncategorized"
         all_cat_map[cat] = all_cat_map.get(cat, 0) + s
-        all_cat_items_map.setdefault(cat, []).append({"name": item.name, "stock": s, "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)})
+        # Merge same-named items across branches
+        key = (item.name or "").strip().lower()
+        if cat not in all_cat_items_map:
+            all_cat_items_map[cat] = {}
+        if key in all_cat_items_map[cat]:
+            all_cat_items_map[cat][key]["stock"] += s
+        else:
+            all_cat_items_map[cat][key] = {"name": item.name, "stock": s, "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)}
         all_top_rows_raw.append((item, s))
     all_cat_rows = sorted(all_cat_map.items(), key=lambda x: x[1], reverse=True)
-    all_cat_items_json = {cat: sorted(items, key=lambda x: x["stock"], reverse=True)
+    all_cat_items_json = {cat: sorted(items.values(), key=lambda x: x["stock"], reverse=True)
                           for cat, items in all_cat_items_map.items()}
     all_top_rows = sorted(all_top_rows_raw, key=lambda x: x[1], reverse=True)[:5]
     all_low_rows = [(item, stock) for (item, stock) in get_low_stock(db)]
