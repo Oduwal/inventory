@@ -149,6 +149,7 @@ Return ONLY a raw JSON array of orders — no markdown, no explanation:
     "customer_phone": "string or null",
     "address": "string or null",
     "note": "string or null",
+    "total_price": 40000.0,
     "items": [
       {"item_id": 1, "item_name": "catalog name", "quantity": 2, "unit_price": 500.0, "matched": true}
     ],
@@ -162,7 +163,9 @@ CRITICAL RULES:
 2. Every product mentioned for each customer goes in that customer items array.
 3. item_id must be the exact number from the catalog above. If no match, set matched:false and item_id:null.
 4. quantity must be a positive whole number.
-5. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
+5. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
+6. unit_price: use catalog price if available. If only total_price is given and multiple items, set unit_price to 0 — the app will divide it.
+7. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
   try {
     const res = await fetch('/parse-order/api', {
@@ -233,12 +236,27 @@ function renderOrders(orders) {
 
     container.appendChild(card);
 
-    // Add item rows
+    // Add item rows — distribute total_price if given
     const itemsToAdd = (order.items || []).filter(i => i.matched && i.item_id);
     if (itemsToAdd.length === 0) {
       addItemRow(idx);
     } else {
-      itemsToAdd.forEach(item => addItemRow(idx, item.item_id, item.quantity, (item.quantity * (item.unit_price||0)).toFixed(2)));
+      const totalPrice = order.total_price || null;
+      let amounts = [];
+      if (totalPrice && totalPrice > 0) {
+        // Distribute total price proportionally by catalog price ratio
+        // If all catalog prices are 0, split equally
+        const weights = itemsToAdd.map(item => {
+          const cat = ITEMS_BY_ID[item.item_id];
+          const price = cat ? parseFloat(cat.price) : 0;
+          return price > 0 ? price * (item.quantity || 1) : (item.quantity || 1);
+        });
+        const totalWeight = weights.reduce((a, b) => a + b, 0);
+        amounts = weights.map(w => totalWeight > 0 ? ((w / totalWeight) * totalPrice).toFixed(2) : (totalPrice / itemsToAdd.length).toFixed(2));
+      } else {
+        amounts = itemsToAdd.map(item => (item.quantity * (item.unit_price || 0)).toFixed(2));
+      }
+      itemsToAdd.forEach((item, i) => addItemRow(idx, item.item_id, item.quantity, amounts[i]));
     }
   });
 
