@@ -204,7 +204,7 @@ class CashEntry(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT')",
+            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH')",
             name="ck_cash_kind",
         ),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
@@ -218,7 +218,7 @@ class StockTransfer(Base):
     from_branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
     to_branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
 
-    # PENDING → OUT_FOR_DELIVERY → RECEIVED or CANCELLED
+    # PENDING → RECEIVED or CANCELLED
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
 
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
@@ -226,24 +226,6 @@ class StockTransfer(Base):
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     received_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     cancelled_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-
-    # Delegation — send side
-    delegated_agent_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    packed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    packed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    # Delegation — receive side
-    delegated_receiver_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-
-    # Send-side expense
-    expense_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
-    expense_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    expense_note: Mapped[str | None] = mapped_column(String(400), nullable=True)
-
-    # Receive-side expense
-    receive_expense_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
-    receive_expense_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    receive_expense_note: Mapped[str | None] = mapped_column(String(400), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -254,9 +236,6 @@ class StockTransfer(Base):
     created_by: Mapped["User"] = relationship(foreign_keys=[created_by_id])
     received_by: Mapped["User | None"] = relationship(foreign_keys=[received_by_id])
     cancelled_by: Mapped["User | None"] = relationship(foreign_keys=[cancelled_by_id])
-    delegated_agent: Mapped["User | None"] = relationship(foreign_keys=[delegated_agent_id])
-    packed_by: Mapped["User | None"] = relationship(foreign_keys=[packed_by_id])
-    delegated_receiver: Mapped["User | None"] = relationship(foreign_keys=[delegated_receiver_id])
 
     items: Mapped[list["StockTransferItem"]] = relationship(
         back_populates="transfer", cascade="all, delete-orphan"
@@ -264,7 +243,7 @@ class StockTransfer(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('PENDING','OUT_FOR_DELIVERY','RECEIVED','CANCELLED')",
+            "status IN ('PENDING','RECEIVED','CANCELLED')",
             name="ck_transfer_status",
         ),
     )
@@ -284,3 +263,14 @@ class StockTransferItem(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_transfer_item_qty_positive"),
     )
+
+class AuditLog(Base):
+    """[SEC-7] Immutable audit trail — never update or delete rows."""
+    __tablename__ = "audit_logs"
+
+    id:         Mapped[int]           = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action:     Mapped[str]           = mapped_column(String(100), nullable=False)
+    detail:     Mapped[str]           = mapped_column(String(500), default="")
+    ip:         Mapped[str]           = mapped_column(String(45), default="")
+    created_at: Mapped[datetime]      = mapped_column(DateTime, default=datetime.utcnow)

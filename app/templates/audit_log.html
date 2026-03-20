@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block page_title %}Audit Log{% endblock %}
+{% block page_subtitle %}Security trail of all critical actions in the system{% endblock %}
+{% set active = "audit" %}
+
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+    <span class="badge b-purple">{{ total }} entries</span>
+    <span style="color:var(--muted);font-size:12px;">Page {{ page }} of {{ total_pages }}</span>
+  </div>
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>User</th>
+          <th>Action</th>
+          <th>Detail</th>
+          <th>IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td style="color:var(--muted);white-space:nowrap;font-size:12px;">
+            {{ log.created_at.strftime("%d %b %Y %H:%M") if log.created_at else "—" }}
+          </td>
+          <td style="font-weight:600;font-size:13px;">
+            {{ user_map.get(log.user_id, "System") if log.user_id else "—" }}
+          </td>
+          <td>
+            {% if "LOGIN_FAILED" in log.action %}
+            <span class="badge b-red">{{ log.action }}</span>
+            {% elif "LOGIN" in log.action %}
+            <span class="badge b-green">{{ log.action }}</span>
+            {% elif "RESET" in log.action or "DELETE" in log.action %}
+            <span class="badge b-yellow">{{ log.action }}</span>
+            {% elif "DELIVERED" in log.action or "SENT" in log.action %}
+            <span class="badge b-blue">{{ log.action }}</span>
+            {% else %}
+            <span class="badge b-purple">{{ log.action }}</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--muted);font-size:12px;">{{ log.detail or "—" }}</td>
+          <td style="color:var(--muted);font-size:12px;">{{ log.ip or "—" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">No audit entries yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total_pages > 1 %}
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;">
+    {% if page > 1 %}
+    <a class="btnGhost" href="/admin/audit-log?page={{ page - 1 }}" style="padding:6px 14px;font-size:12px;">← Prev</a>
+    {% endif %}
+    {% if page < total_pages %}
+    <a class="btnGhost" href="/admin/audit-log?page={{ page + 1 }}" style="padding:6px 14px;font-size:12px;">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

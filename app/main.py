@@ -30,7 +30,7 @@ from sqlalchemy import select, text, func, and_, desc, case
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, DATABASE_URL
-from .models import Branch, Item, Transaction, User, Delivery, DeliveryItem, CashEntry, StockTransfer, StockTransferItem
+from .models import Branch, Item, Transaction, User, Delivery, DeliveryItem, CashEntry, StockTransfer, StockTransferItem, AuditLog
 from .services import (
     get_items_with_stock,
     get_item_with_stock,
@@ -55,12 +55,17 @@ from .services import (
 from .security import (
     get_session_secret,
     limiter,
+    account_lockout,
+    reset_token_store,
     get_csrf_token,
     verify_csrf_token,
     sanitize_text,
     sanitize_username,
     sanitize_phone,
     sanitize_amount,
+    audit_log,
+    SecurityHeadersMiddleware,
+    validate_upload,
 )
 
 app = FastAPI()
@@ -113,7 +118,9 @@ app.add_middleware(
     secret_key=SESSION_SECRET,
     https_only=HTTPS_ONLY,
     same_site="lax",
+    max_age=28800,  # [SEC] 8-hour session expiry
 )
+app.add_middleware(SecurityHeadersMiddleware)  # [SEC-8] Security headers
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
@@ -333,6 +340,17 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_created_at ON cash_entries (created_at)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_kind ON cash_entries (kind)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)")
+        # [SEC-7] Audit log table
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS audit_logs (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            action VARCHAR(100) NOT NULL,
+            detail VARCHAR(500) DEFAULT '',
+            ip VARCHAR(45) DEFAULT '',
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_audit_logs_user_id ON audit_logs (user_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_audit_logs_created_at ON audit_logs (created_at)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_item_id ON transactions (item_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_transactions_delivery_id ON transactions (delivery_id)")
 
@@ -554,12 +572,32 @@ async def login(
 
     verify_csrf_token(request, csrf_token)
     username_clean = sanitize_username(username)
-    u = db.scalar(select(User).where(User.username == username_clean))
-    if not u or not verify_password(password, u.password_hash):
+    ip = request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else "")
+
+    # [SEC-5] Per-account lockout check
+    if account_lockout.is_locked(username_clean):
         token = get_csrf_token(request)
         return templates.TemplateResponse("login.html", {
-            "request": request, "error": "Invalid login.", "csrf_token": token,
+            "request": request,
+            "error": "Account temporarily locked due to too many failed attempts. Try again in 15 minutes.",
+            "csrf_token": token,
+        }, status_code=429)
+
+    u = db.scalar(select(User).where(User.username == username_clean))
+    if not u or not verify_password(password, u.password_hash):
+        account_lockout.record_failure(username_clean)  # [SEC-5] record failure
+        remaining = account_lockout.remaining_attempts(username_clean)
+        audit_log(db, u.id if u else None, "LOGIN_FAILED", f"username={username_clean}", ip=ip)
+        token = get_csrf_token(request)
+        msg = "Invalid login."
+        if remaining <= 2:
+            msg = f"Invalid login. {remaining} attempt{'s' if remaining != 1 else ''} remaining before lockout."
+        return templates.TemplateResponse("login.html", {
+            "request": request, "error": msg, "csrf_token": token,
         })
+
+    account_lockout.clear(username_clean)  # [SEC-5] reset on success
+    audit_log(db, u.id, "LOGIN", f"username={username_clean}", ip=ip)
     request.session["user_id"] = u.id
     request.session["role"] = u.role
     if u.branch_id is not None:
@@ -570,7 +608,11 @@ async def login(
 
 
 @app.post("/logout")
-async def logout(request: Request):
+async def logout(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    verify_csrf_token(request, csrf_token)  # [SEC] CSRF protection on logout
+    user_id = request.session.get("user_id")
+    audit_log(db, user_id, "LOGOUT",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     request.session.clear()
     return redirect("/login")
 
@@ -730,6 +772,27 @@ def backfill_collections(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse(f"<pre>Done. Created: {created} collection entries. Skipped: {skipped} (already had entries or zero value).</pre>")
 
 
+@app.get("/admin/audit-log", response_class=HTMLResponse)
+def audit_log_viewer(request: Request, db: Session = Depends(get_db), page: int = 1):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_supervisor(user): return HTMLResponse("Forbidden", status_code=403)
+    per_page = 50
+    offset = (page - 1) * per_page
+    logs = db.execute(
+        select(AuditLog).order_by(desc(AuditLog.created_at)).offset(offset).limit(per_page)
+    ).scalars().all()
+    total = db.scalar(select(func.count(AuditLog.id))) or 0
+    user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User)).scalars().all()}
+    return templates.TemplateResponse("audit_log.html", {
+        "request": request, "user": user, "active": "audit",
+        "logs": logs, "user_map": user_map,
+        "page": page, "total": total, "per_page": per_page,
+        "total_pages": max(1, (total + per_page - 1) // per_page),
+    })
+
+
 @app.get("/admin/reset-data", response_class=HTMLResponse)
 def reset_data_form(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -786,6 +849,8 @@ async def reset_data_execute(
         conn.execute(_text("DELETE FROM transactions"))
         conn.commit()
 
+    audit_log(db, user.id, "DATA_RESET", "All operational data wiped by supervisor",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     return HTMLResponse("""
     <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
     <div style="background:rgba(255,255,255,.04);border:1px solid rgba(34,197,94,.3);border-radius:16px;padding:40px;max-width:400px;text-align:center;">
@@ -1195,7 +1260,13 @@ async def items_import_upload(request: Request, db: Session = Depends(get_db)):
     target = (form.get("target_branch") or "").strip()
     if not file or not file.filename:
         return redirect("/items/import?error=Please+select+a+CSV+file")
-    content = await file.read()
+    file_bytes = await file.read()
+    # [SEC-9] Validate file type and size
+    try:
+        validate_upload(file.filename, file_bytes)
+    except Exception as e:
+        return redirect(f"/items/import?error={str(e)}")
+    content = file_bytes
     try:
         text_content = content.decode("utf-8-sig")
     except Exception:
@@ -1699,6 +1770,8 @@ async def agent_reset_password(
         return redirect(f"/agents/{agent_id}?error=Password+must+be+at+least+8+characters")
     target.password_hash = hash_password(pw)
     db.commit()
+    audit_log(db, user.id, "PASSWORD_RESET", f"user_id={agent_id} reset by {user.username}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     return redirect(f"/agents/{agent_id}?success=Password+reset+successfully")
 
 # ────────────────────────────────────────────────
@@ -2028,6 +2101,8 @@ async def update_delivery_status(
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
             d.status = "DELIVERED"
             d.delivered_at = datetime.utcnow()
+            audit_log(db, user.id, "DELIVERY_DELIVERED", f"delivery_id={d.id}",
+                      ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
 
             # Auto-create COLLECTION cash entry from delivery order total
             # Only if no collection entry already exists for this delivery
@@ -2923,6 +2998,8 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
     transfer.packed_at = datetime.utcnow()
     transfer.status = "OUT_FOR_DELIVERY"
     db.commit()
+    audit_log(db, user.id, "TRANSFER_SENT", f"transfer_id={transfer_id}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     return redirect(f"/transfers/{transfer_id}")
 
 
