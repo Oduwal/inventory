@@ -874,7 +874,6 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
         .where(CashEntry.created_at >= _range_start)
         .where(CashEntry.created_at <= _range_end)
-        .where(func.lower(func.coalesce(CashEntry.note, "")).notlike("waybill - from %"))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
