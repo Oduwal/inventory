@@ -1861,7 +1861,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/parse-order/api", response_class=JSONResponse)
 async def parse_order_api(request: Request, db: Session = Depends(get_db)):
-    """Backend proxy — calls Anthropic API server-side to avoid CORS."""
+    """Backend proxy — calls Groq API server-side to avoid CORS."""
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Not logged in"}, status_code=401)
@@ -1875,27 +1875,33 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     if not prompt:
         return JSONResponse({"error": "No prompt provided"}, status_code=400)
 
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
-        return JSONResponse({"error": "ANTHROPIC_API_KEY not set in environment variables."}, status_code=500)
+        return JSONResponse({"error": "GROQ_API_KEY not set in Railway environment variables."}, status_code=500)
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
                 },
                 json={
-                    "model": "claude-haiku-4-5-20251001",
+                    "model": "llama-3.3-70b-versatile",
                     "max_tokens": 1000,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "messages": [
+                        {"role": "system", "content": "You are an order parser. Return only valid JSON with no markdown or explanation."},
+                        {"role": "user", "content": prompt}
+                    ],
                 }
             )
         data = resp.json()
-        text = data.get("content", [{}])[0].get("text", "")
+        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not text:
+            error_msg = data.get("error", {}).get("message", "Empty response from Groq")
+            return JSONResponse({"error": error_msg}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
