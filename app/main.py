@@ -879,14 +879,11 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
             exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
-    # Normalise day keys: strip time component so "2026-03-10 00:00:00" → "2026-03-10"
-    def _day_key(v):
-        s = str(v)
-        return s[:10]  # always "YYYY-MM-DD"
-    delivery_days = {_day_key(r.day) for r in daily_chart}
+    # Build chart days — use isoformat keys throughout for consistency
+    delivery_days = {r.day.isoformat() if hasattr(r.day, 'isoformat') else str(r.day)[:10] for r in daily_chart}
     expense_days  = set(exp_by_day.keys())
     all_chart_days = sorted(delivery_days | expense_days)
-    delivery_cnt = {_day_key(r.day): int(r.cnt) for r in daily_chart}
+    delivery_cnt = {(r.day.isoformat() if hasattr(r.day, 'isoformat') else str(r.day)[:10]): int(r.cnt) for r in daily_chart}
     chart_days_set = all_chart_days
 
     # All-branch inventory & agent totals for the enhanced overview
