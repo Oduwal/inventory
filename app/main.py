@@ -626,6 +626,7 @@ def home(request: Request, db: Session = Depends(get_db)):
 
     all_items_with_stock = get_items_with_stock(db)
     cat_map: dict[str, float] = {}
+    cat_items: dict[str, list] = {}
     total_stock = 0
     inventory_value = 0.0
     for item, stock in all_items_with_stock:
@@ -635,7 +636,10 @@ def home(request: Request, db: Session = Depends(get_db)):
             inventory_value += s * float(item.cost_price or 0)
             cat = item.category or "Uncategorized"
             cat_map[cat] = cat_map.get(cat, 0) + s
+            cat_items.setdefault(cat, []).append({"name": item.name, "stock": int(s), "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)})
     cat_rows = sorted(cat_map.items(), key=lambda x: x[1], reverse=True)
+    # Sort items within each category by stock desc
+    cat_items_json = {cat: sorted(items, key=lambda x: x["stock"], reverse=True) for cat, items in cat_items.items()}
 
     in7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
@@ -677,7 +681,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         "items_count": items_count, "low_stock_count": low_stock_count,
         "stale_count": stale_count, "recent_transactions": recent_transactions,
         "total_stock": total_stock, "inventory_value": inventory_value,
-        "in7": in7, "out7": out7, "top_rows": top_rows, "low_rows": low_rows, "cat_rows": cat_rows,
+        "in7": in7, "out7": out7, "top_rows": top_rows, "low_rows": low_rows, "cat_rows": cat_rows, "cat_items_json": cat_items_json,
         "chart_labels": [str(d) for d in chart_days],
         "chart_deliveries": [del_by_day.get(d.isoformat(), 0) for d in chart_days],
         "chart_expenses": [round(exp_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
@@ -858,6 +862,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_inventory_value = 0.0
     all_total_stock = 0
     all_cat_map: dict = {}
+    all_cat_items_map: dict = {}
     all_top_rows_raw = []
     for item, stock in get_items_with_stock(db):
         s = int(stock or 0)
@@ -865,8 +870,11 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         all_total_stock += s
         cat = item.category or "Uncategorized"
         all_cat_map[cat] = all_cat_map.get(cat, 0) + s
+        all_cat_items_map.setdefault(cat, []).append({"name": item.name, "stock": s, "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)})
         all_top_rows_raw.append((item, s))
     all_cat_rows = sorted(all_cat_map.items(), key=lambda x: x[1], reverse=True)
+    all_cat_items_json = {cat: sorted(items, key=lambda x: x["stock"], reverse=True)
+                          for cat, items in all_cat_items_map.items()}
     all_top_rows = sorted(all_top_rows_raw, key=lambda x: x[1], reverse=True)[:5]
     all_low_rows = [(item, stock) for (item, stock) in get_low_stock(db)]
     all_in7 = int(db.scalar(
@@ -906,7 +914,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "all_admins_count": all_admins_count,
         "all_inventory_value": all_inventory_value,
         "all_total_stock": all_total_stock,
-        "all_cat_rows": all_cat_rows,
+        "all_cat_rows": all_cat_rows, "all_cat_items_json": all_cat_items_json,
         "all_top_rows": all_top_rows,
         "all_in7": all_in7, "all_out7": all_out7,
         "branches": branches, "selected_branch_id": None, "active": "supervisor",
