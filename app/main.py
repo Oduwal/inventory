@@ -669,7 +669,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     exp_by_day: dict = {}
     for e in db.execute(
         select(CashEntry).where(CashEntry.branch_id == branch_id)
-        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
         .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None

@@ -6,32 +6,28 @@
 
 {% block content %}
 <style>
-  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:22px;}
-  .kpi{border-radius:14px;padding:16px 18px;position:relative;overflow:hidden;}
-  .kpi .kv{font-size:20px;font-weight:800;line-height:1.1;margin-top:4px;}
-  .kpi .kl{font-size:10.5px;color:var(--muted);margin-top:5px;text-transform:uppercase;letter-spacing:.06em;}
-  .kpi-g{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.22);}  .kpi-g .kv{color:#4ade80;}
-  .kpi-b{background:rgba(79,124,255,.1);border:1px solid rgba(79,124,255,.22);}  .kpi-b .kv{color:#7fa8ff;}
-  .kpi-r{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.22);}  .kpi-r .kv{color:#f87171;}
-  .kpi-t{background:rgba(20,184,166,.1);border:1px solid rgba(20,184,166,.22);}  .kpi-t .kv{color:#2dd4bf;}
-  .kpi-a{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.22);}  .kpi-a .kv{color:#fbbf24;}
-  .entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;}
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:20px;}
+  .kpi{padding:14px 16px;position:relative;overflow:hidden;background:var(--panel2);border:1px solid var(--border2);transition:border-color .15s,transform .15s;}
+  .kpi:hover{transform:translateY(-2px);}
+  .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:currentColor;opacity:.4;}
+  .kpi .kv{font-family:var(--font-mono);font-size:19px;font-weight:700;line-height:1.1;margin-top:6px;letter-spacing:-.02em;}
+  .kpi .kl{font-family:var(--font-mono);font-size:9px;color:var(--muted);margin-top:6px;text-transform:uppercase;letter-spacing:.1em;}
+  .kpi-g{color:var(--green);}  .kpi-b{color:var(--cyan);}
+  .kpi-r{color:var(--red);}   .kpi-t{color:#2dd4bf;}  .kpi-a{color:var(--amber);}
+  .entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;}
   @media(max-width:640px){.entry-grid{grid-template-columns:1fr;}}
-  .ec{border-radius:14px;padding:16px;border:1px solid var(--border);background:rgba(255,255,255,.03);}
-  .ec-hd{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
-  .ec-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
-  .ec-col{border-top:3px solid #22c55e;} .ec-exp{border-top:3px solid #ef4444;}
-  .ec-op{border-top:3px solid #4f7cff;} .ec-ret{border-top:3px solid #14b8a6;}
-  .ec-off{border-top:3px solid #f59e0b;}
-  .ec-btn{width:100%;margin-top:10px;border-radius:10px;padding:10px;font-size:13px;font-weight:700;border:none;cursor:pointer;transition:opacity .15s;}
-  .ec-btn:hover{opacity:.85;}
-  .ec-g{background:#22c55e;color:#000;} .ec-r{background:#ef4444;color:#fff;}
-  .ec-b{background:#4f7cff;color:#fff;} .ec-t{background:#14b8a6;color:#fff;}
-  .ec-a{background:#f59e0b;color:#000;}
-  .remit{background:linear-gradient(135deg,rgba(79,124,255,.15),rgba(139,92,246,.15));
-         border:1px solid rgba(79,124,255,.3);border-radius:14px;
-         padding:18px 22px;display:flex;justify-content:space-between;
-         align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
+  .ec{padding:16px;border:1px solid var(--border2);background:var(--panel2);position:relative;}
+  .ec::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:currentColor;}
+  .ec-hd{font-family:var(--font-mono);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+  .ec-dot{width:7px;height:7px;flex-shrink:0;background:currentColor;}
+  .ec-col{color:var(--green);}  .ec-exp{color:var(--red);}
+  .ec-op{color:var(--cyan);}    .ec-ret{color:#2dd4bf;}  .ec-off{color:var(--amber);}
+  .ec-btn{width:100%;margin-top:12px;padding:10px;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;border:none;cursor:pointer;transition:all .15s;}
+  .ec-btn:hover{opacity:.85;transform:translateY(-1px);}
+  .ec-g{background:var(--green);color:#000;}  .ec-r{background:var(--red);color:#fff;}
+  .ec-b{background:var(--cyan);color:#050c1a;} .ec-t{background:#14b8a6;color:#000;} .ec-a{background:var(--amber);color:#000;}
+  .remit{background:rgba(0,212,255,.04);border:1px solid rgba(0,212,255,.15);border-left:3px solid var(--cyan);
+         padding:18px 22px;display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
 </style>
 
 <!-- Filters -->
@@ -244,54 +240,5 @@ function closeDrawer() {
   {% endif %}
 </div>
 
-<!-- Daily summary -->
-{% if rows and rows|length > 0 %}
-<div class="card">
-  <div style="font-weight:700;margin-bottom:14px;">📅 Daily Summary</div>
-  <div style="overflow-x:auto;">
-  <table>
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th style="text-align:right;">Collections</th>
-        <th style="text-align:right;">Op. Cash</th>
-        <th style="text-align:right;">Agent Exp.</th>
-        <th style="text-align:right;">Office Exp.</th>
-        {% if user and user.role == "ADMIN" %}<th style="text-align:right;">Remittance</th>{% endif %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.day }}</td>
-        <td style="text-align:right;color:#4ade80;font-weight:600;">₦{{ "{:,.0f}".format(r.collections|float) }}</td>
-        <td style="text-align:right;color:#7fa8ff;">₦{{ "{:,.0f}".format(r.operating_cash|float) }}</td>
-        <td style="text-align:right;color:#f87171;">₦{{ "{:,.0f}".format(r.expenses|float) }}</td>
-        <td style="text-align:right;color:#fbbf24;">₦{{ "{:,.0f}".format(r.office_expenses|float) }}</td>
-        {% if user and user.role == "ADMIN" %}
-        <td style="text-align:right;font-weight:700;">₦{{ "{:,.0f}".format((r.collections|float) - (r.office_expenses|float)) }}</td>
-        {% endif %}
-      </tr>
-      {% endfor %}
-    </tbody>
-    <tfoot>
-      <tr style="border-top:2px solid var(--border);font-weight:800;">
-        <td>TOTAL</td>
-        <td style="text-align:right;color:#4ade80;">₦{{ "{:,.0f}".format(total_collections) }}</td>
-        <td style="text-align:right;color:#7fa8ff;">₦{{ "{:,.0f}".format(total_operating_cash) }}</td>
-        <td style="text-align:right;color:#f87171;">₦{{ "{:,.0f}".format(total_expenses) }}</td>
-        <td style="text-align:right;color:#fbbf24;">₦{{ "{:,.0f}".format(total_office_expenses) }}</td>
-        {% if user and user.role == "ADMIN" %}
-        <td style="text-align:right;">₦{{ "{:,.0f}".format(remittance) }}</td>
-        {% endif %}
-      </tr>
-    </tfoot>
-  </table>
-  </div>
-</div>
-{% else %}
-<div class="card" style="text-align:center;color:var(--muted);padding:50px 20px;">
-  No cash entries found for this period.
-</div>
-{% endif %}
+
 {% endblock %}
