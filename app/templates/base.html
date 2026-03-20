@@ -294,11 +294,11 @@
       <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
         <span class="nav-icon">➕</span>New Order
       </a>
+      {% endif %}
       {% if role in ("ADMIN", "SUPERVISOR") %}
       <a href="/parse-order" data-active="{% if active == 'parse_order' %}1{% else %}0{% endif %}">
         <span class="nav-icon">💬</span>Parse WhatsApp
       </a>
-      {% endif %}
       {% endif %}
 
       {% if role in ("ADMIN", "SUPERVISOR", "AGENT") %}
