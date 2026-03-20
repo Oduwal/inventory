@@ -18,6 +18,43 @@
       --border:rgba(255,255,255,.07);
       --shadow:0 16px 40px rgba(0,0,0,.45);--radius:16px;--sidebar-w:240px;
     }
+    /* ── Light mode overrides ── */
+    body.light-mode{
+      --bg:#f0f4ff;--card:rgba(255,255,255,.9);--text:#0f1c3f;
+      --muted:#5a6a90;--accent:#2d5fff;--accent2:#16a34a;
+      --danger:#dc2626;--warn:#d97706;--purple:#6d28d9;
+      --border:rgba(0,0,40,.1);
+      --shadow:0 4px 24px rgba(0,0,60,.1);
+    }
+    body.light-mode{
+      background:#f0f4ff !important;
+      background-image:
+        radial-gradient(ellipse 1400px 700px at 10% 0%,rgba(180,200,255,.4),transparent),
+        radial-gradient(ellipse 900px 600px at 85% 10%,rgba(160,140,255,.2),transparent) !important;
+    }
+    body.light-mode .sidebar{
+      background:rgba(255,255,255,.95) !important;
+      border-right-color:rgba(0,0,60,.08) !important;
+    }
+    body.light-mode .userbox{
+      background:linear-gradient(135deg,rgba(45,95,255,.08),rgba(109,40,217,.05)) !important;
+      border-color:rgba(45,95,255,.15) !important;
+    }
+    body.light-mode .nav a{color:#5a6a90;}
+    body.light-mode .nav a:hover{background:rgba(45,95,255,.06);border-color:rgba(45,95,255,.15);color:#0f1c3f;}
+    body.light-mode .nav a[data-active="1"]{background:rgba(45,95,255,.12);border-color:rgba(45,95,255,.3);color:#2d5fff;}
+    body.light-mode .card{background:rgba(255,255,255,.9);border-color:rgba(0,0,60,.08);}
+    body.light-mode table th{color:#5a6a90;}
+    body.light-mode table td{border-bottom-color:rgba(0,0,60,.06);}
+    body.light-mode table tr:hover td{background:rgba(45,95,255,.04);}
+    body.light-mode input,body.light-mode select,body.light-mode textarea{
+      background:rgba(255,255,255,.9);border-color:rgba(0,0,60,.15);color:#0f1c3f;
+    }
+    body.light-mode .btnGhost{background:rgba(255,255,255,.8);border-color:rgba(0,0,60,.15);color:#0f1c3f;}
+    body.light-mode .btnGhost:hover{background:#fff;border-color:rgba(45,95,255,.3);}
+    body.light-mode .nav-section{color:#5a6a90;}
+    body.light-mode .nav-divider{background:rgba(0,0,60,.08);}
+    body.light-mode .brand-text span{color:#5a6a90;}
     *{box-sizing:border-box;margin:0;padding:0}
     body{
       font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
@@ -318,6 +355,19 @@
     </nav>
   </aside>
 
+  <!-- Theme toggle button (fixed top-right) -->
+  <div style="position:fixed;top:16px;right:20px;z-index:200;">
+    <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode"
+      style="width:38px;height:38px;border-radius:12px;border:1px solid var(--border);
+             background:var(--card);color:var(--muted);cursor:pointer;
+             display:flex;align-items:center;justify-content:center;font-size:17px;
+             transition:all .2s;box-shadow:var(--shadow);"
+      onmouseover="this.style.color='var(--accent)';this.style.borderColor='rgba(79,124,255,.3)'"
+      onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
+      <span id="theme-icon">🌙</span>
+    </button>
+  </div>
+
   <main class="content">
     <div class="topbar">
       <div class="title">
@@ -343,6 +393,26 @@
     <button onclick="dismissBanner()" style="background:rgba(255,255,255,.2);color:white;border:none;padding:8px 12px;border-radius:10px;cursor:pointer;font-size:13px;">✕</button>
   </div>
 </div>
+<script>
+// ── Theme toggle ──
+function applyTheme(mode) {
+  if (mode === 'light') {
+    document.body.classList.add('light-mode');
+    document.getElementById('theme-icon').textContent = '☀️';
+  } else {
+    document.body.classList.remove('light-mode');
+    document.getElementById('theme-icon').textContent = '🌙';
+  }
+  localStorage.setItem('theme', mode);
+}
+function toggleTheme() {
+  const current = localStorage.getItem('theme') || 'dark';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+// Apply saved theme on load
+(function(){ applyTheme(localStorage.getItem('theme') || 'dark'); })();
+</script>
+
 <script>
 let deferredPrompt=null;
 const banner=document.getElementById('pwa-banner');
