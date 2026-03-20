@@ -10,8 +10,11 @@
 
 {% block content %}
 
-{% if error %}
-<div class="alert alert-danger">⚠ {{ error }}</div>
+{% if request.query_params.get('success') %}
+<div class="alert alert-success">✓ {{ request.query_params.get('success')|replace('+',' ') }}</div>
+{% endif %}
+{% if error or request.query_params.get('error') %}
+<div class="alert alert-danger">⚠ {{ error or request.query_params.get('error')|replace('+',' ') }}</div>
 {% endif %}
 
 <!-- Customer & Status grid -->
@@ -70,6 +73,42 @@
     </form>
   </div>
 </div>
+
+<!-- Assign Agent — shown to admin/supervisor when order is not yet delivered -->
+{% if agents and d.status != "DELIVERED" %}
+<div class="card" style="margin-bottom:16px;border-top:3px solid #f59e0b;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+    <div>
+      <span class="badge b-yellow">👤 ASSIGN AGENT</span>
+      {% if d.agent %}
+      <span style="font-size:12px;color:var(--muted);margin-left:10px;">Currently: <strong style="color:var(--text);">{{ d.agent.full_name or d.agent.username }}</strong></span>
+      {% else %}
+      <span style="font-size:12px;color:#f87171;margin-left:10px;">⚠ No agent assigned yet</span>
+      {% endif %}
+    </div>
+  </div>
+  <form method="post" action="/deliveries/{{ d.id }}/assign-agent" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <div style="flex:1;min-width:200px;">
+      <label>Select Agent</label>
+      <select name="agent_id" required>
+        <option value="">— select agent —</option>
+        {% for a in agents %}
+        <option value="{{ a.id }}" {% if d.agent_id == a.id %}selected{% endif %}>
+          {{ a.full_name or a.username }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <button class="btnPrimary" type="submit" style="background:linear-gradient(135deg,#f59e0b,#d97706);">
+        ✓ Assign Agent
+      </button>
+    </div>
+  </form>
+</div>
+{% endif %}
 
 <!-- Items table -->
 <div class="card" style="margin-bottom:16px;">

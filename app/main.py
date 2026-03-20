@@ -2143,12 +2143,45 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     col = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "COLLECTION")) or 0
     exp = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "EXPENSE")) or 0
     csrf_token = get_csrf_token(request)
+    agents = db.execute(
+        select(User).where(User.role == "AGENT").where(User.branch_id == d.branch_id).order_by(User.username.asc())
+    ).scalars().all() if is_admin(user) or is_supervisor(user) else []
     return templates.TemplateResponse("delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": float(col), "expense_total": float(exp),
         "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
-        "active": "deliveries", "csrf_token": csrf_token,
+        "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
     })
+
+
+@app.post("/deliveries/{delivery_id}/assign-agent")
+async def delivery_assign_agent(
+    request: Request, delivery_id: int,
+    agent_id: int = Form(...), csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    d = db.get(Delivery, delivery_id)
+    if not d: raise HTTPException(status_code=404, detail="Delivery not found")
+    if d.status == "DELIVERED":
+        return redirect(f"/deliveries/{delivery_id}?error=Cannot+reassign+a+delivered+order")
+    # Admin can only assign within their branch
+    if is_admin(user) and d.branch_id != user.branch_id:
+        return HTMLResponse("Forbidden", status_code=403)
+    agent = db.get(User, agent_id)
+    if not agent or agent.branch_id != d.branch_id:
+        return redirect(f"/deliveries/{delivery_id}?error=Agent+not+found+or+not+in+this+branch")
+    d.agent_id = agent_id
+    db.commit()
+    audit_log(db, user.id, "DELIVERY_REASSIGNED",
+              f"delivery_id={delivery_id} assigned to agent_id={agent_id}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    return redirect(f"/deliveries/{delivery_id}?success=Agent+assigned+successfully")
 
 
 @app.post("/deliveries/{delivery_id}/date")
