@@ -2,405 +2,345 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>{% block title %}Inventory Keeper{% endblock %}</title>
   <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#0061ff">
+  <meta name="theme-color" content="#4f7cff">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="InvKeeper">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-  <script id="tailwind-config">
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "primary-fixed": "#dbe1ff",
-            "surface-container": "#171f33",
-            "error": "#ffb4ab",
-            "secondary": "#4edea3",
-            "on-secondary": "#003824",
-            "secondary-container": "#00a572",
-            "primary-container": "#0061ff",
-            "outline": "#8c90a2",
-            "error-container": "#93000a",
-            "background": "#0b1326",
-            "surface-container-highest": "#2d3449",
-            "surface-tint": "#b4c5ff",
-            "on-primary": "#002a78",
-            "surface-container-low": "#131b2e",
-            "on-surface": "#dae2fd",
-            "on-surface-variant": "#c2c6d9",
-            "surface-container-lowest": "#060e20",
-            "tertiary-container": "#d12e32",
-            "tertiary": "#ffb3ad",
-            "surface-container-high": "#222a3d",
-            "outline-variant": "#424656",
-            "surface-dim": "#0b1326",
-            "primary": "#b4c5ff",
-            "on-primary-container": "#f1f2ff",
-            "surface-variant": "#2d3449",
-            "surface": "#0b1326",
-            "surface-bright": "#31394d",
-            "inverse-on-surface": "#283044",
-          },
-          fontFamily: {
-            "headline": ["Manrope", "sans-serif"],
-            "body": ["Inter", "sans-serif"],
-          },
-          borderRadius: {
-            "DEFAULT": "0.125rem",
-            "lg": "0.25rem",
-            "xl": "0.75rem",
-            "2xl": "1rem",
-            "full": "9999px"
-          },
-        },
-      },
-    }
-  </script>
   <style>
-    .material-symbols-outlined {
-      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-      font-family: 'Material Symbols Outlined';
-      font-style: normal;
-      font-size: 20px;
-      line-height: 1;
-      display: inline-block;
-      white-space: nowrap;
-      word-wrap: normal;
-      direction: ltr;
-      -webkit-font-feature-settings: 'liga';
-      -webkit-font-smoothing: antialiased;
+    :root{
+      --bg:#080f1e;--card:rgba(255,255,255,.04);--text:#e7eefc;
+      --muted:#8a9bc4;--accent:#4f7cff;--accent2:#22c55e;
+      --danger:#ef4444;--warn:#f59e0b;--purple:#8b5cf6;
+      --border:rgba(255,255,255,.07);
+      --shadow:0 16px 40px rgba(0,0,0,.45);--radius:16px;--sidebar-w:240px;
     }
-    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #2d3449; border-radius: 10px; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      background:var(--bg);
+      background-image:
+        radial-gradient(ellipse 1400px 700px at 10% 0%,rgba(30,50,120,.55),transparent),
+        radial-gradient(ellipse 900px 600px at 85% 10%,rgba(40,20,100,.4),transparent),
+        radial-gradient(ellipse 600px 500px at 50% 100%,rgba(10,30,80,.3),transparent);
+      color:var(--text);min-height:100vh;
+    }
+    a{color:inherit;text-decoration:none}
+    .layout{display:flex;min-height:100vh}
 
-    /* Legacy compat — map old CSS vars to new palette */
-    :root {
-      --bg: #0b1326;
-      --card: rgba(34,42,61,0.6);
-      --text: #dae2fd;
-      --muted: #8c90a2;
-      --accent: #0061ff;
-      --accent2: #4edea3;
-      --danger: #ffb4ab;
-      --warn: #fbbf24;
-      --purple: #b4c5ff;
-      --border: rgba(66,70,86,0.3);
-      --shadow: 0 8px 32px rgba(0,0,0,0.5);
-      --radius: 12px;
-      --sidebar-w: 280px;
+    /* ── Sidebar ── */
+    .sidebar{
+      width:var(--sidebar-w);min-width:var(--sidebar-w);
+      position:fixed;top:0;left:0;height:100vh;
+      overflow-y:auto;overflow-x:hidden;
+      padding:18px 12px 28px;
+      border-right:1px solid var(--border);
+      background:rgba(8,15,30,.85);
+      backdrop-filter:blur(18px);
+      scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.08) transparent;
+      z-index:100;
     }
+    .sidebar::-webkit-scrollbar{width:4px}
+    .sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:4px}
+    .content{margin-left:var(--sidebar-w);flex:1;padding:26px 28px;min-width:0}
+
+    /* Brand */
+    .brand{display:flex;gap:12px;align-items:center;padding:4px 6px 16px}
+    .logo{
+      width:36px;height:36px;border-radius:12px;flex-shrink:0;
+      background:linear-gradient(135deg,var(--accent),var(--purple));
+      box-shadow:0 4px 16px rgba(79,124,255,.4);
+      display:flex;align-items:center;justify-content:center;font-size:16px;
+    }
+    .brand-text h1{margin:0;font-size:13.5px;font-weight:800;letter-spacing:.2px;line-height:1.3}
+    .brand-text span{color:var(--muted);font-size:10.5px}
+
+    /* Userbox */
+    .userbox{
+      margin:0 0 8px;padding:10px 12px;border-radius:14px;
+      background:linear-gradient(135deg,rgba(79,124,255,.12),rgba(139,92,246,.08));
+      border:1px solid rgba(79,124,255,.2);
+    }
+    .userbox .name{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .userbox .role{
+      color:var(--accent);font-size:10.5px;margin-top:3px;font-weight:600;
+      text-transform:uppercase;letter-spacing:.06em;
+    }
+
+    /* Nav */
+    .nav{display:flex;flex-direction:column;gap:2px}
+    .nav-section{
+      color:var(--muted);font-size:9.5px;font-weight:800;letter-spacing:1px;
+      text-transform:uppercase;padding:12px 8px 4px;opacity:.7;
+    }
+    .nav a{
+      padding:8px 12px;border-radius:11px;
+      background:transparent;border:1px solid transparent;
+      display:flex;align-items:center;gap:9px;
+      font-size:13px;transition:all .15s ease;white-space:nowrap;
+      color:var(--muted);
+    }
+    .nav a:hover{background:rgba(255,255,255,.05);border-color:var(--border);color:var(--text)}
+    .nav a[data-active="1"]{
+      background:rgba(79,124,255,.16);border-color:rgba(79,124,255,.35);
+      color:#7fa8ff;font-weight:700;
+    }
+    .nav-icon{width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px}
+    .nav-divider{height:1px;background:var(--border);margin:6px 0}
+
+    /* Topbar */
+    .topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:22px}
+    .title h2{font-size:22px;font-weight:800;letter-spacing:-.3px}
+    .title p{margin-top:5px;color:var(--muted);font-size:13px}
 
     /* Cards */
-    .card {
-      background: #222a3d;
-      border: 1px solid rgba(66,70,86,0.2);
-      border-radius: 12px;
-      padding: 18px;
+    .card{
+      background:rgba(255,255,255,.04);border:1px solid var(--border);
+      border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);
     }
-    .card::before { display: none; }
 
     /* Badges */
-    .badge {
-      display: inline-flex; align-items: center; gap: 5px;
-      font-size: 10px; font-weight: 700; padding: 3px 10px;
-      border-radius: 9999px; letter-spacing: .04em; text-transform: uppercase;
+    .badge{
+      display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+      padding:5px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.1);
+      background:rgba(255,255,255,.05);letter-spacing:.02em;
     }
-    .b-blue   { background: rgba(0,97,255,.15); border: 1px solid rgba(0,97,255,.3); color: #b4c5ff; }
-    .b-green  { background: rgba(78,222,163,.1); border: 1px solid rgba(78,222,163,.3); color: #4edea3; }
-    .b-red    { background: rgba(255,180,171,.1); border: 1px solid rgba(255,180,171,.3); color: #ffb4ab; }
-    .b-yellow { background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3); color: #fbbf24; }
-    .b-purple { background: rgba(180,197,255,.1); border: 1px solid rgba(180,197,255,.3); color: #b4c5ff; }
-    .b-teal   { background: rgba(78,222,163,.08); border: 1px solid rgba(78,222,163,.2); color: #4edea3; }
+    .b-blue  {background:rgba(79,124,255,.18);border-color:rgba(79,124,255,.35);color:#7fa8ff}
+    .b-green {background:rgba(34,197,94,.14); border-color:rgba(34,197,94,.3);color:#4ade80}
+    .b-red   {background:rgba(239,68,68,.14); border-color:rgba(239,68,68,.3);color:#f87171}
+    .b-yellow{background:rgba(245,158,11,.14);border-color:rgba(245,158,11,.3);color:#fbbf24}
+    .b-purple{background:rgba(139,92,246,.14);border-color:rgba(139,92,246,.3);color:#a78bfa}
+    .b-teal  {background:rgba(20,184,166,.14);border-color:rgba(20,184,166,.3);color:#2dd4bf}
 
     /* Buttons */
-    .btnPrimary {
-      appearance: none; border: none; cursor: pointer;
-      padding: 9px 18px; border-radius: 12px; color: #f1f2ff;
-      font-weight: 700; font-size: 13px; font-family: 'Manrope', sans-serif;
-      background: #0061ff;
-      box-shadow: 0 4px 16px rgba(0,97,255,0.3);
-      transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
+    .btnPrimary{
+      appearance:none;border:none;cursor:pointer;padding:10px 18px;
+      border-radius:12px;color:white;font-weight:700;font-size:13px;
+      background:linear-gradient(135deg,var(--accent),var(--purple));
+      box-shadow:0 6px 20px rgba(79,124,255,.3);
+      transition:all .15s ease;display:inline-flex;align-items:center;gap:6px;
     }
-    .btnPrimary:hover { background: #1a6fff; box-shadow: 0 6px 20px rgba(0,97,255,.45); transform: translateY(-1px); }
-    .btnGhost {
-      appearance: none; border: 1px solid rgba(66,70,86,0.4); cursor: pointer;
-      padding: 9px 18px; border-radius: 12px; color: #c2c6d9;
-      background: rgba(34,42,61,0.5); font-weight: 600; font-size: 13px;
-      transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
+    .btnPrimary:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(79,124,255,.4)}
+    .btnGhost{
+      appearance:none;border:1px solid var(--border);cursor:pointer;
+      padding:10px 18px;border-radius:12px;color:var(--text);
+      background:rgba(255,255,255,.04);font-weight:600;font-size:13px;
+      transition:all .15s ease;display:inline-flex;align-items:center;gap:6px;
     }
-    .btnGhost:hover { background: #2d3449; border-color: rgba(180,197,255,.2); color: #dae2fd; }
-    .btnDanger {
-      appearance: none; border: 1px solid rgba(255,180,171,.3); cursor: pointer;
-      padding: 9px 18px; border-radius: 12px; color: #ffb4ab;
-      background: rgba(255,180,171,.08); font-weight: 600; font-size: 13px;
-      transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
+    .btnGhost:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15)}
+    .btnDanger{
+      appearance:none;border:1px solid rgba(239,68,68,.35);cursor:pointer;
+      padding:10px 18px;border-radius:12px;color:#f87171;
+      background:rgba(239,68,68,.1);font-weight:600;font-size:13px;
+      transition:all .15s ease;
     }
-    .btnDanger:hover { background: rgba(255,180,171,.14); }
+    .btnDanger:hover{background:rgba(239,68,68,.16)}
 
-    /* Tables */
-    table { width: 100%; border-collapse: collapse; }
-    th { color: #8c90a2; font-weight: 700; font-size: 10px; text-transform: uppercase;
-         letter-spacing: .08em; padding: 10px 12px; border-bottom: 1px solid rgba(66,70,86,0.2); text-align: left; }
-    td { padding: 12px 12px; border-bottom: 1px solid rgba(66,70,86,0.1); font-size: 13px; color: #dae2fd; }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(49,57,77,0.3); }
+    /* Table */
+    table{width:100%;border-collapse:collapse}
+    th{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+       padding:10px 12px;border-bottom:1px solid var(--border);text-align:left}
+    td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.04);font-size:13px}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:rgba(255,255,255,.02)}
 
     /* Inputs */
-    input, select, textarea {
-      width: 100%; padding: 10px 14px; border-radius: 12px;
-      border: 1px solid rgba(66,70,86,0.35);
-      background: #060e20; color: #dae2fd;
-      outline: none; font-size: 13px; font-family: 'Inter', sans-serif;
-      transition: border-color .15s, box-shadow .15s;
+    input,select,textarea{
+      width:100%;padding:10px 14px;border-radius:12px;
+      border:1px solid var(--border);
+      background:rgba(0,0,0,.2);color:var(--text);
+      outline:none;font-size:13px;font-family:inherit;
+      transition:border-color .15s;
     }
-    input:focus, select:focus, textarea:focus {
-      border-color: rgba(0,97,255,.5);
-      box-shadow: 0 0 0 3px rgba(0,97,255,.12);
-    }
-    input::placeholder { color: #424656; }
-    label {
-      display: block; color: #8c90a2; font-size: 11px; font-weight: 700;
-      margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em;
-    }
-    .inputs { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-    .inputs > div { min-width: 180px; flex: 1; }
+    input:focus,select:focus,textarea:focus{border-color:rgba(79,124,255,.5)}
+    label{display:block;color:var(--muted);font-size:11.5px;font-weight:600;
+          margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+    .inputs{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+    .inputs > div{min-width:180px;flex:1}
+    .muted{color:var(--muted)}
+    .small{font-size:12px}
 
-    /* Alerts */
-    .alert { padding: 12px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-    .alert-danger { background: rgba(255,180,171,.1); border: 1px solid rgba(255,180,171,.25); color: #ffb4ab; }
-    .alert-success { background: rgba(78,222,163,.1); border: 1px solid rgba(78,222,163,.25); color: #4edea3; }
-
-    .muted { color: #8c90a2; }
-    .small { font-size: 12px; }
-
-    /* Layout */
-    body { background: #0b1326; color: #dae2fd; font-family: 'Inter', sans-serif; min-height: 100vh; }
-    a { color: inherit; text-decoration: none; }
-    .layout { display: flex; min-height: 100vh; }
-    .content { margin-left: 280px; padding-top: 64px; flex: 1; padding-left: 32px; padding-right: 32px; padding-bottom: 40px; min-width: 0; }
-    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 28px; margin-top: 28px; }
-    .title h2 { font-family: 'Manrope', sans-serif; font-size: 26px; font-weight: 800; color: #dae2fd; letter-spacing: -.3px; }
-    .title p { font-size: 13px; color: #8c90a2; margin-top: 4px; }
-
-    /* Page entry animation */
-    @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-    .content > * { animation: fadeUp .2s ease both; }
-    .content > *:nth-child(2) { animation-delay: .04s; }
-    .content > *:nth-child(3) { animation-delay: .08s; }
-    .content > *:nth-child(4) { animation-delay: .12s; }
+    /* Alert boxes */
+    .alert{padding:12px 16px;border-radius:12px;font-size:13px;font-weight:600;margin-bottom:16px}
+    .alert-danger{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171}
+    .alert-success{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.3);color:#4ade80}
 
     /* Mobile */
-    @media(max-width:860px) {
-      .content { margin-left: 0; padding-top: 70px; padding-left: 16px; padding-right: 16px; }
-      .topbar { flex-direction: column; align-items: flex-start; }
-      .inputs { flex-direction: column; align-items: stretch; }
-      .inputs > div { min-width: 0; width: 100%; }
+    @media(max-width:860px){
+      .sidebar{position:relative;width:100%;height:auto;overflow:visible;
+               border-right:none;border-bottom:1px solid var(--border)}
+      .nav{flex-direction:row;flex-wrap:wrap;gap:4px}
+      .nav a{font-size:12px;padding:6px 10px}
+      .nav-section,.nav-divider{display:none}
+      .layout{flex-direction:column}
+      .content{margin-left:0;padding:16px 14px}
+      .topbar{flex-direction:column;align-items:flex-start;gap:10px}
+      .topbar > div{width:100%}
+      .inputs{flex-direction:column;align-items:stretch}
+      .inputs > div{min-width:0;width:100%}
     }
   </style>
 </head>
-<body class="dark">
-
-<!-- Sidebar -->
-<aside class="fixed left-0 top-0 h-full w-[280px] bg-[#0b1326] flex flex-col py-6 border-r border-[#424656]/20 z-50 custom-scrollbar overflow-y-auto">
-
-  <!-- Brand -->
-  <div class="px-6 mb-8">
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 bg-[#0061ff] rounded-xl flex items-center justify-center shadow-lg shadow-[#0061ff]/25">
-        <span class="material-symbols-outlined text-white" style="font-variation-settings:'FILL' 1;font-size:20px;">warehouse</span>
-      </div>
-      <div>
-        <h1 class="text-base font-black text-[#dae2fd] leading-tight font-headline">Inventory Keeper</h1>
-        <p class="text-[10px] text-[#8c90a2] font-medium">Logistics & Stock</p>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">📦</div>
+      <div class="brand-text">
+        <h1>Inventory Keeper</h1>
+        <span>Logistics & stock</span>
       </div>
     </div>
-  </div>
 
-  <!-- User box -->
-  <div class="mx-4 mb-6 px-4 py-3 bg-[#222a3d] rounded-xl border border-[#424656]/20">
-    <div class="text-sm font-bold text-[#dae2fd] font-headline truncate">{{ user.username if user else "Guest" }}</div>
-    <div class="text-[10px] text-[#0061ff] font-bold tracking-wider uppercase mt-1">{{ user.role if user else "—" }}</div>
-  </div>
+    <div class="userbox">
+      <div class="name">{{ user.username if user else "Guest" }}</div>
+      <div class="role">{{ user.role if user else "—" }}</div>
+    </div>
 
-  <!-- Nav -->
-  <nav class="flex-1 px-2 space-y-0.5">
-    {% set role = (user.role | upper) if user else "" %}
+    <nav class="nav">
+      {% set role = (user.role | upper) if user else "" %}
 
-    <!-- Overview -->
-    {% if role == "AGENT" %}
-    <a href="/agent-overview" class="{% if active == 'dashboard' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]" {% if active == 'dashboard' %}style="font-variation-settings:'FILL' 1"{% endif %}>dashboard</span>
-      <span class="text-sm font-semibold font-headline">Overview</span>
-    </a>
-    {% elif role == "SUPERVISOR" %}
-    <a href="/supervisor" class="{% if active == 'dashboard' or active == 'supervisor' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]" {% if active == 'dashboard' or active == 'supervisor' %}style="font-variation-settings:'FILL' 1"{% endif %}>dashboard</span>
-      <span class="text-sm font-semibold font-headline">Overview</span>
-    </a>
-    {% else %}
-    <a href="/" class="{% if active == 'dashboard' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]" {% if active == 'dashboard' %}style="font-variation-settings:'FILL' 1"{% endif %}>dashboard</span>
-      <span class="text-sm font-semibold font-headline">Overview</span>
-    </a>
-    {% endif %}
-
-    {% if role == "SUPERVISOR" %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Branches</p></div>
-    <a href="/branches" class="{% if active == 'branches' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">corporate_fare</span>
-      <span class="text-sm font-semibold font-headline">Branches</span>
-    </a>
-    {% endif %}
-
-    {% if role in ("ADMIN", "SUPERVISOR") %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Inventory</p></div>
-    <a href="/items" class="{% if active == 'items' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">inventory_2</span>
-      <span class="text-sm font-semibold font-headline">Items</span>
-    </a>
-    <a href="/items/import" class="{% if active == 'items_import' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">upload_file</span>
-      <span class="text-sm font-semibold font-headline">Import Items</span>
-    </a>
-    <a href="/transactions" class="{% if active == 'transactions' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">swap_horiz</span>
-      <span class="text-sm font-semibold font-headline">Transactions</span>
-    </a>
-    <a href="/low-stock" class="{% if active == 'low' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">warning</span>
-      <span class="text-sm font-semibold font-headline">Low Stock</span>
-    </a>
-    <a href="/stale-stock" class="{% if active == 'stale' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">schedule</span>
-      <span class="text-sm font-semibold font-headline">Stale Stock</span>
-      {% if stale_count and stale_count > 0 %}
-      <span class="ml-auto bg-[#d12e32] text-white text-[9px] font-bold px-2 py-0.5 rounded-full">{{ stale_count }}</span>
+      {% if role == "AGENT" %}
+      <a href="/agent-overview" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
+      </a>
+      {% elif role == "SUPERVISOR" %}
+      <a href="/supervisor" data-active="{% if active == 'dashboard' or active == 'supervisor' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
+      </a>
+      {% else %}
+      <a href="/" data-active="{% if active == 'dashboard' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏠</span>Overview
+      </a>
       {% endif %}
-    </a>
-    {% endif %}
 
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Deliveries</p></div>
-    <a href="/deliveries" class="{% if active == 'deliveries' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">local_shipping</span>
-      <span class="text-sm font-semibold font-headline">Deliveries</span>
-    </a>
-    {% if role in ("ADMIN", "AGENT") %}
-    <a href="/deliveries/new" class="{% if active == 'deliveries_new' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">add_circle</span>
-      <span class="text-sm font-semibold font-headline">New Order</span>
-    </a>
-    {% endif %}
-    {% if role in ("ADMIN", "SUPERVISOR", "AGENT") %}
-    <a href="/transfers" class="{% if active == 'transfers' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">sync_alt</span>
-      <span class="text-sm font-semibold font-headline">Stock Transfers</span>
-    </a>
-    {% endif %}
-    {% if role == "ADMIN" %}
-    <a href="/merchant-receipt/new" class="{% if active == 'merchant_receipt' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">storefront</span>
-      <span class="text-sm font-semibold font-headline">Merchant Receipt</span>
-    </a>
-    {% endif %}
+      {% if role == "SUPERVISOR" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Branches</div>
+      <a href="/branches" data-active="{% if active == 'branches' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏢</span>Branches
+      </a>
+      {% endif %}
 
-    {% if role in ("ADMIN", "AGENT") %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Finance</p></div>
-    <a href="/cash" class="{% if active == 'cash' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">payments</span>
-      <span class="text-sm font-semibold font-headline">Cash</span>
-    </a>
-    <a href="/reports" class="{% if active == 'reports' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">bar_chart</span>
-      <span class="text-sm font-semibold font-headline">Reports</span>
-    </a>
-    {% elif role == "SUPERVISOR" %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Finance</p></div>
-    <a href="/reports" class="{% if active == 'reports' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">bar_chart</span>
-      <span class="text-sm font-semibold font-headline">Reports</span>
-    </a>
-    {% endif %}
+      {% if role in ("ADMIN", "SUPERVISOR") %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Inventory</div>
+      <a href="/items" data-active="{% if active == 'items' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📦</span>Items
+      </a>
+      <a href="/items/import" data-active="{% if active == 'items_import' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">⬆️</span>Import Items
+      </a>
+      <a href="/transactions" data-active="{% if active == 'transactions' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🔄</span>Transactions
+      </a>
+      <a href="/low-stock" data-active="{% if active == 'low' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">⚠️</span>Low Stock
+      </a>
+      <a href="/stale-stock" data-active="{% if active == 'stale' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🕰️</span>Stale Stock
+        {% if stale_count and stale_count > 0 %}
+        <span style="margin-left:auto;background:#ef4444;color:white;border-radius:20px;padding:1px 7px;font-size:10px;font-weight:700;">{{ stale_count }}</span>
+        {% endif %}
+      </a>
+      {% endif %}
 
-    {% if role == "ADMIN" %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Admin</p></div>
-    <a href="/agents" class="{% if active == 'agents' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">group</span>
-      <span class="text-sm font-semibold font-headline">Agents</span>
-    </a>
-    {% elif role == "SUPERVISOR" %}
-    <div class="px-6 pt-4 pb-1"><p class="text-[9px] font-bold text-[#424656] uppercase tracking-widest">Admin</p></div>
-    <a href="/agents" class="{% if active == 'agents' %}bg-[#0061ff] text-white shadow-lg shadow-[#0061ff]/25{% else %}text-[#dae2fd]/60 hover:text-[#dae2fd] hover:bg-[#222a3d]{% endif %} rounded-xl mx-2 flex items-center px-4 py-3 transition-all duration-200 gap-3">
-      <span class="material-symbols-outlined text-[18px]">manage_accounts</span>
-      <span class="text-sm font-semibold font-headline">Admins</span>
-    </a>
-    {% endif %}
-  </nav>
+      <div class="nav-divider"></div>
+      <div class="nav-section">Deliveries</div>
+      <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🚚</span>Deliveries
+      </a>
+      {% if role in ("ADMIN", "AGENT") %}
+      <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">➕</span>New Order
+      </a>
+      {% endif %}
 
-  <!-- Logout -->
-  {% if user %}
-  <div class="px-4 mt-4 pt-4 border-t border-[#424656]/20">
-    <form method="post" action="/logout">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-      <button type="submit" class="w-full text-[#dae2fd]/50 hover:text-[#ffb4ab] hover:bg-[#222a3d] rounded-xl px-4 py-3 flex items-center gap-3 transition-all text-sm font-semibold font-headline">
-        <span class="material-symbols-outlined text-[18px]">logout</span>
-        Logout
-      </button>
-    </form>
-  </div>
-  {% endif %}
-</aside>
+      {% if role in ("ADMIN", "SUPERVISOR", "AGENT") %}
+      <a href="/transfers" data-active="{% if active == 'transfers' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">↔️</span>Stock Transfers
+      </a>
+      {% endif %}
+      {% if role == "ADMIN" %}
+      <a href="/merchant-receipt/new" data-active="{% if active == 'merchant_receipt' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏪</span>Merchant Receipt
+      </a>
+      {% endif %}
 
-<!-- Top Header -->
-<header class="fixed top-0 right-0 w-[calc(100%-280px)] h-16 bg-[#131b2e] flex items-center justify-between px-8 z-40 border-b border-[#424656]/15">
-  <div class="flex-1 max-w-lg">
-    <div class="relative">
-      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#424656] text-[18px]">search</span>
-      <input class="w-full bg-[#060e20] border border-[#424656]/30 rounded-xl pl-9 pr-4 py-2 text-sm placeholder:text-[#424656] focus:ring-1 focus:ring-[#0061ff]/50 focus:border-[#0061ff]/50" placeholder="Search..." type="text" style="transition:all .15s;"/>
+      {% if role in ("ADMIN", "AGENT") %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Finance</div>
+      <a href="/cash" data-active="{% if active == 'cash' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">💰</span>Cash
+      </a>
+      <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📄</span>Reports
+      </a>
+      {% elif role == "SUPERVISOR" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Finance</div>
+      <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">📄</span>Reports
+      </a>
+      {% endif %}
+
+      {% if role == "ADMIN" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Admin</div>
+      <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">👤</span>Agents
+      </a>
+      {% elif role == "SUPERVISOR" %}
+      <div class="nav-divider"></div>
+      <div class="nav-section">Admin</div>
+      <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">👤</span>Admins
+      </a>
+      {% endif %}
+
+      {% if user %}
+      <div class="nav-divider"></div>
+      <!-- [FIX-4] CSRF token on logout form -->
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        <button type="submit" style="
+          width:100%;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);
+          color:#f87171;border-radius:11px;padding:8px 12px;cursor:pointer;
+          font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;
+          transition:all .15s;">
+          <span>🚪</span> Logout
+        </button>
+      </form>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <main class="content">
+    <div class="topbar">
+      <div class="title">
+        <h2>{% block page_title %}{% endblock %}</h2>
+        <p>{% block page_subtitle %}{% endblock %}</p>
+      </div>
+      <div>{% block top_right %}{% endblock %}</div>
     </div>
-  </div>
-  <div class="flex items-center gap-4">
-    <div class="h-7 w-px bg-[#424656]/30"></div>
-    <div class="text-right">
-      <p class="text-sm font-bold text-[#dae2fd] font-headline leading-none">{{ user.username if user else "Guest" }}</p>
-      <p class="text-[10px] text-[#0061ff] font-bold tracking-wider uppercase mt-0.5">{{ user.role if user else "" }}</p>
-    </div>
-    <div class="w-9 h-9 bg-[#0061ff] rounded-xl flex items-center justify-center shadow-lg shadow-[#0061ff]/20">
-      <span class="material-symbols-outlined text-white text-[16px]" style="font-variation-settings:'FILL' 1">person</span>
-    </div>
-  </div>
-</header>
-
-<!-- Main Content -->
-<main class="content">
-  <div class="topbar">
-    <div class="title">
-      <h2>{% block page_title %}{% endblock %}</h2>
-      <p>{% block page_subtitle %}{% endblock %}</p>
-    </div>
-    <div>{% block top_right %}{% endblock %}</div>
-  </div>
-  {% block content %}{% endblock %}
-</main>
+    {% block content %}{% endblock %}
+  </main>
+</div>
 
 <!-- PWA Banner -->
 <div id="pwa-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;
-  background:#131b2e; border-top:1px solid rgba(66,70,86,.3);
-  padding:14px 20px; align-items:center; justify-content:space-between;">
+  background:linear-gradient(135deg,#4f7cff,#8b5cf6);padding:14px 20px;
+  align-items:center;justify-content:space-between;box-shadow:0 -4px 20px rgba(0,0,0,.4);">
   <div>
-    <div style="font-family:'Manrope',sans-serif;font-weight:700;font-size:13px;color:#dae2fd;">Install Inventory Keeper</div>
-    <div style="font-size:11px;color:#8c90a2;margin-top:2px;">Add to home screen for quick access</div>
+    <div style="font-weight:700;font-size:14px;">Install Inventory Keeper</div>
+    <div style="font-size:12px;opacity:.85;margin-top:2px;">Add to home screen for quick access</div>
   </div>
   <div style="display:flex;gap:8px;">
-    <button onclick="installPWA()" class="btnPrimary" style="padding:7px 16px;font-size:12px;">Install</button>
-    <button onclick="dismissBanner()" class="btnGhost" style="padding:7px 12px;font-size:13px;">✕</button>
+    <button onclick="installPWA()" style="background:white;color:#4f7cff;border:none;padding:8px 16px;border-radius:10px;font-weight:700;cursor:pointer;font-size:13px;">Install</button>
+    <button onclick="dismissBanner()" style="background:rgba(255,255,255,.2);color:white;border:none;padding:8px 12px;border-radius:10px;cursor:pointer;font-size:13px;">✕</button>
   </div>
 </div>
 <script>
@@ -408,7 +348,7 @@ let deferredPrompt=null;
 const banner=document.getElementById('pwa-banner');
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;banner.style.display='flex';});
 function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;banner.style.display='none';});}
-function dismissBanner(){banner.style.display='none';}
+function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa-dismissed','1');}
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
 </script>
