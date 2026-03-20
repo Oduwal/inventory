@@ -841,17 +841,24 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     daily_chart = supervisor_daily_deliveries(db, start_dt, end_dt)
 
     # Daily expenses across all branches for the chart
+    _range_start = start_dt or datetime.utcnow() - timedelta(days=30)
+    _range_end   = end_dt   or datetime.utcnow()
     exp_by_day: dict = {}
     for e in db.execute(
         select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
-        .where(CashEntry.created_at >= (start_dt or datetime.utcnow() - timedelta(days=30)))
-        .where(CashEntry.created_at <= (end_dt or datetime.utcnow()))
+        .where(CashEntry.created_at >= _range_start)
+        .where(CashEntry.created_at <= _range_end)
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
             exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
-    # Build expense series aligned with delivery chart days
-    chart_days_set = [str(r.day) for r in daily_chart]
+    # Build chart days from UNION of delivery days and expense days so neither is missed
+    delivery_days = {str(r.day) for r in daily_chart}
+    expense_days  = set(exp_by_day.keys())
+    all_chart_days = sorted(delivery_days | expense_days)
+    # Fill delivery counts for days that only have expenses
+    delivery_cnt = {str(r.day): int(r.cnt) for r in daily_chart}
+    chart_days_set = all_chart_days
 
     # All-branch inventory & agent totals for the enhanced overview
     all_items_count = db.scalar(select(func.count(func.distinct(func.lower(Item.name))))) or 0
@@ -892,7 +899,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "request": request, "user": user, "rows": rows,
         "top_items": top_items, "best_agents": best_agents,
         "chart_labels": chart_days_set,
-        "chart_data": [int(r.cnt) for r in daily_chart],
+        "chart_data": [delivery_cnt.get(d, 0) for d in chart_days_set],
         "chart_expenses": [round(exp_by_day.get(d, 0), 2) for d in chart_days_set],
         "grand_total_deliveries": sum(r["total_deliveries"] for r in rows),
         "grand_delivered": sum(r["delivered_count"] for r in rows),
