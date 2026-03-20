@@ -1859,6 +1859,20 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     })
 
 
+@app.get("/admin/check-env", response_class=JSONResponse)
+def check_env(request: Request, db: Session = Depends(get_db)):
+    """Supervisor-only: verify environment variables are loaded."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"})
+    user = user_or
+    if not is_supervisor(user): return JSONResponse({"error": "forbidden"})
+    groq = os.getenv("GROQ_API_KEY", "")
+    return JSONResponse({
+        "GROQ_API_KEY": f"set ({len(groq)} chars)" if groq else "NOT SET",
+        "SESSION_SECRET": "set" if os.getenv("SESSION_SECRET") else "NOT SET",
+    })
+
+
 @app.post("/parse-order/api", response_class=JSONResponse)
 async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     """Backend proxy — calls Groq API server-side to avoid CORS."""
