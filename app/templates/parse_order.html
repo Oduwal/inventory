@@ -197,33 +197,23 @@ async function parseOrder() {
 
   const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${i.price}`).join('\n');
 
-  const prompt = `You are an order parser for a Nigerian logistics/inventory business. Extract order details from the WhatsApp message and return ONLY valid JSON with no markdown, no explanation.
+  const prompt = `Extract order details from this WhatsApp message and return ONLY a JSON object. No explanation, no markdown, no code blocks — raw JSON only.
 
-PRODUCT CATALOG (id|name|category|unit|price):
+Available products (use exact id numbers from this list):
 ${catalog}
 
-WHATSAPP MESSAGE:
-${text}
+Message to parse:
+"${text}"
 
-Return this exact JSON:
-{
-  "customer_name": "string or null",
-  "customer_phone": "string or null",
-  "address": "string or null",
-  "note": "string or null",
-  "items": [
-    {"item_id": 123, "item_name": "matched catalog name", "quantity": 1, "unit_price": 0.0, "matched": true}
-  ],
-  "unmatched_items": ["item names that could not be matched to catalog"],
-  "confidence": "high|medium|low"
-}
+Required JSON format (fill every field you can find):
+{"customer_name":"full name from message or null","customer_phone":"phone number or null","address":"delivery address or null","note":"any special instructions or null","items":[{"item_id":1,"item_name":"exact product name","quantity":2,"unit_price":500.0,"matched":true}],"unmatched_items":["product name if not in catalog"],"confidence":"high"}
 
-Rules:
-- Match item names flexibly (abbreviations, informal, pidgin english).
-- quantity must be a positive integer.
-- unit_price from catalog. If unknown set 0.
-- Return null for fields not found.
-- confidence: high = name+items clearly stated, medium = some guessing, low = very unclear.`;
+Important:
+- item_id MUST be the number from the catalog list above
+- quantity must be a whole number greater than 0
+- If a product is mentioned but not in the catalog, add its name to unmatched_items
+- confidence is "high" if clear, "medium" if guessing, "low" if very unclear
+- Return ONLY the JSON, nothing else`;
 
   try {
     const res = await fetch('/parse-order/api', {
@@ -233,8 +223,13 @@ Rules:
     });
     const data = await res.json();
     if (data.error) { showError(data.error); return; }
-    const clean = (data.text || '').replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    let raw = (data.text || '').trim();
+    // Strip markdown code blocks if model added them
+    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+    // Extract JSON object if there's text before/after it
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) { showError('AI returned unexpected format. Raw: ' + raw.substring(0, 200)); return; }
+    const parsed = JSON.parse(jsonMatch[0]);
     fillForm(parsed);
   } catch(e) {
     showError('Could not parse the message. Please try again. (' + e.message + ')');
