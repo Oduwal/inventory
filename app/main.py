@@ -1859,23 +1859,69 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     })
 
 
+@app.post("/parse-order/api", response_class=JSONResponse)
+async def parse_order_api(request: Request, db: Session = Depends(get_db)):
+    """Backend proxy — calls Anthropic API server-side to avoid CORS."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+    import httpx
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    if not prompt:
+        return JSONResponse({"error": "No prompt provided"}, status_code=400)
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return JSONResponse({"error": "ANTHROPIC_API_KEY not set in environment variables."}, status_code=500)
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 1000,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+            )
+        data = resp.json()
+        text = data.get("content", [{}])[0].get("text", "")
+        return JSONResponse({"text": text})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/parse-order", response_class=HTMLResponse)
-def parse_order_form(request: Request, db: Session = Depends(get_db)):
+def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return user_or
     user = user_or
     if not (is_admin(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
-    branch_id = get_selected_branch_id(request, user)
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
-    items  = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    # Supervisor must pick a branch first
+    if is_supervisor(user):
+        effective_branch_id = branch_id or (branches[0].id if branches else 0)
+    else:
+        effective_branch_id = get_selected_branch_id(request, user) or 0
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == effective_branch_id).order_by(User.username.asc())).scalars().all()
+    items  = db.execute(select(Item).where(Item.branch_id == effective_branch_id).order_by(Item.name.asc())).scalars().all()
     csrf_token = get_csrf_token(request)
     items_json = [{"id": i.id, "name": i.name, "category": i.category or "", "unit": i.unit or "pcs", "price": float(i.selling_price or 0)} for i in items]
     return templates.TemplateResponse("parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
         "agents": agents, "items": items, "items_json": items_json,
-        "branches": branches, "selected_branch_id": branch_id,
+        "branches": branches, "selected_branch_id": effective_branch_id,
         "today": date.today().isoformat(), "csrf_token": csrf_token,
     })
 
@@ -1902,6 +1948,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
 async def delivery_create(
     request: Request,
     agent_id: int | None = Form(None),
+    branch_id: int | None = Form(None),
     customer_name: str = Form(...),
     customer_phone: str = Form(""),
     address: str = Form(""),
@@ -1918,16 +1965,27 @@ async def delivery_create(
         return user_or
     user = user_or
     verify_csrf_token(request, csrf_token)
-    if is_admin(user):
+    if is_supervisor(user):
+        # Supervisor creates unassigned order for a specific branch
+        # Find the admin of that branch to assign, or leave agent_id as None
+        if not branch_id:
+            raise HTTPException(status_code=400, detail="Branch required")
+        # Assign to first admin of the branch (they will re-delegate to agents)
+        branch_admin = db.scalar(select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id))
+        target_agent_id = branch_admin.id if branch_admin else None
+        if not target_agent_id:
+            raise HTTPException(status_code=400, detail="No admin found for selected branch")
+    elif is_admin(user):
         if agent_id is None:
             raise HTTPException(status_code=422, detail="agent_id required for admin")
         target_agent_id = int(agent_id)
+        branch_id = get_current_branch_id(request)
     else:
         target_agent_id = int(user.id)
+        branch_id = get_current_branch_id(request)
     cust = sanitize_text(customer_name, 160, "Customer name")
     if not cust:
         raise HTTPException(status_code=400, detail="Customer name required")
-    branch_id = get_current_branch_id(request)
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
     try:

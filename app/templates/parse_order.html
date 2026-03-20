@@ -4,7 +4,25 @@
 {% block page_subtitle %}Paste a WhatsApp chat and AI will extract the order details automatically{% endblock %}
 {% set active = "parse_order" %}
 
+{% block top_right %}
+{% if user and user.role == "SUPERVISOR" and branches %}
+<form method="get" action="/parse-order" style="display:flex;align-items:center;gap:8px;">
+  <label style="margin:0;text-transform:none;font-size:13px;color:var(--muted);">Branch:</label>
+  <select name="branch_id" onchange="this.form.submit()" style="width:auto;padding:8px 12px;">
+    {% for b in branches %}
+    <option value="{{ b.id }}" {% if b.id == selected_branch_id %}selected{% endif %}>{{ b.name }}</option>
+    {% endfor %}
+  </select>
+</form>
+{% endif %}
+{% endblock %}
+
 {% block content %}
+
+{% if user and user.role == "SUPERVISOR" and not selected_branch_id %}
+<div class="alert alert-danger">Please select a branch above to load its item catalog.</div>
+{% endif %}
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;">
 
   <!-- LEFT: Paste box -->
@@ -12,6 +30,9 @@
     <div class="card" style="margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <span class="badge b-green">💬 Step 1 — Paste Chat</span>
+        {% if user and user.role == "SUPERVISOR" %}
+        <span class="badge b-blue">{{ branches | selectattr('id','eq', selected_branch_id) | map(attribute='name') | first | default('—') }}</span>
+        {% endif %}
       </div>
       <label>WhatsApp Message</label>
       <textarea id="wa-input" rows="12"
@@ -26,26 +47,31 @@ Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. M
         </button>
         <button class="btnGhost" onclick="clearAll()">Clear</button>
       </div>
-      <div id="parse-error" style="display:none;" class="alert alert-danger" style="margin-top:10px;"></div>
+      <div id="parse-error" style="display:none;margin-top:10px;" class="alert alert-danger"></div>
     </div>
 
-    <!-- Parsing status -->
-    <div id="parse-status" style="display:none;" class="card" style="text-align:center;padding:28px;">
-      <div style="font-size:28px;margin-bottom:10px;animation:spin 1s linear infinite;display:inline-block;">⚙️</div>
-      <div style="color:var(--muted);font-size:13px;">AI is reading the message...</div>
+    <div id="parse-status" style="display:none;" class="card">
+      <div style="text-align:center;padding:20px;">
+        <div style="font-size:28px;margin-bottom:10px;display:inline-block;animation:spin 1s linear infinite;">⚙️</div>
+        <div style="color:var(--muted);font-size:13px;">AI is reading the message...</div>
+      </div>
     </div>
   </div>
 
-  <!-- RIGHT: Order form (pre-filled by AI) -->
+  <!-- RIGHT: Order form pre-filled by AI -->
   <div id="order-form-wrap" style="display:none;">
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
         <span class="badge b-blue">📋 Step 2 — Review &amp; Confirm</span>
-        <span id="confidence-badge" style="font-size:11px;color:var(--muted);"></span>
+        <span id="confidence-badge" style="font-size:12px;"></span>
       </div>
 
       <form method="post" action="/deliveries/new" id="order-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+        {# For supervisor: pass branch_id as hidden so delivery is created in the right branch #}
+        {% if user and user.role == "SUPERVISOR" %}
+        <input type="hidden" name="branch_id" value="{{ selected_branch_id }}" />
+        {% endif %}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
           <div>
@@ -63,7 +89,13 @@ Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. M
           <input type="text" name="address" id="f-address" placeholder="Street, area, city" />
         </div>
 
-        {% if user and user.role == "ADMIN" %}
+        {% if user and user.role == "SUPERVISOR" %}
+        <div class="alert alert-success" style="margin-bottom:12px;font-size:12px;">
+          ℹ️ This order will be created for <strong>{{ branches | selectattr('id','eq', selected_branch_id) | map(attribute='name') | first | default('selected branch') }}</strong>. The branch admin will assign it to an agent.
+        </div>
+        {# Supervisor doesn't assign agent — admin of that branch will delegate #}
+        <input type="hidden" name="agent_id" value="" />
+        {% elif user and user.role == "ADMIN" %}
         <div style="margin-bottom:12px;">
           <label>Assign Agent *</label>
           <select name="agent_id" required>
@@ -85,22 +117,16 @@ Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. M
           <input type="text" name="note" id="f-note" placeholder="Any extra instructions..." />
         </div>
 
-        <!-- Items -->
         <div style="margin-bottom:12px;">
           <label>Items</label>
           <div id="items-container"></div>
-          <button type="button" class="btnGhost" onclick="addItemRow()" style="margin-top:8px;font-size:12px;padding:6px 14px;">
-            + Add Item
-          </button>
+          <button type="button" class="btnGhost" onclick="addItemRow()" style="margin-top:8px;font-size:12px;padding:6px 14px;">+ Add Item</button>
         </div>
 
-        <!-- Unmatched warning -->
         <div id="unmatched-warn" style="display:none;" class="alert alert-danger"></div>
 
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
-          <button type="submit" class="btnPrimary" style="flex:1;justify-content:center;">
-            ✓ Create Order
-          </button>
+          <button type="submit" class="btnPrimary" style="flex:1;justify-content:center;">✓ Create Order</button>
           <button type="button" class="btnGhost" onclick="resetForm()">Reset</button>
         </div>
       </form>
@@ -108,53 +134,54 @@ Good morning, please I need 3 bottles of vitamin C and 2 packs of paracetamol. M
   </div>
 </div>
 
-<!-- Item row template (hidden) -->
+<!-- Hidden item row template -->
 <template id="item-row-tpl">
-  <div class="item-row-wrap" style="display:grid;grid-template-columns:1fr 90px 110px 32px;gap:8px;align-items:center;margin-bottom:8px;">
+  <div class="item-row-wrap" style="display:grid;grid-template-columns:1fr 80px 110px 32px;gap:8px;align-items:center;margin-bottom:8px;">
     <select name="item_id" required style="margin:0;">
       <option value="">— select item —</option>
       {% for i in items %}
       <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}">{{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}</option>
       {% endfor %}
     </select>
-    <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" oninput="recalcRow(this)"/>
-    <input type="number" name="line_amount" step="0.01" style="margin:0;" placeholder="Amount ₦" />
-    <button type="button" onclick="this.closest('.item-row-wrap').remove()" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:14px;line-height:1;">✕</button>
+    <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" oninput="recalcRow(this)" />
+    <input type="number" name="line_amount" step="0.01" style="margin:0;" placeholder="₦ Amount" />
+    <button type="button" onclick="this.closest('.item-row-wrap').remove()"
+      style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;padding:4px 8px;cursor:pointer;font-size:13px;line-height:1;">✕</button>
   </div>
 </template>
 
 <style>
-@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 
 <script>
 const ITEMS = {{ items_json | tojson }};
-const ITEMS_MAP = {};
-ITEMS.forEach(i => { ITEMS_MAP[i.id] = i; ITEMS_MAP[i.name.toLowerCase()] = i; });
+const ITEMS_BY_ID = {};
+ITEMS.forEach(i => { ITEMS_BY_ID[i.id] = i; });
 
 function addItemRow(itemId, qty, amount) {
   const tpl = document.getElementById('item-row-tpl').content.cloneNode(true);
   const wrap = tpl.querySelector('.item-row-wrap');
-  const sel = wrap.querySelector('select[name="item_id"]');
-  const qtyIn = wrap.querySelector('input[name="quantity"]');
-  const amtIn = wrap.querySelector('input[name="line_amount"]');
+  const sel  = wrap.querySelector('select[name="item_id"]');
+  const qIn  = wrap.querySelector('input[name="quantity"]');
+  const aIn  = wrap.querySelector('input[name="line_amount"]');
   if (itemId) {
     sel.value = itemId;
-    const item = ITEMS_MAP[itemId];
+    const item = ITEMS_BY_ID[itemId];
     if (item) {
-      qtyIn.value = qty || 1;
-      amtIn.value = amount || ((qty || 1) * item.price).toFixed(2);
+      qIn.value = qty || 1;
+      aIn.value = amount !== undefined ? amount : ((qty || 1) * item.price).toFixed(2);
     }
   }
-  sel.addEventListener('change', function() { recalcRow(this); });
+  sel.addEventListener('change', () => recalcRow(qIn));
   document.getElementById('items-container').appendChild(tpl);
 }
 
-function recalcRow(el) {
-  const row = el.closest('.item-row-wrap');
-  const sel = row.querySelector('select[name="item_id"]');
-  const qty = parseFloat(row.querySelector('input[name="quantity"]').value) || 1;
-  const opt = sel.options[sel.selectedIndex];
+function recalcRow(qEl) {
+  const row  = qEl.closest('.item-row-wrap');
+  const sel  = row.querySelector('select[name="item_id"]');
+  const qty  = parseFloat(qEl.value) || 1;
+  const opt  = sel.options[sel.selectedIndex];
   const price = opt ? parseFloat(opt.dataset.price || 0) : 0;
   if (price > 0) row.querySelector('input[name="line_amount"]').value = (qty * price).toFixed(2);
 }
@@ -163,15 +190,14 @@ async function parseOrder() {
   const text = document.getElementById('wa-input').value.trim();
   if (!text) { showError('Please paste a WhatsApp message first.'); return; }
 
-  document.getElementById('parse-btn').disabled = true;
-  document.getElementById('parse-btn').textContent = '⚙️ Parsing...';
+  setBusy(true);
   document.getElementById('parse-error').style.display = 'none';
   document.getElementById('parse-status').style.display = 'block';
   document.getElementById('order-form-wrap').style.display = 'none';
 
   const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${i.price}`).join('\n');
 
-  const prompt = `You are an order parser for a Nigerian logistics/inventory business. Extract order details from the WhatsApp message below and return ONLY valid JSON, no markdown, no explanation.
+  const prompt = `You are an order parser for a Nigerian logistics/inventory business. Extract order details from the WhatsApp message and return ONLY valid JSON with no markdown, no explanation.
 
 PRODUCT CATALOG (id|name|category|unit|price):
 ${catalog}
@@ -179,47 +205,41 @@ ${catalog}
 WHATSAPP MESSAGE:
 ${text}
 
-Return this exact JSON structure:
+Return this exact JSON:
 {
   "customer_name": "string or null",
   "customer_phone": "string or null",
   "address": "string or null",
   "note": "string or null",
   "items": [
-    {"item_id": 123, "item_name": "matched name", "quantity": 1, "unit_price": 0.0, "matched": true}
+    {"item_id": 123, "item_name": "matched catalog name", "quantity": 1, "unit_price": 0.0, "matched": true}
   ],
-  "unmatched_items": ["item name that could not be matched"],
+  "unmatched_items": ["item names that could not be matched to catalog"],
   "confidence": "high|medium|low"
 }
 
 Rules:
-- Match item names flexibly (abbreviations, informal names, pidgin). If unsure, still try.
-- If an item cannot be matched to the catalog AT ALL, put it in unmatched_items.
+- Match item names flexibly (abbreviations, informal, pidgin english).
 - quantity must be a positive integer.
-- unit_price should come from the catalog price.
-- Return null for fields not found in the message.
-- confidence: high if name+items clear, medium if some guessing, low if very unclear.`;
+- unit_price from catalog. If unknown set 0.
+- Return null for fields not found.
+- confidence: high = name+items clearly stated, medium = some guessing, low = very unclear.`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch('/parse-order/api', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
+      body: JSON.stringify({ prompt })
     });
     const data = await res.json();
-    const raw = data.content?.[0]?.text || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
+    if (data.error) { showError(data.error); return; }
+    const clean = (data.text || '').replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
     fillForm(parsed);
   } catch(e) {
-    showError('Could not parse the message. Please check your API key or try again. (' + e.message + ')');
+    showError('Could not parse the message. Please try again. (' + e.message + ')');
   } finally {
-    document.getElementById('parse-btn').disabled = false;
-    document.getElementById('parse-btn').textContent = '✨ Parse Order';
+    setBusy(false);
     document.getElementById('parse-status').style.display = 'none';
   }
 }
@@ -230,33 +250,36 @@ function fillForm(data) {
   document.getElementById('f-address').value = data.address        || '';
   document.getElementById('f-note').value    = data.note           || '';
 
-  // Confidence badge
   const conf = data.confidence || 'medium';
-  const confColors = { high: '#4ade80', medium: '#fbbf24', low: '#f87171' };
+  const confColor = { high: '#4ade80', medium: '#fbbf24', low: '#f87171' };
   document.getElementById('confidence-badge').innerHTML =
-    `<span style="color:${confColors[conf] || '#8a9bc4'}">● ${conf} confidence</span>`;
+    `<span style="color:${confColor[conf]}">● ${conf} confidence</span>`;
 
-  // Items
   document.getElementById('items-container').innerHTML = '';
   (data.items || []).forEach(item => {
     if (item.matched && item.item_id) {
-      addItemRow(item.item_id, item.quantity, (item.quantity * item.unit_price).toFixed(2));
+      addItemRow(item.item_id, item.quantity, (item.quantity * (item.unit_price || 0)).toFixed(2));
     }
   });
   if (!data.items || data.items.length === 0) addItemRow();
 
-  // Unmatched warning
   const unmatched = data.unmatched_items || [];
   const warn = document.getElementById('unmatched-warn');
   if (unmatched.length > 0) {
     warn.style.display = 'block';
-    warn.innerHTML = `⚠️ Could not match these items — add manually: <strong>${unmatched.join(', ')}</strong>`;
+    warn.innerHTML = `⚠️ Could not match these — add manually: <strong>${unmatched.join(', ')}</strong>`;
   } else {
     warn.style.display = 'none';
   }
 
   document.getElementById('order-form-wrap').style.display = 'block';
   document.getElementById('order-form-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function setBusy(busy) {
+  const btn = document.getElementById('parse-btn');
+  btn.disabled = busy;
+  btn.textContent = busy ? '⚙️ Parsing...' : '✨ Parse Order';
 }
 
 function showError(msg) {
@@ -278,7 +301,6 @@ function resetForm() {
   ['f-name','f-phone','f-address','f-note'].forEach(id => document.getElementById(id).value = '');
 }
 
-// Start with one empty item row
 addItemRow();
 </script>
 {% endblock %}
