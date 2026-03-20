@@ -418,75 +418,94 @@ def supervisor_date_range(preset: str | None, start_str: str | None, end_str: st
 
 
 def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime | None):
-    """Per-branch delivery & cash summary for supervisor dashboard."""
+    """Per-branch delivery & cash summary — rewritten to use 3 queries total (was 12× branches)."""
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
-    rows = []
+    branch_ids = [b.id for b in branches]
+    if not branch_ids:
+        return branches, []
 
-    for branch in branches:
-        def _delivery_q(extra=None):
-            q = select(func.count(Delivery.id)).where(Delivery.branch_id == branch.id)
-            if extra is not None:
-                q = q.where(extra)
-            if start:
-                q = q.where(Delivery.created_at >= start)
-            if end:
-                q = q.where(Delivery.created_at < end)
-            return q
-
-        total_deliveries = int(db.scalar(_delivery_q()) or 0)
-        delivered_count  = int(db.scalar(_delivery_q(Delivery.status == "DELIVERED")) or 0)
-        pending_count    = int(db.scalar(_delivery_q(Delivery.status == "PENDING")) or 0)
-        out_count        = int(db.scalar(_delivery_q(Delivery.status == "OUT_FOR_DELIVERY")) or 0)
-        failed_count     = int(db.scalar(_delivery_q(Delivery.status == "FAILED")) or 0)
-
-        # Collections from delivered waybills
-        col_q = (
-            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
-            .select_from(Delivery)
-            .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
-            .where(Delivery.branch_id == branch.id)
-            .where(Delivery.status == "DELIVERED")
+    # ── Query 1: delivery counts by branch and status in one shot ──
+    from sqlalchemy import case as sa_case
+    del_q = (
+        select(
+            Delivery.branch_id,
+            func.count(Delivery.id).label("total"),
+            func.sum(sa_case((Delivery.status == "DELIVERED",        1), else_=0)).label("delivered"),
+            func.sum(sa_case((Delivery.status == "PENDING",          1), else_=0)).label("pending"),
+            func.sum(sa_case((Delivery.status == "OUT_FOR_DELIVERY", 1), else_=0)).label("out"),
+            func.sum(sa_case((Delivery.status == "FAILED",           1), else_=0)).label("failed"),
         )
-        if start:
-            col_q = col_q.where(Delivery.created_at >= start)
-        if end:
-            col_q = col_q.where(Delivery.created_at < end)
-        collections = float(db.scalar(col_q) or 0)
+        .where(Delivery.branch_id.in_(branch_ids))
+        .group_by(Delivery.branch_id)
+    )
+    if start: del_q = del_q.where(Delivery.created_at >= start)
+    if end:   del_q = del_q.where(Delivery.created_at < end)
+    del_map: dict[int, dict] = {}
+    for row in db.execute(del_q).all():
+        del_map[row.branch_id] = {
+            "total": int(row.total or 0), "delivered": int(row.delivered or 0),
+            "pending": int(row.pending or 0), "out": int(row.out or 0),
+            "failed": int(row.failed or 0),
+        }
 
-        def _cash_q(kind):
-            q = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(
-                CashEntry.branch_id == branch.id, CashEntry.kind == kind
-            )
-            if start:
-                q = q.where(CashEntry.created_at >= start)
-            if end:
-                q = q.where(CashEntry.created_at < end)
-            return q
+    # ── Query 2: delivery collections (line_amount sum) by branch ──
+    col_q = (
+        select(Delivery.branch_id, func.coalesce(func.sum(DeliveryItem.line_amount), 0).label("total"))
+        .select_from(Delivery)
+        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+        .where(Delivery.branch_id.in_(branch_ids))
+        .where(Delivery.status == "DELIVERED")
+        .group_by(Delivery.branch_id)
+    )
+    if start: col_q = col_q.where(Delivery.created_at >= start)
+    if end:   col_q = col_q.where(Delivery.created_at < end)
+    col_map: dict[int, float] = {row.branch_id: float(row.total) for row in db.execute(col_q).all()}
 
-        extra_col       = float(db.scalar(_cash_q("COLLECTION")) or 0)
-        agent_expenses  = float(db.scalar(_cash_q("EXPENSE")) or 0)
-        office_expenses = float(db.scalar(_cash_q("OFFICE_EXPENSE")) or 0)
-        operating_cash  = float(db.scalar(_cash_q("OPERATING_CASH")) or 0)
-        returned_op     = float(db.scalar(_cash_q("RETURN_OPERATING_CASH")) or 0)
+    # ── Query 3: all cash kinds by branch in one shot ──
+    cash_q = (
+        select(
+            CashEntry.branch_id,
+            CashEntry.kind,
+            func.coalesce(func.sum(CashEntry.amount), 0).label("total"),
+        )
+        .where(CashEntry.branch_id.in_(branch_ids))
+        .where(CashEntry.kind.in_(["COLLECTION","EXPENSE","OFFICE_EXPENSE","OPERATING_CASH","RETURN_OPERATING_CASH"]))
+        .group_by(CashEntry.branch_id, CashEntry.kind)
+    )
+    if start: cash_q = cash_q.where(CashEntry.created_at >= start)
+    if end:   cash_q = cash_q.where(CashEntry.created_at < end)
+    cash_map: dict[int, dict[str, float]] = {}
+    for row in db.execute(cash_q).all():
+        cash_map.setdefault(row.branch_id, {})[row.kind] = float(row.total)
 
-        total_collections  = collections + extra_col
-        operating_balance  = operating_cash - agent_expenses - returned_op
-        remittance         = total_collections - agent_expenses - office_expenses
-
+    # ── Assemble rows ──
+    rows = []
+    for branch in branches:
+        d = del_map.get(branch.id, {})
+        c = cash_map.get(branch.id, {})
+        delivery_collections = col_map.get(branch.id, 0.0)
+        extra_col       = c.get("COLLECTION",            0.0)
+        agent_expenses  = c.get("EXPENSE",               0.0)
+        office_expenses = c.get("OFFICE_EXPENSE",        0.0)
+        operating_cash  = c.get("OPERATING_CASH",        0.0)
+        returned_op     = c.get("RETURN_OPERATING_CASH", 0.0)
+        total_collections = delivery_collections + extra_col
+        operating_balance = operating_cash - agent_expenses - returned_op
+        remittance        = total_collections - agent_expenses - office_expenses
         rows.append({
-            "branch": branch,
-            "total_deliveries": total_deliveries,
-            "delivered_count":  delivered_count,
-            "pending_count":    pending_count,
-            "out_for_delivery_count": out_count,
-            "failed_count":     failed_count,
-            "collections":      total_collections,
-            "agent_expenses":   agent_expenses,
-            "office_expenses":  office_expenses,
-            "operating_cash":   operating_cash,
+            "branch":                  branch,
+            "total_deliveries":        d.get("total",     0),
+            "delivered_count":         d.get("delivered", 0),
+            "pending_count":           d.get("pending",   0),
+            "out_for_delivery_count":  d.get("out",       0),
+            "failed_count":            d.get("failed",    0),
+            "collections":             total_collections,
+            "agent_expenses":          agent_expenses,
+            "office_expenses":         office_expenses,
+            "operating_cash":          operating_cash,
             "returned_operating_cash": returned_op,
-            "operating_balance": operating_balance,
-            "remittance":       remittance,
+            "operating_balance":       operating_balance,
+            "remittance":              remittance,
         })
 
     return branches, rows
