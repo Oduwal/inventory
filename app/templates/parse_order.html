@@ -186,6 +186,24 @@ function recalcRow(qEl) {
   if (price > 0) row.querySelector('input[name="line_amount"]').value = (qty * price).toFixed(2);
 }
 
+function extractFirstJSON(str) {
+  // Find the first { and count brackets to find the matching }
+  const start = str.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < str.length; i++) {
+    if (str[i] === '{') depth++;
+    else if (str[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(str.slice(start, i + 1)); }
+        catch(e) { return null; }
+      }
+    }
+  }
+  return null;
+}
+
 async function parseOrder() {
   const text = document.getElementById('wa-input').value.trim();
   if (!text) { showError('Please paste a WhatsApp message first.'); return; }
@@ -224,12 +242,11 @@ Important:
     const data = await res.json();
     if (data.error) { showError(data.error); return; }
     let raw = (data.text || '').trim();
-    // Strip markdown code blocks if model added them
-    raw = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-    // Extract JSON object if there's text before/after it
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) { showError('AI returned unexpected format. Raw: ' + raw.substring(0, 200)); return; }
-    const parsed = JSON.parse(jsonMatch[0]);
+    // Strip markdown code blocks
+    raw = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+    // Extract first complete JSON object using bracket counting
+    const parsed = extractFirstJSON(raw);
+    if (!parsed) { showError('Could not extract JSON from response. Got: ' + raw.substring(0, 300)); return; }
     fillForm(parsed);
   } catch(e) {
     showError('Could not parse the message. Please try again. (' + e.message + ')');
