@@ -340,6 +340,9 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_created_at ON cash_entries (created_at)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_kind ON cash_entries (kind)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)")
+        # Drop and recreate ck_cash_kind to include CASH_PAYMENT and TRANSFER_PAYMENT
+        _ddl(conn, "ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind")
+        _ddl(conn, "ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))")
         # [SEC-7] Audit log table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS audit_logs (
             id SERIAL PRIMARY KEY,
@@ -1857,6 +1860,22 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         "branch_id": filter_branch, "start_date": start_date, "end_date": end_date,
         "user": user, "active": "deliveries", "sup_kpis": sup_kpis,
     })
+
+
+@app.get("/admin/fix-cash-constraint", response_class=JSONResponse)
+def fix_cash_constraint(request: Request, db: Session = Depends(get_db)):
+    """One-time: update cash_entries kind constraint to include TRANSFER_PAYMENT."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"})
+    user = user_or
+    if not is_supervisor(user): return JSONResponse({"error": "forbidden"})
+    try:
+        with db.bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind"))
+            conn.execute(text("ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))"))
+        return JSONResponse({"status": "ok", "message": "Constraint updated successfully"})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
 
 
 @app.get("/admin/check-env", response_class=JSONResponse)
