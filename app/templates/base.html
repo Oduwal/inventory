@@ -386,7 +386,14 @@
         <h2>{% block page_title %}{% endblock %}</h2>
         <p>{% block page_subtitle %}{% endblock %}</p>
       </div>
-      <div>{% block top_right %}{% endblock %}</div>
+      <div>{% block top_right %}{% endblock %}
+      {% if user %}
+      <button id="notif-bell" onclick="toggleNotifPanel()"
+        style="position:relative;background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:8px;padding:7px 10px;cursor:pointer;color:var(--text);font-size:16px;line-height:1;margin-left:8px;">
+        🔔<span id="notif-bell-count" style="display:none;position:absolute;top:-6px;right:-6px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:16px;text-align:center;"></span>
+      </button>
+      {% endif %}
+    </div>
     </div>
     {% block content %}{% endblock %}
   </main>
@@ -434,6 +441,170 @@ function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
 </script>
+<!-- Notification Panel -->
+<div id="notif-panel" style="display:none;position:fixed;top:60px;right:16px;width:340px;max-height:480px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,.4);z-index:9998;">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);">
+    <span style="font-weight:700;font-size:14px;">Notifications</span>
+    <div style="display:flex;gap:8px;">
+      <button onclick="dismissAll()" style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;padding:2px 6px;">Mark all read</button>
+      <button onclick="toggleNotifPanel()" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;">✕</button>
+    </div>
+  </div>
+  <div id="notif-list" style="padding:8px 0;">
+    <div style="text-align:center;padding:24px;color:var(--muted);font-size:13px;">No new notifications</div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column-reverse;gap:10px;pointer-events:none;"></div>
+
+<!-- Notification sound (Web Audio API — no file needed) -->
+<script>
+{% if user %}
+const NOTIF_COLORS = {success:'#22c55e',warning:'#f59e0b',danger:'#ef4444',info:'#4f7cff'};
+let lastNotifId = 0;
+let notifCache = [];
+
+function playNotifSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.4);
+  } catch(e) {}
+}
+
+function showToast(notif) {
+  const color = NOTIF_COLORS[notif.kind] || NOTIF_COLORS.info;
+  const toast = document.createElement('div');
+  toast.style.cssText = `pointer-events:all;background:var(--card);border:1px solid ${color};border-left:4px solid ${color};border-radius:10px;padding:12px 14px;min-width:280px;max-width:340px;box-shadow:0 4px 20px rgba(0,0,0,.4);cursor:pointer;transition:opacity .3s,transform .3s;opacity:0;transform:translateY(20px);`;
+  toast.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+      <div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:3px;">${notif.title}</div>
+        ${notif.body ? `<div style="font-size:12px;color:var(--muted);line-height:1.4;">${notif.body}</div>` : ''}
+      </div>
+      <button onclick="event.stopPropagation();dismissNotif(${notif.id},this.closest('[data-toast]'))" data-toast style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;line-height:1;padding:0;min-width:16px;">✕</button>
+    </div>`;
+  toast.dataset.toast = notif.id;
+  if (notif.link) toast.onclick = () => { dismissNotif(notif.id); window.location.href = notif.link; };
+  document.getElementById('toast-container').appendChild(toast);
+  requestAnimationFrame(() => { toast.style.opacity='1'; toast.style.transform='translateY(0)'; });
+  setTimeout(() => fadeRemove(toast), 8000);
+}
+
+function fadeRemove(el) {
+  if (!el || !el.parentNode) return;
+  el.style.opacity = '0'; el.style.transform = 'translateY(20px)';
+  setTimeout(() => el.parentNode && el.parentNode.removeChild(el), 320);
+}
+
+async function dismissNotif(id, toastEl) {
+  if (toastEl) fadeRemove(toastEl);
+  // Remove from panel
+  const panelItem = document.querySelector(`[data-notif-id="${id}"]`);
+  if (panelItem) panelItem.remove();
+  // Remove from cache
+  notifCache = notifCache.filter(n => n.id !== id);
+  updateBell();
+  try { await fetch('/notifications/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); } catch(e) {}
+}
+
+async function dismissAll() {
+  notifCache = [];
+  document.getElementById('notif-list').innerHTML = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px;">No new notifications</div>';
+  updateBell();
+  document.querySelectorAll('[data-toast]').forEach(t => fadeRemove(t));
+  try { await fetch('/notifications/dismiss', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})}); } catch(e) {}
+}
+
+function updateBell() {
+  const count = notifCache.length;
+  const bellCount = document.getElementById('notif-bell-count');
+  const adjBadge = document.getElementById('adj-badge');
+  if (bellCount) { bellCount.textContent = count; bellCount.style.display = count > 0 ? 'inline-block' : 'none'; }
+  // Keep adj-badge in sync for adjustment requests
+  const adjCount = notifCache.filter(n => n.title && n.title.includes('Adjustment')).length;
+  if (adjBadge) { adjBadge.textContent = adjCount; adjBadge.style.display = adjCount > 0 ? 'inline-block' : 'none'; }
+}
+
+function renderPanel() {
+  const list = document.getElementById('notif-list');
+  if (!notifCache.length) {
+    list.innerHTML = '<div style="text-align:center;padding:24px;color:var(--muted);font-size:13px;">No new notifications</div>';
+    return;
+  }
+  list.innerHTML = notifCache.map(n => {
+    const color = NOTIF_COLORS[n.kind] || NOTIF_COLORS.info;
+    return `<div data-notif-id="${n.id}" style="display:flex;gap:10px;align-items:flex-start;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;"
+      onclick="dismissNotif(${n.id});${n.link ? `window.location.href='${n.link}';` : ''}">
+      <span style="width:8px;height:8px;border-radius:50%;background:${color};margin-top:5px;flex-shrink:0;"></span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;font-size:13px;">${n.title}</div>
+        ${n.body ? `<div style="font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${n.body}</div>` : ''}
+      </div>
+      <button onclick="event.stopPropagation();dismissNotif(${n.id})" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:13px;">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function toggleNotifPanel() {
+  const panel = document.getElementById('notif-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'block') renderPanel();
+}
+
+// Close panel when clicking outside
+document.addEventListener('click', e => {
+  const panel = document.getElementById('notif-panel');
+  const bell = document.getElementById('notif-bell');
+  if (panel && bell && !panel.contains(e.target) && !bell.contains(e.target)) {
+    panel.style.display = 'none';
+  }
+});
+
+// Poll every 5 seconds
+async function pollNotifications() {
+  try {
+    const r = await fetch(`/notifications/poll?after=${lastNotifId}`);
+    const data = await r.json();
+    const notifs = data.notifications || [];
+    if (notifs.length > 0) {
+      let hasNew = false;
+      notifs.forEach(n => {
+        if (!notifCache.find(c => c.id === n.id)) {
+          if (n.id > lastNotifId) lastNotifId = n.id;
+          notifCache.unshift(n);
+          showToast(n);
+          hasNew = true;
+        }
+      });
+      if (hasNew) { playNotifSound(); updateBell(); }
+    }
+  } catch(e) {}
+}
+
+// Load existing unread on page load (no toast, no sound — just populate panel/bell)
+(async function init() {
+  try {
+    const r = await fetch('/notifications/poll?after=0');
+    const data = await r.json();
+    notifCache = data.notifications || [];
+    if (notifCache.length > 0) {
+      lastNotifId = Math.max(...notifCache.map(n => n.id));
+      updateBell();
+    }
+  } catch(e) {}
+  setInterval(pollNotifications, 5000);
+})();
+{% endif %}
+</script>
+
 <script>
 {% if role == "ADMIN" %}
 (async function() {

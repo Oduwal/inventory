@@ -70,6 +70,29 @@ from .security import (
 
 app = FastAPI()
 
+
+# ── Notification helper ──────────────────────────────────────────────────────
+def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
+    """Create a persistent notification for a user. Silently swallows errors."""
+    try:
+        db.execute(text(
+            "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
+            "VALUES (:uid, :title, :body, :link, :kind, NOW())"
+        ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind})
+    except Exception as e:
+        import logging; logging.getLogger("notifications").warning(f"Notify failed: {e}")
+
+def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
+    """Notify all admins of a branch."""
+    try:
+        admins = db.execute(
+            select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id)
+        ).scalars().all()
+        for admin in admins:
+            notify(db, admin.id, title, body, link, kind)
+    except Exception as e:
+        import logging; logging.getLogger("notifications").warning(f"Notify branch failed: {e}")
+
 # [FIX-6] Trust the X-Forwarded-For header from Railway's proxy
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
@@ -349,6 +372,18 @@ def ensure_schema() -> None:
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
+        # Notifications table
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title VARCHAR(200) NOT NULL,
+            body VARCHAR(500) DEFAULT '',
+            link VARCHAR(300) DEFAULT '',
+            kind VARCHAR(50) DEFAULT 'info',
+            read_at TIMESTAMP NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_notifications_user_unread ON notifications (user_id, read_at) WHERE read_at IS NULL")
         # Adjustment requests table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS adjustment_requests (
             id SERIAL PRIMARY KEY,
@@ -2143,6 +2178,11 @@ async def delivery_create(
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
     db.commit()
+    # Notify branch admins of new order
+    notify_branch_admins(db, d.branch_id, "🆕 New Order Created",
+        f"New delivery for {cust} created{' by supervisor' if is_supervisor(user) else ''}.",
+        f"/deliveries/{d.id}", "info")
+    db.commit()
     return redirect(f"/deliveries/{d.id}")
 
 
@@ -2321,6 +2361,10 @@ async def delivery_assign_agent(
         return redirect(f"/deliveries/{delivery_id}?error=Agent+not+found+or+not+in+this+branch")
     d.agent_id = agent_id
     db.commit()
+    notify(db, agent_id, "📦 New Delivery Assigned",
+           f"Delivery #{d.id} for {d.customer_name} has been assigned to you.",
+           f"/deliveries/{d.id}", "info")
+    db.commit()
     audit_log(db, user.id, "DELIVERY_REASSIGNED",
               f"delivery_id={delivery_id} assigned to agent_id={agent_id}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
@@ -2391,6 +2435,10 @@ async def request_adjustment(
             "VALUES (:rid, :diid, :name, :orig, :new, :rem)"
         ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": float(di.line_amount), "new": new_amt, "rem": remove})
     d.status = "ADJUSTMENT_PENDING"
+    notify_branch_admins(db, d.branch_id, "⚠️ Adjustment Request",
+           f"Agent requested price adjustment on delivery #{d.id} ({d.customer_name}). Reason: {(reason or '').strip()[:100]}",
+           f"/deliveries/{d.id}", "warning")
+    db.commit()
     audit_log(db, user.id, "ADJUSTMENT_REQUESTED", f"delivery_id={d.id} request_id={req_id}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     db.commit()
@@ -2449,6 +2497,10 @@ async def review_adjustment(
             {"uid": user.id, "rid": pending.id}
         )
         d.status = "OUT_FOR_DELIVERY"
+        notify(db, d.agent_id, "✅ Adjustment Approved",
+               f"Your price adjustment for delivery #{d.id} ({d.customer_name}) has been approved. You can now mark it as delivered.",
+               f"/deliveries/{d.id}", "success")
+        db.commit()
         audit_log(db, user.id, "ADJUSTMENT_APPROVED", f"delivery_id={d.id} request_id={pending.id}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
@@ -2460,6 +2512,10 @@ async def review_adjustment(
             {"uid": user.id, "rid": pending.id, "note": note}
         )
         d.status = "OUT_FOR_DELIVERY"
+        notify(db, d.agent_id, "❌ Adjustment Rejected",
+               f"Your price adjustment for delivery #{d.id} ({d.customer_name}) was rejected. {note}",
+               f"/deliveries/{d.id}", "danger")
+        db.commit()
         audit_log(db, user.id, "ADJUSTMENT_REJECTED", f"delivery_id={d.id} request_id={pending.id}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
@@ -2527,6 +2583,9 @@ async def delivery_collect(
                 note=f"Auto-recorded: delivery #{d.id} to {d.customer_name}",
             ))
 
+    notify_branch_admins(db, d.branch_id, "✅ Delivery Completed",
+           f"Agent marked delivery #{d.id} ({d.customer_name}) as delivered. Cash: ₦{cash_amt:,.0f} Transfer: ₦{transfer_amt:,.0f}",
+           f"/deliveries/{d.id}", "success")
     audit_log(db, user.id, "DELIVERY_DELIVERED",
               f"delivery_id={d.id} cash={cash_amt} transfer={transfer_amt}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
@@ -2603,6 +2662,58 @@ async def update_delivery_status(
     d.status = status_clean
     db.commit()
     return redirect(f"/deliveries/{delivery_id}")
+
+
+# ────────────────────────────────────────────────
+#  NOTIFICATIONS
+# ────────────────────────────────────────────────
+
+@app.get("/notifications/poll", response_class=JSONResponse)
+def notifications_poll(request: Request, after: int = 0, db: Session = Depends(get_db)):
+    """Poll for unread notifications. Returns new ones since 'after' id."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"notifications": []})
+    user = user_or
+    rows = db.execute(text(
+        "SELECT id, title, body, link, kind, created_at FROM notifications "
+        "WHERE user_id = :uid AND read_at IS NULL AND id > :after "
+        "ORDER BY created_at DESC LIMIT 20"
+    ), {"uid": user.id, "after": after}).fetchall()
+    return JSONResponse({"notifications": [
+        {"id": r.id, "title": r.title, "body": r.body or "",
+         "link": r.link or "", "kind": r.kind or "info",
+         "created_at": r.created_at.isoformat() if r.created_at else ""}
+        for r in rows
+    ]})
+
+
+@app.post("/notifications/dismiss", response_class=JSONResponse)
+async def notifications_dismiss(request: Request, db: Session = Depends(get_db)):
+    """Mark one or all notifications as read."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False})
+    user = user_or
+    body = await request.json()
+    notif_id = body.get("id")  # None = dismiss all
+    if notif_id:
+        db.execute(text("UPDATE notifications SET read_at=NOW() WHERE id=:id AND user_id=:uid"),
+                   {"id": notif_id, "uid": user.id})
+    else:
+        db.execute(text("UPDATE notifications SET read_at=NOW() WHERE user_id=:uid AND read_at IS NULL"),
+                   {"uid": user.id})
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/notifications/unread-count", response_class=JSONResponse)
+def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
+    user = user_or
+    count = db.execute(text(
+        "SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read_at IS NULL"
+    ), {"uid": user.id}).scalar() or 0
+    return JSONResponse({"count": int(count)})
 
 
 # ────────────────────────────────────────────────
