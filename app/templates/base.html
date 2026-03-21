@@ -287,8 +287,9 @@
 
       <div class="nav-divider"></div>
       <div class="nav-section">Deliveries</div>
-      <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}">
+      <a href="/deliveries" data-active="{% if active == 'deliveries' %}1{% else %}0{% endif %}" style="position:relative;">
         <span class="nav-icon">🚚</span>Deliveries
+        {% if role == "ADMIN" %}<span id="adj-badge" style="display:none;position:absolute;top:6px;right:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:16px;text-align:center;"></span>{% endif %}
       </a>
       {% if role in ("ADMIN", "AGENT") %}
       <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
@@ -432,6 +433,21 @@ function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferred
 function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa-dismissed','1');}
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
+</script>
+<script>
+{% if role == "ADMIN" %}
+(async function() {
+  try {
+    const r = await fetch('/deliveries/adjustment-count');
+    const d = await r.json();
+    const badge = document.getElementById('adj-badge');
+    if (badge && d.count > 0) {
+      badge.textContent = d.count;
+      badge.style.display = 'inline-block';
+    }
+  } catch(e) {}
+})();
+{% endif %}
 </script>
 </body>
 </html>

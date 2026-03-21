@@ -220,11 +220,141 @@
   </table>
 </div>
 
+<!-- Adjustment pending banner for agent -->
+{% if d.status == "ADJUSTMENT_PENDING" and user.role == "AGENT" %}
+<div class="alert alert-danger" style="margin-bottom:16px;">
+  ⏳ Your adjustment request is pending admin approval. You cannot mark this delivery as delivered until it is reviewed.
+</div>
+{% endif %}
+
+<!-- Pending adjustment review card — admin only -->
+{% if pending_adj and user.role == "ADMIN" %}
+<div class="card" style="margin-bottom:16px;border-top:3px solid #f59e0b;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+    <span class="badge b-yellow">⚠ PENDING ADJUSTMENT REQUEST</span>
+    <span style="font-size:12px;color:var(--muted);">from {{ pending_adj.agent_name }} · {{ pending_adj.created_at.strftime('%d %b %Y %I:%M %p') if pending_adj.created_at else '' }}</span>
+  </div>
+  {% if pending_adj.reason %}
+  <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+    Reason: <strong style="color:var(--text);">{{ pending_adj.reason }}</strong>
+  </div>
+  {% endif %}
+  <!-- Item changes table -->
+  <table style="margin-bottom:16px;">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th style="text-align:right;">Original (₦)</th>
+        <th style="text-align:right;">Requested (₦)</th>
+        <th style="text-align:center;">Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ai in adj_items %}
+      <tr>
+        <td style="font-weight:600;">{{ ai.item_name }}</td>
+        <td style="text-align:right;color:var(--muted);">{{ '%.2f'|format(ai.original_amount|float) }}</td>
+        <td style="text-align:right;color:{% if ai.remove_item %}#f87171{% elif ai.new_amount < ai.original_amount %}#fbbf24{% else %}#4ade80{% endif %};">
+          {% if ai.remove_item %}REMOVE{% else %}{{ '%.2f'|format(ai.new_amount|float) }}{% endif %}
+        </td>
+        <td style="text-align:center;">
+          {% if ai.remove_item %}
+          <span style="font-size:11px;color:#f87171;">Item refused</span>
+          {% elif ai.new_amount < ai.original_amount %}
+          <span style="font-size:11px;color:#fbbf24;">Price reduced</span>
+          {% else %}
+          <span style="font-size:11px;color:#4ade80;">No change</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <!-- Approve / Reject forms -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <form method="post" action="/deliveries/{{ d.id }}/review-adjustment">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="action" value="approve" />
+      <button type="submit" class="btnPrimary" style="width:100%;justify-content:center;background:linear-gradient(135deg,#22c55e,#16a34a);">
+        ✓ Approve Adjustment
+      </button>
+    </form>
+    <form method="post" action="/deliveries/{{ d.id }}/review-adjustment" onsubmit="return addRejectionNote(this)">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="action" value="reject" />
+      <input type="hidden" name="rejection_note" id="rej-note-field" value="" />
+      <button type="submit" class="btnDanger" style="width:100%;justify-content:center;padding:10px;">
+        ✕ Reject
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<!-- Request adjustment — agent only, only when OUT_FOR_DELIVERY -->
+{% if user.role == "AGENT" and d.status == "OUT_FOR_DELIVERY" %}
+<div class="card" style="margin-bottom:16px;border-top:3px solid #7fa8ff;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+    <span class="badge b-blue">📝 REQUEST PRICE ADJUSTMENT</span>
+    <button type="button" class="btnGhost" style="font-size:12px;padding:5px 12px;"
+      onclick="document.getElementById('adj-form').style.display=document.getElementById('adj-form').style.display==='none'?'block':'none'">
+      Toggle
+    </button>
+  </div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Customer negotiated price or refused items? Request an adjustment for admin approval.</div>
+  <div id="adj-form" style="display:none;">
+    <form method="post" action="/deliveries/{{ d.id }}/request-adjustment">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <div style="margin-bottom:12px;">
+        <label>Reason / Note</label>
+        <input type="text" name="reason" placeholder="e.g. Customer negotiated price down, refused item 2" required />
+      </div>
+      <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Adjust Items</div>
+      {% for di, it in d_items %}
+      <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:12px;margin-bottom:8px;">
+        <input type="hidden" name="item_ids" value="{{ di.id }}" />
+        <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;">
+          <div>
+            <div style="font-weight:600;font-size:13px;">{{ it.name }}</div>
+            <div style="font-size:11px;color:var(--muted);">Original: ₦{{ '%.2f'|format(di.line_amount|float) }}</div>
+          </div>
+          <div>
+            <label style="font-size:11px;">New Amount (₦)</label>
+            <input type="number" name="new_amounts" step="0.01" min="0"
+              value="{{ '%.2f'|format(di.line_amount|float) }}"
+              style="margin:0;width:120px;"
+              id="amt-{{ di.id }}"
+              oninput="document.getElementById('rem-{{ di.id }}').checked && (this.value='0')" />
+          </div>
+          <div style="text-align:center;">
+            <label style="font-size:11px;display:block;margin-bottom:4px;">Remove</label>
+            <input type="hidden" name="remove_flags" id="rem-flag-{{ di.id }}" value="0" />
+            <input type="checkbox" id="rem-{{ di.id }}"
+              onchange="document.getElementById('rem-flag-{{ di.id }}').value=this.checked?'1':'0'; if(this.checked){document.getElementById('amt-{{ di.id }}').value='0';}"
+              style="width:18px;height:18px;cursor:pointer;" />
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+      <button type="submit" class="btnPrimary" style="width:100%;justify-content:center;margin-top:8px;">
+        📨 Submit Adjustment Request
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 <!-- Finance summary -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div class="card" style="border-top:3px solid #22c55e;">
-    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Collected</div>
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Total Collected</div>
     <div style="font-size:24px;font-weight:800;color:#4ade80;">₦{{ '%.2f'|format(collection_total) }}</div>
+    {% if cash_total is defined or transfer_total is defined %}
+    <div style="margin-top:8px;display:flex;gap:10px;font-size:12px;">
+      {% if cash_total %}<span style="color:var(--muted);">Cash: <strong style="color:#4ade80;">₦{{ '%.0f'|format(cash_total) }}</strong></span>{% endif %}
+      {% if transfer_total %}<span style="color:var(--muted);">Transfer: <strong style="color:#7fa8ff;">₦{{ '%.0f'|format(transfer_total) }}</strong></span>{% endif %}
+    </div>
+    {% endif %}
   </div>
   <div class="card" style="border-top:3px solid #ef4444;">
     <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Expenses</div>
@@ -264,4 +394,11 @@
     </div>
   </form>
 </div>
+<script>
+function addRejectionNote(form) {
+  const note = prompt('Reason for rejection (optional):') || '';
+  form.querySelector('[id^="rej-note-"]').value = note;
+  return true;
+}
+</script>
 {% endblock %}

@@ -346,6 +346,27 @@ def ensure_schema() -> None:
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
+        # Adjustment requests table
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS adjustment_requests (
+            id SERIAL PRIMARY KEY,
+            delivery_id INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            requested_by INTEGER NOT NULL REFERENCES users(id),
+            reason VARCHAR(500) DEFAULT '',
+            status VARCHAR(20) DEFAULT 'PENDING',
+            reviewed_by INTEGER REFERENCES users(id),
+            rejection_note VARCHAR(500) DEFAULT '',
+            created_at TIMESTAMP DEFAULT NOW(),
+            reviewed_at TIMESTAMP
+        )""")
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS adjustment_request_items (
+            id SERIAL PRIMARY KEY,
+            request_id INTEGER NOT NULL REFERENCES adjustment_requests(id) ON DELETE CASCADE,
+            delivery_item_id INTEGER NOT NULL REFERENCES delivery_items(id) ON DELETE CASCADE,
+            item_name VARCHAR(200) DEFAULT '',
+            original_amount NUMERIC(12,2) DEFAULT 0,
+            new_amount NUMERIC(12,2) DEFAULT 0,
+            remove_item BOOLEAN DEFAULT FALSE
+        )""")
         # [SEC-7] Audit log table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS audit_logs (
             id SERIAL PRIMARY KEY,
@@ -2238,12 +2259,24 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     agents = db.execute(
         select(User).where(User.role == "AGENT").where(User.branch_id == d.branch_id).order_by(User.username.asc())
     ).scalars().all() if is_admin(user) or is_supervisor(user) else []
+    # Load any pending adjustment request
+    pending_adj = db.execute(
+        text("SELECT ar.id, ar.reason, ar.created_at, u.username as agent_name FROM adjustment_requests ar JOIN users u ON u.id = ar.requested_by WHERE ar.delivery_id = :did AND ar.status = 'PENDING' ORDER BY ar.created_at DESC LIMIT 1"),
+        {"did": d.id}
+    ).fetchone()
+    adj_items = []
+    if pending_adj:
+        adj_items = db.execute(
+            text("SELECT * FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
+            {"rid": pending_adj.id}
+        ).fetchall()
     return templates.TemplateResponse("delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": float(col), "expense_total": float(exp),
         "cash_total": float(cash_total), "transfer_total": float(transfer_total),
         "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
         "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
+        "pending_adj": pending_adj, "adj_items": adj_items,
     })
 
 
@@ -2298,6 +2331,128 @@ async def update_delivery_date(
     except ValueError:
         pass
     return redirect(f"/deliveries/{delivery_id}")
+
+
+@app.get("/deliveries/adjustment-count", response_class=JSONResponse)
+def adjustment_count(request: Request, db: Session = Depends(get_db)):
+    """Badge count for admin nav — pending adjustment requests."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
+    user = user_or
+    if not is_admin(user): return JSONResponse({"count": 0})
+    count = db.execute(
+        text("SELECT COUNT(*) FROM adjustment_requests ar JOIN deliveries d ON d.id = ar.delivery_id WHERE ar.status = 'PENDING' AND d.branch_id = :bid"),
+        {"bid": user.branch_id}
+    ).scalar() or 0
+    return JSONResponse({"count": int(count)})
+
+
+@app.post("/deliveries/{delivery_id}/request-adjustment")
+async def request_adjustment(
+    request: Request, delivery_id: int,
+    reason: str = Form(""),
+    item_ids: list[int] = Form(default=[]),
+    new_amounts: list[float] = Form(default=[]),
+    remove_flags: list[str] = Form(default=[]),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    verify_csrf_token(request, csrf_token)
+    d = db.get(Delivery, delivery_id)
+    if not d: raise HTTPException(status_code=404)
+    if d.agent_id != user.id and not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    if d.status not in ("OUT_FOR_DELIVERY", "PENDING"):
+        return redirect(f"/deliveries/{delivery_id}?error=Can+only+request+adjustment+on+active+deliveries")
+    # Cancel any existing pending request
+    db.execute(text("UPDATE adjustment_requests SET status='CANCELLED' WHERE delivery_id=:did AND status='PENDING'"), {"did": d.id})
+    # Create new request
+    result = db.execute(
+        text("INSERT INTO adjustment_requests (delivery_id, requested_by, reason, status, created_at) VALUES (:did, :uid, :reason, 'PENDING', NOW()) RETURNING id"),
+        {"did": d.id, "uid": user.id, "reason": sanitize_text(reason, 400, "Reason") or ""}
+    )
+    req_id = result.fetchone()[0]
+    # Save item adjustments
+    d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
+    item_map = {di.id: (di, it) for di, it in d_items}
+    for i, item_id in enumerate(item_ids):
+        if item_id not in item_map: continue
+        di, it = item_map[item_id]
+        new_amt = float(new_amounts[i]) if i < len(new_amounts) else float(di.line_amount)
+        remove = remove_flags[i] == "1" if i < len(remove_flags) else False
+        db.execute(text(
+            "INSERT INTO adjustment_request_items (request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item) "
+            "VALUES (:rid, :diid, :name, :orig, :new, :rem)"
+        ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": float(di.line_amount), "new": new_amt, "rem": remove})
+    d.status = "ADJUSTMENT_PENDING"
+    audit_log(db, user.id, "ADJUSTMENT_REQUESTED", f"delivery_id={d.id} request_id={req_id}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return redirect(f"/deliveries/{delivery_id}?success=Adjustment+request+submitted+awaiting+admin+approval")
+
+
+@app.post("/deliveries/{delivery_id}/review-adjustment")
+async def review_adjustment(
+    request: Request, delivery_id: int,
+    action: str = Form(...),
+    rejection_note: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    d = db.get(Delivery, delivery_id)
+    if not d: raise HTTPException(status_code=404)
+    pending = db.execute(
+        text("SELECT * FROM adjustment_requests WHERE delivery_id=:did AND status='PENDING' ORDER BY created_at DESC LIMIT 1"),
+        {"did": d.id}
+    ).fetchone()
+    if not pending:
+        return redirect(f"/deliveries/{delivery_id}?error=No+pending+adjustment+request+found")
+    if action == "approve":
+        adj_items = db.execute(
+            text("SELECT * FROM adjustment_request_items WHERE request_id=:rid"), {"rid": pending.id}
+        ).fetchall()
+        for ai in adj_items:
+            if ai.remove_item:
+                # Return stock before removing
+                di = db.get(DeliveryItem, ai.delivery_item_id)
+                if di:
+                    item = db.get(Item, di.item_id)
+                    if item:
+                        item.quantity = (item.quantity or 0) + di.quantity
+                    db.delete(di)
+            else:
+                db.execute(
+                    text("UPDATE delivery_items SET line_amount=:amt WHERE id=:did"),
+                    {"amt": ai.new_amount, "did": ai.delivery_item_id}
+                )
+        db.execute(
+            text("UPDATE adjustment_requests SET status='APPROVED', reviewed_by=:uid, reviewed_at=NOW() WHERE id=:rid"),
+            {"uid": user.id, "rid": pending.id}
+        )
+        d.status = "OUT_FOR_DELIVERY"
+        audit_log(db, user.id, "ADJUSTMENT_APPROVED", f"delivery_id={d.id} request_id={pending.id}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return redirect(f"/deliveries/{delivery_id}?success=Adjustment+approved+agent+can+now+mark+delivered")
+    else:
+        note = sanitize_text(rejection_note, 400, "Note") or "Rejected by admin"
+        db.execute(
+            text("UPDATE adjustment_requests SET status='REJECTED', reviewed_by=:uid, reviewed_at=NOW(), rejection_note=:note WHERE id=:rid"),
+            {"uid": user.id, "rid": pending.id, "note": note}
+        )
+        d.status = "OUT_FOR_DELIVERY"
+        audit_log(db, user.id, "ADJUSTMENT_REJECTED", f"delivery_id={d.id} request_id={pending.id}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return redirect(f"/deliveries/{delivery_id}?success=Adjustment+rejected+agent+notified")
 
 
 @app.post("/deliveries/{delivery_id}/collect")
@@ -2389,6 +2544,8 @@ async def update_delivery_status(
     # Lock: once DELIVERED, no further status changes allowed
     if d.status == "DELIVERED":
         return redirect(f"/deliveries/{delivery_id}?error=This+order+has+already+been+delivered+and+cannot+be+updated")
+    if d.status == "ADJUSTMENT_PENDING" and status_clean == "DELIVERED":
+        return redirect(f"/deliveries/{delivery_id}?error=Cannot+mark+delivered+while+adjustment+request+is+pending+admin+approval")
     if status_clean == "DELIVERED":
         try:
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
