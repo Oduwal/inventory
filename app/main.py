@@ -343,6 +343,9 @@ def ensure_schema() -> None:
         # Drop and recreate ck_cash_kind to include CASH_PAYMENT and TRANSFER_PAYMENT
         _ddl(conn, "ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind")
         _ddl(conn, "ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))")
+        # Cash confirmation tracking
+        _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
+        _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
         # [SEC-7] Audit log table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS audit_logs (
             id SERIAL PRIMARY KEY,
@@ -720,6 +723,40 @@ def home(request: Request, db: Session = Depends(get_db)):
         k = e.created_at.date().isoformat() if e.created_at else None
         if k: exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
 
+    # Agent collections for today — for admin cash confirmation panel
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    today_end   = today_start + timedelta(days=1)
+    agent_collections = []
+    if is_admin(user):
+        branch_agents = db.execute(
+            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+        ).scalars().all()
+        for agent in branch_agents:
+            rows = db.execute(
+                select(CashEntry).where(CashEntry.agent_id == agent.id)
+                .where(CashEntry.branch_id == branch_id)
+                .where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]))
+                .where(CashEntry.created_at >= today_start)
+                .where(CashEntry.created_at < today_end)
+                .order_by(CashEntry.created_at.desc())
+            ).scalars().all()
+            if not rows:
+                continue
+            total     = sum(float(r.amount) for r in rows)
+            confirmed = all(r.confirmed_by_admin for r in rows)
+            cash_sum  = sum(float(r.amount) for r in rows if r.kind in ("COLLECTION","CASH_PAYMENT"))
+            trans_sum = sum(float(r.amount) for r in rows if r.kind == "TRANSFER_PAYMENT")
+            agent_collections.append({
+                "agent_id":   agent.id,
+                "agent_name": agent.full_name or agent.username,
+                "total":      total,
+                "cash":       cash_sum,
+                "transfer":   trans_sum,
+                "confirmed":  confirmed,
+                "entries":    len(rows),
+                "date":       date.today().isoformat(),
+            })
+
     return templates.TemplateResponse("dashboard.html", {
         "request": request, "user": user, "active": "dashboard",
         "branches": branches, "selected_branch_id": branch_id,
@@ -730,6 +767,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         "chart_labels": [str(d) for d in chart_days],
         "chart_deliveries": [del_by_day.get(d.isoformat(), 0) for d in chart_days],
         "chart_expenses": [round(exp_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
+        "agent_collections": agent_collections,
     })
 
 
@@ -773,6 +811,36 @@ def backfill_collections(request: Request, db: Session = Depends(get_db)):
             skipped += 1
     db.commit()
     return HTMLResponse(f"<pre>Done. Created: {created} collection entries. Skipped: {skipped} (already had entries or zero value).</pre>")
+
+
+@app.post("/admin/confirm-cash", response_class=JSONResponse)
+async def confirm_cash(request: Request, db: Session = Depends(get_db)):
+    """Admin confirms that an agent has physically handed over their cash."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body = await request.json()
+    agent_id = body.get("agent_id")
+    date_str = body.get("date")  # YYYY-MM-DD
+    if not agent_id or not date_str:
+        return JSONResponse({"error": "missing agent_id or date"}, status_code=400)
+    try:
+        day_start = datetime.strptime(date_str, "%Y-%m-%d")
+        day_end   = day_start + timedelta(days=1)
+    except ValueError:
+        return JSONResponse({"error": "invalid date"}, status_code=400)
+    db.execute(text(
+        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() "
+        "WHERE agent_id=:aid AND branch_id=:bid "
+        "AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT') "
+        "AND created_at >= :start AND created_at < :end "
+        "AND confirmed_by_admin=FALSE"
+    ), {"aid": agent_id, "bid": user.branch_id, "start": day_start, "end": day_end})
+    db.commit()
+    audit_log(db, user.id, "CASH_CONFIRMED", f"agent_id={agent_id} date={date_str}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/admin/audit-log", response_class=HTMLResponse)

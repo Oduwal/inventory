@@ -197,6 +197,8 @@ class CashEntry(Base):
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
 
     note: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    confirmed_by_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     branch: Mapped["Branch"] = relationship(back_populates="cash_entries")
     agent: Mapped["User"] = relationship(back_populates="cash_entries")
@@ -204,7 +206,7 @@ class CashEntry(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH')",
+            "kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT')",
             name="ck_cash_kind",
         ),
         CheckConstraint("amount > 0", name="ck_cash_amount_positive"),
@@ -265,12 +267,11 @@ class StockTransferItem(Base):
     )
 
 class AuditLog(Base):
-    """[SEC-7] Immutable audit trail — never update or delete rows."""
+    """[SEC-7] Immutable audit trail."""
     __tablename__ = "audit_logs"
-
-    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    id:         Mapped[int]        = mapped_column(Integer, primary_key=True)
     user_id:    Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    action:     Mapped[str]      = mapped_column(String(100), nullable=False)
-    detail:     Mapped[str]      = mapped_column(String(500), default="")
-    ip:         Mapped[str]      = mapped_column(String(45), default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    action:     Mapped[str]        = mapped_column(String(100), nullable=False)
+    detail:     Mapped[str]        = mapped_column(String(500), default="")
+    ip:         Mapped[str]        = mapped_column(String(45), default="")
+    created_at: Mapped[datetime]   = mapped_column(DateTime, default=datetime.utcnow)
