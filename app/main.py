@@ -2241,6 +2241,20 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
     })
 
 
+@app.get("/deliveries/adjustment-count", response_class=JSONResponse)
+def adjustment_count(request: Request, db: Session = Depends(get_db)):
+    """Badge count for admin nav — pending adjustment requests."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
+    user = user_or
+    if not is_admin(user): return JSONResponse({"count": 0})
+    count = db.execute(
+        text("SELECT COUNT(*) FROM adjustment_requests ar JOIN deliveries d ON d.id = ar.delivery_id WHERE ar.status = 'PENDING' AND d.branch_id = :bid"),
+        {"bid": user.branch_id}
+    ).scalar() or 0
+    return JSONResponse({"count": int(count)})
+
+
 @app.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
 def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -2336,20 +2350,6 @@ async def update_delivery_date(
     return redirect(f"/deliveries/{delivery_id}")
 
 
-@app.get("/deliveries/adjustment-count", response_class=JSONResponse)
-def adjustment_count(request: Request, db: Session = Depends(get_db)):
-    """Badge count for admin nav — pending adjustment requests."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
-    user = user_or
-    if not is_admin(user): return JSONResponse({"count": 0})
-    count = db.execute(
-        text("SELECT COUNT(*) FROM adjustment_requests ar JOIN deliveries d ON d.id = ar.delivery_id WHERE ar.status = 'PENDING' AND d.branch_id = :bid"),
-        {"bid": user.branch_id}
-    ).scalar() or 0
-    return JSONResponse({"count": int(count)})
-
-
 @app.post("/deliveries/{delivery_id}/request-adjustment")
 async def request_adjustment(
     request: Request, delivery_id: int,
@@ -2424,12 +2424,20 @@ async def review_adjustment(
         ).fetchall()
         for ai in adj_items:
             if ai.remove_item:
-                # Return stock before removing
+                # Return stock by creating an IN transaction, then remove the delivery item
                 di = db.get(DeliveryItem, ai.delivery_item_id)
                 if di:
                     item = db.get(Item, di.item_id)
-                    if item:
-                        item.quantity = (item.quantity or 0) + di.quantity
+                    if item and di.quantity > 0:
+                        db.add(Transaction(
+                            branch_id=d.branch_id,
+                            item_id=di.item_id,
+                            type="IN",
+                            quantity=di.quantity,
+                            note=f"Returned — adjustment approved for delivery #{d.id}",
+                            reference=f"adj-approval-{d.id}",
+                            delivery_id=d.id,
+                        ))
                     db.delete(di)
             else:
                 db.execute(
