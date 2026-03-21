@@ -2332,19 +2332,20 @@ async def delivery_collect(
         conn.execute(text(
             "DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"
         ), {"did": d.id})
+        now = datetime.utcnow()
         # Record cash portion
         if cash_amt > 0:
             conn.execute(text(
-                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
-            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": cash_amt,
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note, :now)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": cash_amt, "now": now,
                 "note": f"Cash payment — delivery #{d.id} to {d.customer_name}"})
         # Record transfer portion
         if transfer_amt > 0:
             conn.execute(text(
-                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                "VALUES (:b, :a, :d, 'TRANSFER_PAYMENT', :amt, :note)"
-            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": transfer_amt,
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                "VALUES (:b, :a, :d, 'TRANSFER_PAYMENT', :amt, :note, :now)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": transfer_amt, "now": now,
                 "note": f"Transfer payment — delivery #{d.id} to {d.customer_name}"})
         # If nothing entered, use full order total
         if cash_amt == 0 and transfer_amt == 0:
@@ -2354,9 +2355,9 @@ async def delivery_collect(
             ) or 0)
             if order_total > 0:
                 conn.execute(text(
-                    "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                    "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
-                ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": order_total,
+                    "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                    "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note, :now)"
+                ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": order_total, "now": now,
                     "note": f"Auto-recorded: delivery #{d.id} to {d.customer_name}"})
 
     audit_log(db, user.id, "DELIVERY_DELIVERED",
