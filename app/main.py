@@ -2207,6 +2207,75 @@ async def update_delivery_date(
     return redirect(f"/deliveries/{delivery_id}")
 
 
+@app.post("/deliveries/{delivery_id}/collect")
+async def delivery_collect(
+    request: Request, delivery_id: int,
+    cash_amount: float = Form(0.0),
+    transfer_amount: float = Form(0.0),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Mark delivery as DELIVERED with cash/transfer payment breakdown."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    d = db.get(Delivery, delivery_id)
+    require_delivery_access(request, user, d)
+    if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    if d.status == "DELIVERED":
+        return redirect(f"/deliveries/{delivery_id}?error=Already+delivered")
+
+    cash_amt     = max(0.0, float(cash_amount or 0))
+    transfer_amt = max(0.0, float(transfer_amount or 0))
+    total_paid   = cash_amt + transfer_amt
+
+    # Mark delivered
+    create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
+    d.status = "DELIVERED"
+    d.delivered_at = datetime.utcnow()
+
+    # Remove any existing auto-collection entries for this delivery
+    db.execute(
+        text("DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"),
+        {"did": d.id}
+    )
+
+    # Record cash portion
+    if cash_amt > 0:
+        db.add(CashEntry(
+            branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
+            kind="COLLECTION", amount=cash_amt,
+            note=f"Cash payment — delivery #{d.id} to {d.customer_name}",
+        ))
+    # Record transfer portion
+    if transfer_amt > 0:
+        db.add(CashEntry(
+            branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
+            kind="TRANSFER_PAYMENT", amount=transfer_amt,
+            note=f"Transfer payment — delivery #{d.id} to {d.customer_name}",
+        ))
+    # If nothing was entered, fall back to full order total as collection
+    if cash_amt == 0 and transfer_amt == 0:
+        order_total = float(db.scalar(
+            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+            .where(DeliveryItem.delivery_id == d.id)
+        ) or 0)
+        if order_total > 0:
+            db.add(CashEntry(
+                branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
+                kind="COLLECTION", amount=order_total,
+                note=f"Auto-recorded: delivery #{d.id} to {d.customer_name}",
+            ))
+
+    audit_log(db, user.id, "DELIVERY_DELIVERED",
+              f"delivery_id={d.id} cash={cash_amt} transfer={transfer_amt}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return redirect(f"/deliveries/{delivery_id}?success=Delivery+marked+as+delivered")
+
+
 @app.post("/deliveries/{delivery_id}/status")
 async def update_delivery_status(
     request: Request, delivery_id: int,

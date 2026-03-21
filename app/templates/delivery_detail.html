@@ -54,13 +54,13 @@
       Delivery Date: <strong style="color:var(--text);">{{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}</strong>
     </div>
 
-    <!-- [FIX-4] CSRF on status update -->
-    <form method="post" action="/deliveries/{{ d.id }}/status">
+    <!-- Status update — intercepts DELIVERED to show payment modal -->
+    <form method="post" action="/deliveries/{{ d.id }}/status" id="status-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <div style="display:flex;gap:10px;align-items:flex-end;">
         <div style="flex:1;">
           <label>Update Status</label>
-          <select name="status">
+          <select name="status" id="status-select">
             <option value="PENDING" {% if d.status=="PENDING" %}selected{% endif %}>PENDING</option>
             <option value="OUT_FOR_DELIVERY" {% if d.status=="OUT_FOR_DELIVERY" %}selected{% endif %}>OUT FOR DELIVERY</option>
             <option value="DELIVERED" {% if d.status=="DELIVERED" %}selected{% endif %}>DELIVERED</option>
@@ -68,9 +68,86 @@
             <option value="RETURNED" {% if d.status=="RETURNED" %}selected{% endif %}>RETURNED</option>
           </select>
         </div>
-        <button class="btnPrimary" type="submit">Save</button>
+        <button class="btnPrimary" type="button" onclick="handleStatusSave()">Save</button>
       </div>
     </form>
+
+    <!-- Payment breakdown modal (shown when DELIVERED selected) -->
+    <div id="collect-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+      <div style="background:#0d1829;border:1px solid rgba(34,197,94,.3);border-radius:16px;width:100%;max-width:440px;padding:24px;margin:20px;box-shadow:0 24px 60px rgba(0,0,0,.6);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+          <span class="badge b-green">💰 Payment Collection</span>
+          <button onclick="document.getElementById('collect-modal').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;">✕</button>
+        </div>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+          Order total: <strong style="color:#4ade80;">₦{{ '{:,.2f}'.format(d_items | map(attribute=0) | map(attribute='line_amount') | map('float') | sum) }}</strong><br>
+          How did the customer pay? Enter 0 if not applicable.
+        </p>
+        <form method="post" action="/deliveries/{{ d.id }}/collect">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+          <div style="margin-bottom:14px;">
+            <label>Cash Amount (₦)</label>
+            <input type="number" name="cash_amount" id="cash-amount" step="0.01" min="0" value="0" placeholder="0.00"
+              oninput="updateRemaining()" style="margin-top:4px;" />
+          </div>
+          <div style="margin-bottom:14px;">
+            <label>Transfer Amount (₦)</label>
+            <input type="number" name="transfer_amount" id="transfer-amount" step="0.01" min="0" value="0" placeholder="0.00"
+              oninput="updateRemaining()" style="margin-top:4px;" />
+          </div>
+          <div id="payment-summary" style="background:rgba(255,255,255,.04);border-radius:10px;padding:12px;margin-bottom:16px;font-size:13px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span style="color:var(--muted);">Total entered</span>
+              <span id="total-entered" style="font-weight:700;">₦0.00</span>
+            </div>
+            <div id="balance-row" style="display:flex;justify-content:space-between;">
+              <span style="color:var(--muted);">Balance</span>
+              <span id="balance-amount" style="font-weight:700;color:#fbbf24;">₦0.00</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button type="button" onclick="document.getElementById('collect-modal').style.display='none'" class="btnGhost" style="flex:1;">Cancel</button>
+            <button type="submit" class="btnPrimary" style="flex:2;justify-content:center;background:linear-gradient(135deg,#22c55e,#16a34a);">
+              ✓ Confirm &amp; Mark Delivered
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+    const ORDER_TOTAL = {{ d_items | map(attribute=0) | map(attribute='line_amount') | map('float') | sum | float }};
+
+    function handleStatusSave() {
+      const val = document.getElementById('status-select').value;
+      if (val === 'DELIVERED') {
+        // Reset modal inputs
+        document.getElementById('cash-amount').value = ORDER_TOTAL.toFixed(2);
+        document.getElementById('transfer-amount').value = '0';
+        updateRemaining();
+        document.getElementById('collect-modal').style.display = 'flex';
+      } else {
+        document.getElementById('status-form').submit();
+      }
+    }
+
+    function updateRemaining() {
+      const cash     = parseFloat(document.getElementById('cash-amount').value) || 0;
+      const transfer = parseFloat(document.getElementById('transfer-amount').value) || 0;
+      const total    = cash + transfer;
+      const balance  = ORDER_TOTAL - total;
+      document.getElementById('total-entered').textContent = '₦' + total.toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+      const balEl = document.getElementById('balance-amount');
+      balEl.textContent = '₦' + Math.abs(balance).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+      balEl.style.color = balance > 0.01 ? '#f87171' : balance < -0.01 ? '#fbbf24' : '#4ade80';
+      document.getElementById('balance-row').querySelector('span:first-child').textContent =
+        balance > 0.01 ? 'Shortfall' : balance < -0.01 ? 'Overpaid' : 'Balanced ✓';
+    }
+
+    document.getElementById('collect-modal').addEventListener('mousedown', e => {
+      if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+    });
+    </script>
   </div>
 </div>
 
