@@ -2159,7 +2159,9 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     d_items = db.execute(
         select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)
     ).all()
-    col = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "COLLECTION")) or 0
+    col = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]))) or 0
+    cash_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT"]))) or 0
+    transfer_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "TRANSFER_PAYMENT")) or 0
     exp = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "EXPENSE")) or 0
     csrf_token = get_csrf_token(request)
     agents = db.execute(
@@ -2168,6 +2170,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     return templates.TemplateResponse("delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": float(col), "expense_total": float(exp),
+        "cash_total": float(cash_total), "transfer_total": float(transfer_total),
         "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
         "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
     })
@@ -2255,38 +2258,38 @@ async def delivery_collect(
     d.status = "DELIVERED"
     d.delivered_at = datetime.utcnow()
 
-    # Remove any existing auto-collection entries for this delivery
-    db.execute(
-        text("DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"),
-        {"did": d.id}
-    )
-
-    # Record cash portion
-    if cash_amt > 0:
-        db.add(CashEntry(
-            branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
-            kind="COLLECTION", amount=cash_amt,
-            note=f"Cash payment — delivery #{d.id} to {d.customer_name}",
-        ))
-    # Record transfer portion
-    if transfer_amt > 0:
-        db.add(CashEntry(
-            branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
-            kind="TRANSFER_PAYMENT", amount=transfer_amt,
-            note=f"Transfer payment — delivery #{d.id} to {d.customer_name}",
-        ))
-    # If nothing was entered, fall back to full order total as collection
-    if cash_amt == 0 and transfer_amt == 0:
-        order_total = float(db.scalar(
-            select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
-            .where(DeliveryItem.delivery_id == d.id)
-        ) or 0)
-        if order_total > 0:
-            db.add(CashEntry(
-                branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
-                kind="COLLECTION", amount=order_total,
-                note=f"Auto-recorded: delivery #{d.id} to {d.customer_name}",
-            ))
+    # Use raw SQL for all cash operations to avoid ORM constraint issues
+    with db.bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        # Remove any existing collection entries for this delivery
+        conn.execute(text(
+            "DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"
+        ), {"did": d.id})
+        # Record cash portion
+        if cash_amt > 0:
+            conn.execute(text(
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
+                "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": cash_amt,
+                "note": f"Cash payment — delivery #{d.id} to {d.customer_name}"})
+        # Record transfer portion
+        if transfer_amt > 0:
+            conn.execute(text(
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
+                "VALUES (:b, :a, :d, 'TRANSFER_PAYMENT', :amt, :note)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": transfer_amt,
+                "note": f"Transfer payment — delivery #{d.id} to {d.customer_name}"})
+        # If nothing entered, use full order total
+        if cash_amt == 0 and transfer_amt == 0:
+            order_total = float(db.scalar(
+                select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
+                .where(DeliveryItem.delivery_id == d.id)
+            ) or 0)
+            if order_total > 0:
+                conn.execute(text(
+                    "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
+                    "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
+                ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": order_total,
+                    "note": f"Auto-recorded: delivery #{d.id} to {d.customer_name}"})
 
     audit_log(db, user.id, "DELIVERY_DELIVERED",
               f"delivery_id={d.id} cash={cash_amt} transfer={transfer_amt}",
