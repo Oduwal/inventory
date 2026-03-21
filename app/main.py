@@ -2372,7 +2372,7 @@ async def request_adjustment(
     # Create new request
     result = db.execute(
         text("INSERT INTO adjustment_requests (delivery_id, requested_by, reason, status, created_at) VALUES (:did, :uid, :reason, 'PENDING', NOW()) RETURNING id"),
-        {"did": d.id, "uid": user.id, "reason": sanitize_text(reason, 400, "Reason") or ""}
+        {"did": d.id, "uid": user.id, "reason": (reason or "").strip()[:400]}
     )
     req_id = result.fetchone()[0]
     # Save item adjustments
@@ -2443,7 +2443,7 @@ async def review_adjustment(
         db.commit()
         return redirect(f"/deliveries/{delivery_id}?success=Adjustment+approved+agent+can+now+mark+delivered")
     else:
-        note = sanitize_text(rejection_note, 400, "Note") or "Rejected by admin"
+        note = (rejection_note or "").strip()[:400] or "Rejected by admin"
         db.execute(
             text("UPDATE adjustment_requests SET status='REJECTED', reviewed_by=:uid, reviewed_at=NOW(), rejection_note=:note WHERE id=:rid"),
             {"uid": user.id, "rid": pending.id, "note": note}
