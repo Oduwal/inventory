@@ -6,28 +6,37 @@
 
 {% block content %}
 <style>
-  .rpt-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:20px; }
-  .rpt-kpi-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px 18px; }
-  .rpt-kpi-card .lbl { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
-  .rpt-kpi-card .val { font-size:22px; font-weight:800; }
+  .rpt-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px; margin-bottom:20px; }
+  .rpt-kpi-card { background:var(--panel2); border:1px solid var(--border2); padding:14px 16px; position:relative; }
+  .rpt-kpi-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--cyan); opacity:.3; }
+  .rpt-kpi-card .lbl { font-family:var(--font-mono); font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; margin-bottom:6px; }
+  .rpt-kpi-card .val { font-family:var(--font-mono); font-size:21px; font-weight:700; }
   .preview-table { width:100%; border-collapse:collapse; font-size:13px; }
-  .preview-table th { background:rgba(79,124,255,.12); color:var(--muted); font-size:11px; text-transform:uppercase; padding:8px 12px; text-align:left; }
-  .preview-table td { padding:10px 12px; border-bottom:1px solid var(--border); }
+  .preview-table th { background:rgba(0,212,255,.04); color:var(--muted); font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; padding:8px 12px; text-align:left; border-bottom:1px solid var(--border); }
+  .preview-table td { padding:10px 12px; border-bottom:1px solid rgba(0,212,255,.04); }
   .preview-table tr:last-child td { border-bottom:none; }
-  .preview-table .item-pill { display:inline-block; background:rgba(139,92,246,.15); border:1px solid rgba(139,92,246,.3); border-radius:8px; padding:2px 8px; font-size:12px; margin:2px; }
-  .section-header { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:10px 12px; background:rgba(0,0,0,.15); }
+  .preview-table .item-pill { display:inline-block; background:rgba(0,212,255,.08); border:1px solid rgba(0,212,255,.2); padding:2px 8px; font-family:var(--font-mono); font-size:10px; margin:2px; color:var(--cyan); }
+  .section-header { font-family:var(--font-mono); font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); padding:9px 12px; background:rgba(0,212,255,.03); border-bottom:1px solid var(--border2); }
   .filter-bar { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
   #preview-area { display:none; margin-top:20px; }
-  .spinner { display:none; width:20px; height:20px; border:2px solid rgba(79,124,255,.3); border-top-color:#4f7cff; border-radius:50%; animation:spin .7s linear infinite; }
+  .spinner { display:none; width:18px; height:18px; border:2px solid rgba(0,212,255,.2); border-top-color:var(--cyan); border-radius:50%; animation:spin .7s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .expense-row { display:flex; justify-content:space-between; padding:8px 12px; border-bottom:1px solid var(--border); font-size:13px; }
+  .expense-row { display:flex; justify-content:space-between; padding:8px 12px; border-bottom:1px solid rgba(0,212,255,.04); font-size:13px; }
   .expense-row:last-child { border-bottom:none; }
-  .remittance-box { background:linear-gradient(135deg,rgba(79,124,255,.15),rgba(139,92,246,.15)); border:1px solid rgba(79,124,255,.3); border-radius:14px; padding:18px 20px; margin-top:16px; display:flex; justify-content:space-between; align-items:center; }
+  .remittance-box { background:rgba(0,212,255,.04); border:1px solid rgba(0,212,255,.15); border-left:3px solid var(--cyan); padding:18px 20px; margin-top:16px; display:flex; justify-content:space-between; align-items:center; }
 </style>
 
 <!-- Filter Card -->
 <div class="card">
   <div class="badge b-blue" style="margin-bottom:14px;">FILTER</div>
+  <!-- Quick presets -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <button class="btnGhost" onclick="setPreset('today')" style="font-size:12px;padding:5px 12px;">Today</button>
+    <button class="btnGhost" onclick="setPreset('yesterday')" style="font-size:12px;padding:5px 12px;">Yesterday</button>
+    <button class="btnGhost" onclick="setPreset('week')" style="font-size:12px;padding:5px 12px;">This Week</button>
+    <button class="btnGhost" onclick="setPreset('month')" style="font-size:12px;padding:5px 12px;">This Month</button>
+    <button class="btnGhost" onclick="setPreset('last_month')" style="font-size:12px;padding:5px 12px;">Last Month</button>
+  </div>
   <div class="filter-bar">
     <div>
       <label>Start Date</label>
@@ -128,7 +137,33 @@
 const fmt = n => '₦' + parseFloat(n).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
 let _reportData = null;
 
-async function loadPreview() {
+function setPreset(preset) {
+    const today = new Date();
+    const fmt = d => d.toISOString().split('T')[0];
+    let start, end;
+    if (preset === 'today') {
+      start = end = fmt(today);
+    } else if (preset === 'yesterday') {
+      const y = new Date(today); y.setDate(y.getDate() - 1);
+      start = end = fmt(y);
+    } else if (preset === 'week') {
+      const mon = new Date(today);
+      mon.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+      start = fmt(mon); end = fmt(today);
+    } else if (preset === 'month') {
+      start = fmt(new Date(today.getFullYear(), today.getMonth(), 1));
+      end = fmt(today);
+    } else if (preset === 'last_month') {
+      const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const last  = new Date(today.getFullYear(), today.getMonth(), 0);
+      start = fmt(first); end = fmt(last);
+    }
+    document.getElementById('f_start').value = start;
+    document.getElementById('f_end').value = end;
+    loadPreview();
+  }
+
+  async function loadPreview() {
   const start = document.getElementById('f_start').value;
   const end   = document.getElementById('f_end').value;
   const agent = document.getElementById('f_agent')?.value || '';

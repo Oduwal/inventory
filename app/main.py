@@ -2770,7 +2770,13 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     target_agent_id = None
     if is_agent(user): target_agent_id = int(user.id)
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
-    filters = [Delivery.delivery_date >= start_dt, Delivery.delivery_date <= end_dt, Delivery.status == "DELIVERED"]
+    # Use delivered_at (when actually marked delivered) so "today" shows today's deliveries
+    # Fall back to delivery_date if delivered_at is null (older records)
+    filters = [
+        Delivery.status == "DELIVERED",
+        func.coalesce(Delivery.delivered_at, Delivery.delivery_date) >= start_dt,
+        func.coalesce(Delivery.delivered_at, Delivery.delivery_date) <= end_dt,
+    ]
     if not is_supervisor(user): filters.append(Delivery.branch_id == branch_id)
     if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
     deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.delivery_date.asc())).scalars().all()
