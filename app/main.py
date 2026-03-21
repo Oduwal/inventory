@@ -2438,6 +2438,132 @@ async def update_delivery_status(
 
 
 # ────────────────────────────────────────────────
+#  AGENT VETTING
+# ────────────────────────────────────────────────
+
+@app.get("/vetting", response_class=HTMLResponse)
+def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    branch_id = get_selected_branch_id(request, user)
+
+    # Date filter
+    if date_filter:
+        try:
+            filter_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
+        except ValueError:
+            filter_date = date.today()
+    else:
+        filter_date = date.today()
+
+    day_start = datetime.combine(filter_date, datetime.min.time())
+    day_end   = day_start + timedelta(days=1)
+
+    # All agents in this branch
+    agents = db.execute(
+        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+    ).scalars().all()
+
+    selected_agent_id = int(agent_id) if agent_id and agent_id.isdigit() else None
+
+    # Build vetting rows per agent
+    vetting_rows = []
+    for agent in agents:
+        if selected_agent_id and agent.id != selected_agent_id:
+            continue
+
+        entries = db.execute(
+            select(CashEntry).where(CashEntry.agent_id == agent.id)
+            .where(CashEntry.branch_id == branch_id)
+            .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"]))
+            .where(CashEntry.created_at >= day_start)
+            .where(CashEntry.created_at < day_end)
+            .order_by(CashEntry.created_at.desc())
+        ).scalars().all()
+
+        if not entries:
+            continue
+
+        cash_total     = sum(float(e.amount) for e in entries if e.kind in ("COLLECTION", "CASH_PAYMENT"))
+        transfer_total = sum(float(e.amount) for e in entries if e.kind == "TRANSFER_PAYMENT")
+        total          = cash_total + transfer_total
+        confirmed      = all(getattr(e, 'confirmed_by_admin', False) for e in entries)
+        confirmed_count = sum(1 for e in entries if getattr(e, 'confirmed_by_admin', False))
+
+        # Get linked deliveries for these entries
+        delivery_ids = list({e.delivery_id for e in entries if e.delivery_id})
+        deliveries = {}
+        if delivery_ids:
+            for d in db.execute(select(Delivery).where(Delivery.id.in_(delivery_ids))).scalars().all():
+                deliveries[d.id] = d
+
+        vetting_rows.append({
+            "agent":           agent,
+            "entries":         entries,
+            "deliveries":      deliveries,
+            "cash_total":      cash_total,
+            "transfer_total":  transfer_total,
+            "total":           total,
+            "confirmed":       confirmed,
+            "confirmed_count": confirmed_count,
+            "total_count":     len(entries),
+        })
+
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("vetting.html", {
+        "request": request, "user": user, "active": "vetting",
+        "vetting_rows": vetting_rows, "agents": agents,
+        "filter_date": filter_date.isoformat(),
+        "selected_agent_id": selected_agent_id,
+        "today": date.today().isoformat(),
+        "csrf_token": csrf_token,
+    })
+
+
+@app.post("/vetting/confirm", response_class=JSONResponse)
+async def vetting_confirm(request: Request, db: Session = Depends(get_db)):
+    """Confirm all cash entries for an agent on a given date."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body = await request.json()
+    agent_id  = body.get("agent_id")
+    date_str  = body.get("date")
+    entry_ids = body.get("entry_ids", [])  # specific entries or all for that agent/date
+    if not agent_id or not date_str:
+        return JSONResponse({"error": "missing agent_id or date"}, status_code=400)
+    try:
+        filter_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return JSONResponse({"error": "invalid date"}, status_code=400)
+    day_start = datetime.combine(filter_date, datetime.min.time())
+    day_end   = day_start + timedelta(days=1)
+    q = select(CashEntry).where(
+        CashEntry.agent_id == agent_id,
+        CashEntry.branch_id == user.branch_id,
+        CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"]),
+        CashEntry.created_at >= day_start,
+        CashEntry.created_at < day_end,
+    )
+    if entry_ids:
+        q = q.where(CashEntry.id.in_(entry_ids))
+    entries = db.execute(q).scalars().all()
+    now = datetime.utcnow()
+    for e in entries:
+        e.confirmed_by_admin = True
+        e.confirmed_at = now
+    db.commit()
+    audit_log(db, user.id, "CASH_VETTED",
+              f"agent_id={agent_id} date={date_str} entries={len(entries)}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    return JSONResponse({"ok": True, "confirmed": len(entries)})
+
+
+# ────────────────────────────────────────────────
 #  CASH
 # ────────────────────────────────────────────────
 

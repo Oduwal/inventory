@@ -332,6 +332,9 @@
       {% if role == "ADMIN" %}
       <div class="nav-divider"></div>
       <div class="nav-section">Admin</div>
+      <a href="/vetting" data-active="{% if active == 'vetting' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">✅</span>Agent Vetting
+      </a>
       <a href="/agents" data-active="{% if active == 'agents' %}1{% else %}0{% endif %}">
         <span class="nav-icon">👤</span>Agents
       </a>
