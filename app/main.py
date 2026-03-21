@@ -343,6 +343,9 @@ def ensure_schema() -> None:
         # Drop and recreate ck_cash_kind to include CASH_PAYMENT and TRANSFER_PAYMENT
         _ddl(conn, "ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind")
         _ddl(conn, "ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))")
+        # Add ADJUSTMENT_PENDING to delivery status constraint
+        _ddl(conn, "ALTER TABLE deliveries DROP CONSTRAINT IF EXISTS ck_delivery_status")
+        _ddl(conn, "ALTER TABLE deliveries ADD CONSTRAINT ck_delivery_status CHECK (status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED','ADJUSTMENT_PENDING'))")
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
