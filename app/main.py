@@ -728,34 +728,37 @@ def home(request: Request, db: Session = Depends(get_db)):
     today_end   = today_start + timedelta(days=1)
     agent_collections = []
     if is_admin(user):
-        branch_agents = db.execute(
-            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
-        ).scalars().all()
-        for agent in branch_agents:
-            rows = db.execute(
-                select(CashEntry).where(CashEntry.agent_id == agent.id)
-                .where(CashEntry.branch_id == branch_id)
-                .where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]))
-                .where(CashEntry.created_at >= today_start)
-                .where(CashEntry.created_at < today_end)
-                .order_by(CashEntry.created_at.desc())
+        try:
+            branch_agents = db.execute(
+                select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
             ).scalars().all()
-            if not rows:
-                continue
-            total     = sum(float(r.amount) for r in rows)
-            confirmed = all(r.confirmed_by_admin for r in rows)
-            cash_sum  = sum(float(r.amount) for r in rows if r.kind in ("COLLECTION","CASH_PAYMENT"))
-            trans_sum = sum(float(r.amount) for r in rows if r.kind == "TRANSFER_PAYMENT")
-            agent_collections.append({
-                "agent_id":   agent.id,
-                "agent_name": agent.full_name or agent.username,
-                "total":      total,
-                "cash":       cash_sum,
-                "transfer":   trans_sum,
-                "confirmed":  confirmed,
-                "entries":    len(rows),
-                "date":       date.today().isoformat(),
-            })
+            for agent in branch_agents:
+                rows = db.execute(
+                    select(CashEntry).where(CashEntry.agent_id == agent.id)
+                    .where(CashEntry.branch_id == branch_id)
+                    .where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]))
+                    .where(CashEntry.created_at >= today_start)
+                    .where(CashEntry.created_at < today_end)
+                    .order_by(CashEntry.created_at.desc())
+                ).scalars().all()
+                if not rows:
+                    continue
+                total     = sum(float(r.amount) for r in rows)
+                confirmed = all(getattr(r, "confirmed_by_admin", False) for r in rows)
+                cash_sum  = sum(float(r.amount) for r in rows if r.kind in ("COLLECTION","CASH_PAYMENT"))
+                trans_sum = sum(float(r.amount) for r in rows if r.kind == "TRANSFER_PAYMENT")
+                agent_collections.append({
+                    "agent_id":   agent.id,
+                    "agent_name": agent.full_name or agent.username,
+                    "total":      total,
+                    "cash":       cash_sum,
+                    "transfer":   trans_sum,
+                    "confirmed":  confirmed,
+                    "entries":    len(rows),
+                    "date":       date.today().isoformat(),
+                })
+        except Exception:
+            agent_collections = []  # fallback — column may not exist yet
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request, "user": user, "active": "dashboard",
@@ -2332,19 +2335,20 @@ async def delivery_collect(
         conn.execute(text(
             "DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"
         ), {"did": d.id})
+        now = datetime.utcnow()
         # Record cash portion
         if cash_amt > 0:
             conn.execute(text(
-                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
-            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": cash_amt,
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note, :now)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": cash_amt, "now": now,
                 "note": f"Cash payment — delivery #{d.id} to {d.customer_name}"})
         # Record transfer portion
         if transfer_amt > 0:
             conn.execute(text(
-                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                "VALUES (:b, :a, :d, 'TRANSFER_PAYMENT', :amt, :note)"
-            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": transfer_amt,
+                "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                "VALUES (:b, :a, :d, 'TRANSFER_PAYMENT', :amt, :note, :now)"
+            ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": transfer_amt, "now": now,
                 "note": f"Transfer payment — delivery #{d.id} to {d.customer_name}"})
         # If nothing entered, use full order total
         if cash_amt == 0 and transfer_amt == 0:
@@ -2354,9 +2358,9 @@ async def delivery_collect(
             ) or 0)
             if order_total > 0:
                 conn.execute(text(
-                    "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note) "
-                    "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note)"
-                ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": order_total,
+                    "INSERT INTO cash_entries (branch_id, agent_id, delivery_id, kind, amount, note, created_at) "
+                    "VALUES (:b, :a, :d, 'COLLECTION', :amt, :note, :now)"
+                ), {"b": d.branch_id, "a": d.agent_id, "d": d.id, "amt": order_total, "now": now,
                     "note": f"Auto-recorded: delivery #{d.id} to {d.customer_name}"})
 
     audit_log(db, user.id, "DELIVERY_DELIVERED",
