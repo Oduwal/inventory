@@ -365,13 +365,32 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_cash_entries_agent_id ON cash_entries (agent_id)")
         # Drop and recreate ck_cash_kind to include CASH_PAYMENT and TRANSFER_PAYMENT
         _ddl(conn, "ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind")
-        _ddl(conn, "ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))")
+        _ddl(conn, "ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT','COLLECTION_EXPENSE'))")
         # Add ADJUSTMENT_PENDING to delivery status constraint
         _ddl(conn, "ALTER TABLE deliveries DROP CONSTRAINT IF EXISTS ck_delivery_status")
         _ddl(conn, "ALTER TABLE deliveries ADD CONSTRAINT ck_delivery_status CHECK (status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED','ADJUSTMENT_PENDING'))")
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
+        # Agent stock assignment table (extra stock given to agents for urgent deliveries)
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS agent_stock_assignments (
+            id           SERIAL PRIMARY KEY,
+            agent_id     INTEGER NOT NULL REFERENCES users(id),
+            item_id      INTEGER NOT NULL REFERENCES items(id),
+            branch_id    INTEGER NOT NULL REFERENCES branches(id),
+            qty_assigned INTEGER NOT NULL DEFAULT 0,
+            note         VARCHAR(400) NOT NULL DEFAULT \'\',
+            assigned_by  INTEGER REFERENCES users(id),
+            assigned_at  TIMESTAMP DEFAULT NOW(),
+            returned     BOOLEAN DEFAULT FALSE,
+            qty_returned INTEGER NOT NULL DEFAULT 0,
+            vetted_by    INTEGER REFERENCES users(id),
+            vetted_at    TIMESTAMP DEFAULT NULL,
+            transaction_out_id INTEGER REFERENCES transactions(id),
+            transaction_in_id  INTEGER REFERENCES transactions(id)
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_agent ON agent_stock_assignments (agent_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_branch ON agent_stock_assignments (branch_id)")
         # Faulty stock tracking table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS faulty_stock (
             id           SERIAL PRIMARY KEY,
@@ -2163,7 +2182,7 @@ def fix_cash_constraint(request: Request, db: Session = Depends(get_db)):
     try:
         with db.bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text("ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind"))
-            conn.execute(text("ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT'))"))
+            conn.execute(text("ALTER TABLE cash_entries ADD CONSTRAINT ck_cash_kind CHECK (kind IN ('COLLECTION','EXPENSE','OPERATING_CASH','OFFICE_EXPENSE','RETURN_OPERATING_CASH','CASH_PAYMENT','TRANSFER_PAYMENT','COLLECTION_EXPENSE'))"))
         return JSONResponse({"status": "ok", "message": "Constraint updated successfully"})
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)})
@@ -2883,6 +2902,111 @@ def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
 #  AGENT VETTING
 # ────────────────────────────────────────────────
 
+@app.post("/vetting/assign-stock", response_class=JSONResponse)
+async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db)):
+    """Admin assigns extra stock to an agent for urgent deliveries.
+    Creates an OUT transaction immediately — stock leaves branch.
+    """
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body     = await request.json()
+    agent_id = body.get("agent_id")
+    item_id  = body.get("item_id")
+    qty      = int(body.get("qty", 0))
+    note     = (body.get("note", "") or "").strip()[:400]
+    if not agent_id or not item_id or qty <= 0:
+        return JSONResponse({"error": "agent, item and qty required"}, status_code=400)
+
+    branch_id = get_selected_branch_id(request, user)
+    item  = db.get(Item, item_id)
+    agent = db.get(User, agent_id)
+    if not item or item.branch_id != branch_id:
+        return JSONResponse({"error": "item not found in this branch"}, status_code=404)
+    if not agent or agent.branch_id != branch_id or agent.role != "AGENT":
+        return JSONResponse({"error": "agent not found in this branch"}, status_code=404)
+
+    # Create OUT transaction immediately
+    tx = Transaction(
+        branch_id=branch_id, item_id=item_id, type="OUT", quantity=qty,
+        note=f"Extra stock assigned to agent {agent.full_name or agent.username}{': ' + note if note else ''}",
+        reference=f"agent-assign-{agent_id}",
+    )
+    db.add(tx)
+    db.flush()
+
+    # Record the assignment
+    db.execute(text(
+        "INSERT INTO agent_stock_assignments "
+        "(agent_id, item_id, branch_id, qty_assigned, note, assigned_by, assigned_at, returned, qty_returned, transaction_out_id) "
+        "VALUES (:aid, :iid, :bid, :qty, :note, :uid, NOW(), FALSE, 0, :txid)"
+    ), {"aid": agent_id, "iid": item_id, "bid": branch_id, "qty": qty,
+        "note": note, "uid": user.id, "txid": tx.id})
+
+    audit_log(db, user.id, "STOCK_ASSIGNED_TO_AGENT",
+              f"agent={agent.username} item={item.name} qty={qty}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+
+    # Notify agent
+    notify(db, agent_id, "📦 Stock Assigned to You",
+           f"{qty} × {item.name} assigned by admin for urgent delivery",
+           "/my-deliveries", "info")
+    db.commit()
+    return JSONResponse({"ok": True, "item_name": item.name, "agent_name": agent.full_name or agent.username, "qty": qty, "tx_id": tx.id})
+
+
+@app.post("/vetting/return-assigned-stock", response_class=JSONResponse)
+async def return_assigned_stock(request: Request, db: Session = Depends(get_db)):
+    """Admin vets return of extra stock assigned to agent — creates IN transaction."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body          = await request.json()
+    assignment_id = body.get("assignment_id")
+    qty_returned  = int(body.get("qty_returned", 0))
+    if not assignment_id or qty_returned < 0:
+        return JSONResponse({"error": "invalid params"}, status_code=400)
+
+    row = db.execute(text(
+        "SELECT id, agent_id, item_id, branch_id, qty_assigned, note FROM agent_stock_assignments "
+        "WHERE id = :aid AND returned = FALSE"
+    ), {"aid": assignment_id}).fetchone()
+    if not row:
+        return JSONResponse({"error": "assignment not found or already returned"}, status_code=404)
+    asgn_id, agent_id, item_id, branch_id, qty_assigned, asgn_note = row
+
+    if branch_id != user.branch_id:
+        return JSONResponse({"error": "forbidden — different branch"}, status_code=403)
+
+    item  = db.get(Item, item_id)
+    agent = db.get(User, agent_id)
+    tx_in_id = None
+
+    if qty_returned > 0:
+        tx = Transaction(
+            branch_id=branch_id, item_id=item_id, type="IN", quantity=qty_returned,
+            note=f"Unused assigned stock returned by {agent.full_name or agent.username if agent else 'agent'}",
+            reference=f"agent-return-{assignment_id}",
+        )
+        db.add(tx)
+        db.flush()
+        tx_in_id = tx.id
+
+    db.execute(text(
+        "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
+        "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
+    ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
+
+    audit_log(db, user.id, "ASSIGNED_STOCK_RETURNED",
+              f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
+                         "qty_returned": qty_returned, "qty_assigned": qty_assigned})
+
+
 @app.post("/vetting/confirm-return", response_class=JSONResponse)
 async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)):
     """Vet stock return for a specific delivery item.
@@ -3250,6 +3374,27 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "has_shortfall": has_shortfall,
         })
 
+    # ── Extra stock assignments — unvetted returns ───────────────────────
+    # Show all unvetted (not returned) assignments for this branch
+    assignment_rows = db.execute(text("""
+        SELECT
+            asa.id, asa.qty_assigned, asa.note, asa.assigned_at, asa.qty_returned,
+            it.id AS item_id, it.name AS item_name,
+            u_agent.id AS agent_id,
+            u_agent.full_name AS agent_name, u_agent.username AS agent_username,
+            u_assigner.full_name AS assigned_by_name, u_assigner.username AS assigned_by_username
+        FROM agent_stock_assignments asa
+        JOIN items it           ON it.id    = asa.item_id
+        JOIN users u_agent      ON u_agent.id = asa.agent_id
+        LEFT JOIN users u_assigner ON u_assigner.id = asa.assigned_by
+        WHERE asa.branch_id = :bid AND asa.returned = FALSE
+        ORDER BY asa.assigned_at DESC
+        LIMIT 100
+    """), {"bid": branch_id}).fetchall()
+
+    # ── Available items for stock assignment form ─────────────────────
+    assign_items = get_items_with_stock(db, branch_id=branch_id)
+
     # ── Written-off records (for summary card at top) ────────────────────
     written_off_rows = db.execute(text("""
         SELECT
@@ -3282,6 +3427,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         "csrf_token": csrf_token,
         "return_rows": return_rows,
         "written_off_rows": written_off_rows,
+        "assignment_rows": assignment_rows,
+        "assign_items": assign_items,
     })
 
 
@@ -3395,7 +3542,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
             for d in all_days]
 
     total_collections     = _cash_sum(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"], selected_agent_id)
-    total_expenses        = _cash_sum(["EXPENSE"], selected_agent_id)
+    total_expenses        = _cash_sum(["EXPENSE", "COLLECTION_EXPENSE"], selected_agent_id)
     total_operating       = _cash_sum(["OPERATING_CASH"], selected_agent_id)
     total_office_expenses = _cash_sum(["OFFICE_EXPENSE"], selected_agent_id)
 
@@ -3428,10 +3575,12 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
             for e in _entries(kind_list)
         ]
 
-    expense_entries     = _entry_list(["EXPENSE"])
-    collection_entries  = _entry_list(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"])
-    op_cash_entries     = _entry_list(["OPERATING_CASH"])
-    office_entries      = _entry_list(["OFFICE_EXPENSE"])
+    expense_entries      = _entry_list(["EXPENSE"])
+    coll_expense_entries = _entry_list(["COLLECTION_EXPENSE"])
+    collection_entries   = _entry_list(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"])
+    op_cash_entries      = _entry_list(["OPERATING_CASH"])
+    office_entries       = _entry_list(["OFFICE_EXPENSE"])
+    total_collection_expenses = sum(e["amount"] for e in coll_expense_entries)
 
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("cash_dashboard.html", {
@@ -3442,6 +3591,8 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         "remittance": float(remittance), "net_position": float(net_position),
         "agents": agents, "agent_id": agent_id,
         "expense_entries": expense_entries,
+        "coll_expense_entries": coll_expense_entries,
+        "total_collection_expenses": total_collection_expenses,
         "collection_entries": collection_entries,
         "op_cash_entries": op_cash_entries,
         "office_entries": office_entries,
@@ -3469,7 +3620,7 @@ async def cash_new(
     user = user_or
     verify_csrf_token(request, csrf_token)
     k = (kind or "").strip().upper()
-    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH", "CASH_PAYMENT", "TRANSFER_PAYMENT"}:
+    if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH", "CASH_PAYMENT", "TRANSFER_PAYMENT", "COLLECTION_EXPENSE"}:
         raise HTTPException(status_code=400, detail="Invalid kind")
     if k == "OFFICE_EXPENSE" and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
@@ -3485,6 +3636,31 @@ async def cash_new(
     branch_id = get_current_branch_id(request)
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
+    # Auto-detect expense source for agents:
+    # If agent records EXPENSE and has no remaining op cash balance → use COLLECTION_EXPENSE instead
+    if k == "EXPENSE" and is_agent(user):
+        op_given = float(db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.agent_id == target_agent_id)
+            .where(CashEntry.branch_id == branch_id)
+            .where(CashEntry.kind == "OPERATING_CASH")
+        ) or 0)
+        op_spent = float(db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.agent_id == target_agent_id)
+            .where(CashEntry.branch_id == branch_id)
+            .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
+        ) or 0)
+        op_returned = float(db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.agent_id == target_agent_id)
+            .where(CashEntry.branch_id == branch_id)
+            .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+        ) or 0)
+        op_balance = op_given - op_spent - op_returned
+        if op_balance <= 0:
+            k = "COLLECTION_EXPENSE"  # Op cash exhausted — deduct from collection
+
     db.add(CashEntry(
         branch_id=branch_id, agent_id=target_agent_id, delivery_id=d_id,
         kind=k, amount=amt, note=sanitize_text(note, 400, "Note") or None,
@@ -3566,13 +3742,23 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     else:
         _agent_ce_filter = True  # supervisor: no agent filter
     # agent_exp_map: AGENT expenses EXCLUDING waybill-tagged ones (those go to waybill section)
+    # agent_exp_map: includes both EXPENSE (from op cash) and COLLECTION_EXPENSE (from collection)
     agent_exp_map = {int(aid): float(t) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
         .where(_ce_branch)
         .where(_agent_ce_filter if not is_supervisor(user) else True)
         .where(func.lower(func.coalesce(CashEntry.note, "")).notlike("%waybill%"))
+        .group_by(CashEntry.agent_id)
+    ).all()}
+    # Separate collection-funded expenses per agent for report breakdown
+    agent_coll_exp_map = {int(aid): float(t) for aid, t in db.execute(
+        select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.kind == "COLLECTION_EXPENSE")
+        .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
+        .where(_ce_branch)
+        .where(_agent_ce_filter if not is_supervisor(user) else True)
         .group_by(CashEntry.agent_id)
     ).all()}
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(
@@ -3628,14 +3814,22 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     agent_op_summary = []
     total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0.0
     for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
-        exp = agent_exp_map.get(aid, 0.0); op = op_cash_map.get(aid, 0.0); balance = op - exp
+        exp       = agent_exp_map.get(aid, 0.0)
+        coll_exp  = agent_coll_exp_map.get(aid, 0.0)
+        op_exp    = exp - coll_exp   # expenses from operating cash only
+        op        = op_cash_map.get(aid, 0.0)
+        balance   = op - op_exp
         total_op_cash_given += op
+        expenses_from_collections += coll_exp
         if op > 0:
             total_op_cash_balance_returned += max(balance, 0)
             if balance < 0: expenses_from_collections += abs(balance)
-        else:
-            expenses_from_collections += exp
-        agent_op_summary.append({"name": uname.get(aid, f"Agent {aid}"), "op_cash": op, "expenses": exp, "balance": balance, "has_op_cash": op > 0})
+        agent_op_summary.append({
+            "name": uname.get(aid, f"Agent {aid}"),
+            "op_cash": op, "expenses": exp,
+            "op_expenses": op_exp, "coll_expenses": coll_exp,
+            "balance": balance, "has_op_cash": op > 0,
+        })
     total_agent_exp = sum(a["expenses"] for a in agent_op_summary)
     total_expenses = total_agent_exp + office_total
     remittance = grand_total - expenses_from_collections if is_agent(user) else grand_total - total_expenses
@@ -3688,7 +3882,8 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
             q = float(qty or 0); la = float(line_amt or 0); spp = float(sp or 0)
             items_by_delivery.setdefault(int(did), []).append((str(iname), q, la if la > 0 else q * spp))
     _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    agent_coll_exp_txt = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
     op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
     office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
     waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)

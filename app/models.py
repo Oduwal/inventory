@@ -463,3 +463,35 @@ class FaultyStock(Base):
         Index("ix_faulty_stock_item",   "item_id"),
         Index("ix_faulty_stock_branch", "branch_id"),
     )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT STOCK ASSIGNMENT
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AgentStockAssignment(Base):
+    """Extra stock given to an agent for urgent delivery.
+    Stock is deducted immediately (OUT transaction).
+    Admin vets return on the vetting page.
+    """
+    __tablename__ = "agent_stock_assignments"
+
+    id:                  Mapped[int]          = mapped_column(Integer, primary_key=True)
+    agent_id:            Mapped[int]          = mapped_column(ForeignKey("users.id"), nullable=False)
+    item_id:             Mapped[int]          = mapped_column(ForeignKey("items.id"), nullable=False)
+    branch_id:           Mapped[int]          = mapped_column(ForeignKey("branches.id"), nullable=False)
+    qty_assigned:        Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
+    note:                Mapped[str]          = mapped_column(String(400), nullable=False, default="")
+    assigned_by:         Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
+    assigned_at:         Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    returned:            Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
+    qty_returned:        Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
+    vetted_by:           Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
+    vetted_at:           Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    transaction_out_id:  Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
+    transaction_in_id:   Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("qty_assigned > 0", name="ck_asgn_qty_positive"),
+        Index("ix_agent_stock_asgn_agent",  "agent_id"),
+        Index("ix_agent_stock_asgn_branch", "branch_id"),
+    )

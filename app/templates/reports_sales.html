@@ -213,25 +213,38 @@ function setPreset(preset) {
   if (data.agent_op_summary && data.agent_op_summary.length) {
     let html = '';
     data.agent_op_summary.forEach(a => {
+      const hasCollExp = (a.coll_expenses || 0) > 0;
+      const opExp      = (a.op_expenses || 0);
       if (a.has_op_cash) {
         const balColor = a.balance >= 0 ? '#22c55e' : '#ef4444';
-        const balLabel = a.balance >= 0 ? 'Balance to return' : 'Overspent (from collection)';
+        const balLabel = a.balance >= 0 ? 'Balance to return' : 'Overspent';
         html += `<div class="expense-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:10px 0;border-bottom:1px solid var(--border)">
           <span style="font-weight:700">${a.name}</span>
           <div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
             <span style="color:var(--muted)">Operating cash given</span><span>${fmt(a.op_cash)}</span>
           </div>
           <div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
-            <span style="color:var(--muted)">Expenses spent</span><span style="color:#ef4444">− ${fmt(a.expenses)}</span>
+            <span style="color:var(--muted)">Expenses from op cash</span><span style="color:#ef4444">− ${fmt(opExp)}</span>
           </div>
+          ${hasCollExp ? `<div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
+            <span style="color:#f59e0b">Collection-funded expense <span style="font-size:10px;opacity:.7">(op cash exhausted)</span></span>
+            <span style="color:#f59e0b;font-weight:700">− ${fmt(a.coll_expenses)}</span>
+          </div>` : ''}
           <div style="display:flex;justify-content:space-between;width:100%;font-size:13px;font-weight:700">
             <span>${balLabel}</span><span style="color:${balColor}">${fmt(Math.abs(a.balance))}</span>
           </div>
         </div>`;
       } else {
-        html += `<div class="expense-row">
-          <span>${a.name} <span style="font-size:11px;color:#f59e0b">(no op cash — deducted from collection)</span></span>
-          <span style="color:#ef4444;font-weight:700">${fmt(a.expenses)}</span>
+        html += `<div class="expense-row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span style="font-weight:700">${a.name}</span>
+          ${opExp > 0 ? `<div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
+            <span style="color:var(--muted)">Expenses from op cash</span>
+            <span style="color:#ef4444">− ${fmt(opExp)}</span>
+          </div>` : ''}
+          ${hasCollExp ? `<div style="display:flex;justify-content:space-between;width:100%;font-size:13px">
+            <span style="color:#f59e0b">Collection-funded expense</span>
+            <span style="color:#f59e0b;font-weight:700">− ${fmt(a.coll_expenses)}</span>
+          </div>` : ''}
         </div>`;
       }
     });
@@ -241,6 +254,12 @@ function setPreset(preset) {
       </div>`;
       html += `<div class="expense-row" style="font-weight:700">
         <span>Total Balance to Return</span><span style="color:#22c55e">${fmt(data.total_op_cash_balance_returned)}</span>
+      </div>`;
+    }
+    if (data.expenses_from_collections > 0) {
+      html += `<div class="expense-row" style="font-weight:700;color:#f59e0b;">
+        <span>Total Collection-funded Expenses</span>
+        <span>− ${fmt(data.expenses_from_collections)}</span>
       </div>`;
     }
     html += `<div class="expense-row" style="font-weight:700">
