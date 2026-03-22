@@ -2262,6 +2262,8 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
+    if is_agent(user):
+        return HTMLResponse("Forbidden — only admins can create orders", status_code=403)
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
     items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
@@ -3471,6 +3473,8 @@ async def cash_new(
         raise HTTPException(status_code=400, detail="Invalid kind")
     if k == "OFFICE_EXPENSE" and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
+    if k == "OPERATING_CASH" and not is_admin(user):
+        return HTMLResponse("Forbidden — only admins can give operating cash", status_code=403)
     amt = sanitize_amount(amount)
     if amt <= 0:
         raise HTTPException(status_code=400, detail="Amount must be > 0")
@@ -3860,8 +3864,13 @@ def merchant_receipt_form(request: Request, db: Session = Depends(get_db)):
     branch_id = get_selected_branch_id(request, user)
     items = get_items_with_stock(db, branch_id=branch_id)
     csrf_token = get_csrf_token(request)
+    categories = db.execute(
+        select(Item.category).where(Item.branch_id == branch_id)
+        .where(Item.category.isnot(None)).distinct().order_by(Item.category.asc())
+    ).scalars().all()
     return templates.TemplateResponse("merchant_receipt_new.html", {
         "request": request, "user": user, "items": items,
+        "categories": categories, "mode": "receipt",
         "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
         "active": "transfers", "csrf_token": csrf_token,
@@ -3924,6 +3933,89 @@ async def merchant_receipt_create(
         ))
     db.commit()
     return redirect("/merchant-receipt/new?success=Stock+received+and+recorded+successfully")
+
+
+@app.get("/merchant-return/new", response_class=HTMLResponse)
+def merchant_return_form(request: Request, db: Session = Depends(get_db)):
+    """Return goods back to a merchant — creates OUT transactions."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    branch_id = get_selected_branch_id(request, user)
+    items = get_items_with_stock(db, branch_id=branch_id)
+    # Get distinct merchant names from item categories for this branch
+    categories = db.execute(
+        select(Item.category).where(Item.branch_id == branch_id)
+        .where(Item.category.isnot(None)).distinct().order_by(Item.category.asc())
+    ).scalars().all()
+    csrf_token = get_csrf_token(request)
+    return templates.TemplateResponse("merchant_receipt_new.html", {
+        "request": request, "user": user, "items": items,
+        "categories": categories,
+        "mode": "return",  # tells template which tab is active
+        "error": request.query_params.get("error"),
+        "success": request.query_params.get("success"),
+        "active": "transfers", "csrf_token": csrf_token,
+    })
+
+
+@app.post("/merchant-return/new")
+async def merchant_return_create(
+    request: Request,
+    merchant_name: str = Form(...),
+    note: str = Form(""),
+    expense_amount: str = Form(""),
+    expense_note: str = Form(""),
+    item_ids: list[int] = Form(...),
+    quantities: list[int] = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Record goods returned to merchant — OUT transaction per item."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    branch_id = get_selected_branch_id(request, user)
+    merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
+    if not merchant_name:
+        return redirect("/merchant-return/new?error=Merchant+name+is+required")
+    if not item_ids or not quantities or len(item_ids) != len(quantities):
+        return redirect("/merchant-return/new?error=Please+add+at+least+one+item")
+    for qty in quantities:
+        if qty <= 0:
+            return redirect("/merchant-return/new?error=Quantities+must+be+greater+than+zero")
+    note_text = sanitize_text(note, 400, "Note") or ""
+    ref = f"MERCHANT RETURN: {merchant_name}"
+    full_note = note_text if note_text else f"Goods returned to merchant: {merchant_name}"
+    for item_id, qty in zip(item_ids, quantities):
+        item = db.get(Item, item_id)
+        if not item or item.branch_id != branch_id:
+            return redirect("/merchant-return/new?error=Invalid+item+selected")
+        db.add(Transaction(
+            branch_id=branch_id, item_id=item_id,
+            type="OUT", quantity=qty,
+            reference=ref, note=full_note,
+        ))
+    # Record expense if provided
+    exp_amt = 0.0
+    try:
+        exp_amt = float(expense_amount) if expense_amount else 0.0
+    except ValueError:
+        exp_amt = 0.0
+    if exp_amt > 0:
+        db.add(CashEntry(
+            branch_id=branch_id, agent_id=user.id,
+            kind="OFFICE_EXPENSE", amount=exp_amt,
+            note=f"waybill - to {merchant_name}: {sanitize_text(expense_note, 200, 'Note') or ''}".strip().rstrip(':'),
+        ))
+    audit_log(db, user.id, "MERCHANT_RETURN",
+              f"merchant={merchant_name} items={len(item_ids)}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return redirect("/merchant-return/new?success=Goods+returned+to+merchant+and+recorded+successfully")
 
 
 @app.get("/transfers", response_class=HTMLResponse)

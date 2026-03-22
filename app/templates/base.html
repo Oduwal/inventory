@@ -291,7 +291,7 @@
         <span class="nav-icon">🚚</span>Deliveries
         {% if role == "ADMIN" %}<span id="adj-badge" style="display:none;position:absolute;top:6px;right:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:16px;text-align:center;"></span>{% endif %}
       </a>
-      {% if role in ("ADMIN", "AGENT") %}
+      {% if role == "ADMIN" %}
       <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
         <span class="nav-icon">➕</span>New Order
       </a>
@@ -308,8 +308,8 @@
       </a>
       {% endif %}
       {% if role == "ADMIN" %}
-      <a href="/merchant-receipt/new" data-active="{% if active == 'merchant_receipt' %}1{% else %}0{% endif %}">
-        <span class="nav-icon">🏪</span>Merchant Receipt
+      <a href="/merchant-receipt/new" data-active="{% if active == 'merchant_receipt' or active == 'merchant_return' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🏪</span>Merchant (In / Out)
       </a>
       {% endif %}
 

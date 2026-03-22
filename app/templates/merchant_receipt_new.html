@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Merchant Receipt{% endblock %}
-{% block page_title %}Merchant Receipt{% endblock %}
-{% block page_subtitle %}Record stock received directly from a merchant or supplier{% endblock %}
+{% block title %}{% if mode == 'return' %}Merchant Return{% else %}Merchant Receipt{% endif %}{% endblock %}
+{% block page_title %}Merchant (In / Out){% endblock %}
+{% block page_subtitle %}Record stock received from or returned to a merchant{% endblock %}
 {% set active = 'transfers' %}
 
 {% block top_right %}
@@ -9,6 +9,20 @@
 {% endblock %}
 
 {% block content %}
+
+<!-- In / Out Tabs -->
+<div style="display:flex;gap:0;margin-bottom:20px;border-radius:12px;overflow:hidden;border:1px solid var(--border);width:fit-content;">
+  <a href="/merchant-receipt/new"
+    style="padding:10px 24px;font-size:13px;font-weight:700;text-decoration:none;
+      {% if mode != 'return' %}background:var(--accent);color:#fff;{% else %}background:transparent;color:var(--muted);{% endif %}">
+    📦 Receive from Merchant
+  </a>
+  <a href="/merchant-return/new"
+    style="padding:10px 24px;font-size:13px;font-weight:700;text-decoration:none;
+      {% if mode == 'return' %}background:#ef4444;color:#fff;{% else %}background:transparent;color:var(--muted);{% endif %}">
+    ↩ Return to Merchant
+  </a>
+</div>
 <style>
   .item-row { display:grid; grid-template-columns:1fr 120px 40px; gap:10px; align-items:center; margin-bottom:8px; }
   .item-row select, .item-row input[type=number] { margin:0; }
@@ -28,16 +42,26 @@
 </div>
 {% endif %}
 
-<form method="post" action="/merchant-receipt/new" id="receiptForm">
+<form method="post" action="{% if mode == 'return' %}/merchant-return/new{% else %}/merchant-receipt/new{% endif %}" id="receiptForm">
   <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
 
   <!-- Merchant details -->
   <div class="card" style="margin-bottom:14px;">
-    <div class="badge b-green" style="margin-bottom:14px;">📦 MERCHANT DETAILS</div>
+    <div class="badge {% if mode == 'return' %}b-red{% else %}b-green{% endif %}" style="margin-bottom:14px;">
+    {% if mode == 'return' %}↩ RETURN TO MERCHANT{% else %}📦 MERCHANT DETAILS{% endif %}
+  </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
       <div>
         <label>Merchant / Supplier Name <span style="color:#f87171;">*</span></label>
-        <input type="text" name="merchant_name" required placeholder="e.g. ABC Distributors Ltd" maxlength="200" />
+        <input type="text" name="merchant_name" required placeholder="e.g. ABC Distributors Ltd"
+        maxlength="200" list="merchant-names-list" />
+      {% if categories %}
+      <datalist id="merchant-names-list">
+        {% for cat in categories %}
+        <option value="{{ cat }}">
+        {% endfor %}
+      </datalist>
+      {% endif %}
       </div>
       <div>
         <label>Notes</label>
@@ -49,7 +73,9 @@
   <!-- Items -->
   <div class="card" style="margin-bottom:14px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-      <div class="badge b-blue">🗂 ITEMS RECEIVED</div>
+      <div class="badge {% if mode == 'return' %}b-red{% else %}b-blue{% endif %}">
+        {% if mode == 'return' %}📤 ITEMS TO RETURN{% else %}🗂 ITEMS RECEIVED{% endif %}
+      </div>
       <button type="button" class="btnPrimary" onclick="addRow()" style="padding:8px 16px;font-size:12px;">+ Add Item</button>
     </div>
 
@@ -80,14 +106,16 @@
         <input type="text" name="expense_note" placeholder="e.g. Delivery fee, transport" maxlength="400" />
       </div>
     </div>
-    <div style="color:var(--muted);font-size:11px;margin-top:8px;">This will be recorded as an office expense against this branch.</div>
+    <div style="color:var(--muted);font-size:11px;margin-top:8px;">
+      This will be recorded as an office expense{% if mode == 'return' %} (waybill — to merchant){% endif %} against this branch.
+    </div>
   </div>
 
   <div style="display:flex;gap:12px;justify-content:flex-end;">
     <a href="/transfers" class="btnGhost">Cancel</a>
     <button type="submit" class="btnPrimary" id="submitBtn" disabled
             style="background:linear-gradient(135deg,#22c55e,#16a34a);box-shadow:0 6px 20px rgba(34,197,94,.3);opacity:.5;">
-      ✅ Record Receipt
+      {% if mode == 'return' %}↩ Record Return{% else %}✅ Record Receipt{% endif %}
     </button>
   </div>
 </form>

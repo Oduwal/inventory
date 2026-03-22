@@ -4,9 +4,7 @@
 {% block page_subtitle %}Your assigned delivery orders{% endblock %}
 {% set active = 'deliveries' %}
 
-{% block top_right %}
-<a class="btnPrimary" href="/deliveries/new">+ New Order</a>
-{% endblock %}
+{% block top_right %}{% endblock %}
 
 {% block content %}
 
@@ -72,7 +70,7 @@
       {% else %}
       <tr>
         <td colspan="7" style="text-align:center;padding:50px;color:var(--muted);">
-          No deliveries yet. <a href="/deliveries/new" style="color:var(--accent);">Create your first order →</a>
+          No deliveries assigned yet. Contact your admin to assign orders.
         </td>
       </tr>
       {% endif %}
