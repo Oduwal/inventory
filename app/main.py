@@ -372,6 +372,17 @@ def ensure_schema() -> None:
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
+        # Stock return vetting table
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS stock_return_vettings (
+            id SERIAL PRIMARY KEY,
+            delivery_id INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            delivery_item_id INTEGER NOT NULL REFERENCES delivery_items(id) ON DELETE CASCADE,
+            vetted_by INTEGER REFERENCES users(id),
+            qty_returned INTEGER NOT NULL DEFAULT 0,
+            transaction_id INTEGER REFERENCES transactions(id),
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_return_vetting ON stock_return_vettings (delivery_item_id)")
         # Notifications table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS notifications (
             id SERIAL PRIMARY KEY,
@@ -2720,6 +2731,65 @@ def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
 #  AGENT VETTING
 # ────────────────────────────────────────────────
 
+@app.post("/vetting/confirm-return", response_class=JSONResponse)
+async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)):
+    """Vet stock return for a specific delivery item — creates IN transaction."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body = await request.json()
+    delivery_item_id = body.get("delivery_item_id")
+    qty_returned     = int(body.get("qty_returned", 0))
+    delivery_id      = body.get("delivery_id")
+    if not delivery_item_id or qty_returned < 0:
+        return JSONResponse({"error": "invalid params"}, status_code=400)
+    # Check not already vetted
+    existing = db.execute(text(
+        "SELECT id FROM stock_return_vettings WHERE delivery_item_id = :diid"
+    ), {"diid": delivery_item_id}).fetchone()
+    if existing:
+        return JSONResponse({"error": "already vetted"}, status_code=400)
+    # Get the delivery item + item info
+    di_row = db.execute(
+        select(DeliveryItem, Item)
+        .join(Item, Item.id == DeliveryItem.item_id)
+        .where(DeliveryItem.id == delivery_item_id)
+    ).first()
+    if not di_row:
+        return JSONResponse({"error": "item not found"}, status_code=404)
+    di, item = di_row
+    tx_id = None
+    if qty_returned > 0:
+        # Create IN transaction to return stock
+        tx = Transaction(
+            branch_id=user.branch_id,
+            item_id=di.item_id,
+            type="IN",
+            quantity=qty_returned,
+            note=f"Stock returned — delivery #{delivery_id} vetted by {user.username}",
+            reference=f"return-vet-{delivery_id}",
+            delivery_id=delivery_id,
+        )
+        db.add(tx)
+        db.flush()
+        tx_id = tx.id
+    # Record vetting
+    db.execute(text(
+        "INSERT INTO stock_return_vettings (delivery_id, delivery_item_id, vetted_by, qty_returned, transaction_id, created_at) "
+        "VALUES (:did, :diid, :uid, :qty, :txid, NOW())"
+    ), {"did": delivery_id, "diid": delivery_item_id, "uid": user.id, "qty": qty_returned, "txid": tx_id})
+    audit_log(db, user.id, "STOCK_RETURN_VETTED",
+              f"delivery_id={delivery_id} item_id={di.item_id} qty={qty_returned}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    notify(db, di.delivery.agent_id if di.delivery else user.id,
+           "📦 Stock Return Confirmed",
+           f"{item.name} x{qty_returned} return confirmed by admin for delivery #{delivery_id}",
+           f"/deliveries/{delivery_id}", "success") if qty_returned > 0 else None
+    db.commit()
+    return JSONResponse({"ok": True, "item_name": item.name, "qty_returned": qty_returned, "tx_id": tx_id})
+
+
 @app.get("/vetting", response_class=HTMLResponse)
 def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
@@ -2791,6 +2861,66 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "total_count":     len(entries),
         })
 
+    # ── Stock return section ──────────────────────────────────────────────
+    # Unsuccessful deliveries needing stock return vetting (all time, not date filtered)
+    unvetted_statuses = ["FAILED", "RETURNED", "ADJUSTMENT_PENDING"]
+    unsuccessful = db.execute(
+        select(Delivery)
+        .where(Delivery.branch_id == branch_id)
+        .where(Delivery.status.in_(unvetted_statuses))
+        .order_by(Delivery.created_at.desc())
+        .limit(100)
+    ).scalars().all()
+
+    # Also flag OUT_FOR_DELIVERY for 24+ hours
+    overdue_cutoff = datetime.utcnow() - timedelta(hours=24)
+    overdue = db.execute(
+        select(Delivery)
+        .where(Delivery.branch_id == branch_id)
+        .where(Delivery.status == "OUT_FOR_DELIVERY")
+        .where(Delivery.created_at <= overdue_cutoff)
+        .order_by(Delivery.created_at.asc())
+    ).scalars().all()
+
+    # Build return rows
+    all_return_deliveries = {d.id: d for d in unsuccessful + overdue}
+    return_rows = []
+    for d in list(unsuccessful) + list(overdue):
+        if d.id in {r["delivery_id"] for r in return_rows}:
+            continue
+        d_items = db.execute(
+            select(DeliveryItem, Item)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id == d.id)
+        ).all()
+        if not d_items:
+            continue
+        # Check which items already vetted
+        vetted_ids = {r[0] for r in db.execute(
+            text("SELECT delivery_item_id FROM stock_return_vettings WHERE delivery_id = :did"),
+            {"did": d.id}
+        ).fetchall()}
+        agent = db.get(User, d.agent_id) if d.agent_id else None
+        items_to_vet = []
+        for di, it in d_items:
+            already = di.id in vetted_ids
+            items_to_vet.append({
+                "di_id": di.id, "item_name": it.name,
+                "qty": di.quantity, "vetted": already,
+            })
+        all_vetted = all(i["vetted"] for i in items_to_vet)
+        if all_vetted and d.status != "OUT_FOR_DELIVERY":
+            continue  # fully resolved, skip
+        return_rows.append({
+            "delivery": d,
+            "delivery_id": d.id,
+            "agent_name": (agent.full_name or agent.username) if agent else "Unknown",
+            "status": d.status,
+            "is_overdue": d.status == "OUT_FOR_DELIVERY",
+            "items": items_to_vet,
+            "all_vetted": all_vetted,
+        })
+
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("vetting.html", {
         "request": request, "user": user, "active": "vetting",
@@ -2799,6 +2929,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         "selected_agent_id": selected_agent_id,
         "today": date.today().isoformat(),
         "csrf_token": csrf_token,
+        "return_rows": return_rows,
     })
 
 
