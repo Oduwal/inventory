@@ -22,7 +22,8 @@
       {% if user.role == "ADMIN" %}
       <div>
         <label>Assign Agent</label>
-        <select name="agent_id" required>
+        <select name="agent_id" id="agent-select" required onchange="loadAssignments(this.value)">
+          <option value="">— Select agent —</option>
           {% for a in agents %}
           <option value="{{ a.id }}">{{ a.username }}{% if a.full_name %} — {{ a.full_name }}{% endif %}</option>
           {% endfor %}
@@ -35,6 +36,24 @@
         <input value="{{ user.username }}" disabled style="opacity:.6;cursor:not-allowed;" />
       </div>
       {% endif %}
+
+      <!-- Assignment link — shows only when agent has pending assignments -->
+      <input type="hidden" name="assignment_id" id="assignment-id-input" value="" />
+      <div id="assignment-selector" style="display:none;grid-column:1/-1;">
+        <div style="background:rgba(79,124,255,.07);border:1px solid rgba(79,124,255,.25);
+          border-radius:12px;padding:14px 16px;">
+          <div style="font-size:11px;font-weight:800;color:#7fa8ff;text-transform:uppercase;
+            letter-spacing:.06em;margin-bottom:10px;">📦 Agent has assigned stock</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+            This agent has extra stock already assigned. Link it to this delivery — no second stock deduction.
+          </div>
+          <select id="assignment-select" onchange="selectAssignment(this.value)"
+            style="margin:0;width:100%;font-size:13px;">
+            <option value="">— Don't link (new delivery, fresh stock) —</option>
+          </select>
+          <div id="assignment-note" style="font-size:11px;color:#7fa8ff;margin-top:8px;display:none;"></div>
+        </div>
+      </div>
 
       <div>
         <label>Customer Name *</label>
@@ -106,6 +125,47 @@
 </div>
 
 <script>
+// Pending assignments from server — keyed by agent_id
+const pendingAssignments = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
+
+function loadAssignments(agentId) {
+  const selector   = document.getElementById('assignment-selector');
+  const select     = document.getElementById('assignment-select');
+  const hiddenInput = document.getElementById('assignment-id-input');
+  const assignments = pendingAssignments[agentId] || [];
+  if (assignments.length === 0) {
+    selector.style.display = 'none';
+    hiddenInput.value = '';
+    return;
+  }
+  // Populate dropdown
+  select.innerHTML = '<option value="">— Don't link (new delivery, fresh stock) —</option>';
+  assignments.forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    opt.textContent = `${a.item_name} × ${a.qty}${a.note ? ' — ' + a.note : ''}`;
+    opt.dataset.itemId = a.item_id;
+    opt.dataset.qty    = a.qty;
+    opt.dataset.note   = a.note;
+    select.appendChild(opt);
+  });
+  selector.style.display = 'block';
+  hiddenInput.value = '';
+  selectAssignment('');
+}
+
+function selectAssignment(val) {
+  const hiddenInput = document.getElementById('assignment-id-input');
+  const noteEl      = document.getElementById('assignment-note');
+  hiddenInput.value = val || '';
+  if (val) {
+    noteEl.style.display = 'block';
+    noteEl.textContent   = '✓ Linked — stock already deducted from branch. No extra OUT transaction will be created.';
+  } else {
+    noteEl.style.display = 'none';
+  }
+}
+
 const lines = document.getElementById("lines");
 document.getElementById("addRowBtn").addEventListener("click", () => {
   const clone = lines.querySelector(".line").cloneNode(true);

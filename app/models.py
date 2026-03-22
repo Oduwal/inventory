@@ -489,6 +489,7 @@ class AgentStockAssignment(Base):
     vetted_at:           Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     transaction_out_id:  Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
     transaction_in_id:   Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
+    delivery_id:         Mapped[int | None]   = mapped_column(ForeignKey("deliveries.id"), nullable=True)
 
     __table_args__ = (
         CheckConstraint("qty_assigned > 0", name="ck_asgn_qty_positive"),

@@ -387,10 +387,12 @@ def ensure_schema() -> None:
             vetted_by    INTEGER REFERENCES users(id),
             vetted_at    TIMESTAMP DEFAULT NULL,
             transaction_out_id INTEGER REFERENCES transactions(id),
-            transaction_in_id  INTEGER REFERENCES transactions(id)
+            transaction_in_id  INTEGER REFERENCES transactions(id),
+            delivery_id        INTEGER REFERENCES deliveries(id)
         )""")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_agent ON agent_stock_assignments (agent_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_branch ON agent_stock_assignments (branch_id)")
+        _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS delivery_id INTEGER REFERENCES deliveries(id)")
         # Faulty stock tracking table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS faulty_stock (
             id           SERIAL PRIMARY KEY,
@@ -2287,11 +2289,27 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
     items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    # Pending assignments per agent — for linking assigned stock to delivery
+    pending_assignments = {}
+    if is_admin(user) and branch_id:
+        rows_a = db.execute(text(
+            "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
+            "it.name AS item_name "
+            "FROM agent_stock_assignments asa "
+            "JOIN items it ON it.id = asa.item_id "
+            "WHERE asa.branch_id = :bid AND asa.returned = FALSE AND asa.delivery_id IS NULL"
+        ), {"bid": branch_id}).fetchall()
+        for r in rows_a:
+            pending_assignments.setdefault(r[1], []).append({
+                "id": r[0], "item_id": r[2], "qty": r[3],
+                "note": r[4] or "", "item_name": r[5],
+            })
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("delivery_new.html", {
         "request": request, "agents": agents, "items": items, "user": user,
         "active": "deliveries_new", "branches": branches, "selected_branch_id": branch_id,
         "today": date.today().isoformat(), "csrf_token": csrf_token,
+        "pending_assignments": pending_assignments,
     })
 
 
@@ -2308,6 +2326,7 @@ async def delivery_create(
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
     line_amount: list[float] = Form(default=[]),
+    assignment_id: int | None = Form(None),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -2359,6 +2378,23 @@ async def delivery_create(
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
+    # Link to assignment if provided — no extra stock OUT needed (already deducted)
+    if assignment_id:
+        asgn = db.execute(text(
+            "SELECT id, agent_id, transaction_out_id FROM agent_stock_assignments "
+            "WHERE id = :aid AND returned = FALSE AND delivery_id IS NULL"
+        ), {"aid": assignment_id}).fetchone()
+        if asgn and asgn[1] == target_agent_id:
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET delivery_id = :did WHERE id = :aid"
+            ), {"did": d.id, "aid": assignment_id})
+            # Tag the assignment's OUT transaction with this delivery_id
+            # so create_out_transactions_for_delivery_if_needed skips creating another OUT
+            if asgn[2]:
+                db.execute(text(
+                    "UPDATE transactions SET delivery_id = :did WHERE id = :txid"
+                ), {"did": d.id, "txid": asgn[2]})
+
     db.commit()
     # Notify branch admins of new order
     notify_branch_admins(db, d.branch_id, "🆕 New Order Created",
@@ -2806,8 +2842,13 @@ async def update_delivery_status(
             audit_log(db, user.id, "DELIVERY_DELIVERED", f"delivery_id={d.id}",
                       ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
 
+            # Auto-close any linked assignment — stock was used for this delivery
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=qty_assigned, "
+                "vetted_at=NOW() WHERE delivery_id=:did AND returned=FALSE"
+            ), {"did": d.id})
+
             # Auto-create COLLECTION cash entry from delivery order total
-            # Only if no collection entry already exists for this delivery
             existing_col = db.scalar(
                 select(func.count(CashEntry.id)).where(
                     CashEntry.delivery_id == d.id,
@@ -2842,6 +2883,18 @@ async def update_delivery_status(
             })
         return redirect(f"/deliveries/{delivery_id}")
     d.status = status_clean
+    # If delivery fails/returns and has a linked assignment — notify admin to vet stock return
+    if status_clean in ("FAILED", "RETURNED"):
+        linked = db.execute(text(
+            "SELECT asa.id, it.name FROM agent_stock_assignments asa "
+            "JOIN items it ON it.id = asa.item_id "
+            "WHERE asa.delivery_id = :did AND asa.returned = FALSE"
+        ), {"did": delivery_id}).fetchall()
+        for asgn_id, item_name in linked:
+            notify_branch_admins(db, d.branch_id,
+                f"⚠ Assigned Stock Needs Return",
+                f"Delivery #{delivery_id} {status_clean.lower()} — {item_name} assigned stock must be vetted.",
+                f"/vetting", "warning")
     db.commit()
     return redirect(f"/deliveries/{delivery_id}")
 
