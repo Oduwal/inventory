@@ -385,10 +385,14 @@ def ensure_schema() -> None:
             resolve_action VARCHAR(20) DEFAULT NULL,
             resolved_at  TIMESTAMP DEFAULT NULL,
             resolved_by  INTEGER REFERENCES users(id),
-            resolve_note VARCHAR(400) DEFAULT ''
+            resolve_note VARCHAR(400) NOT NULL DEFAULT ''
         )""")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_faulty_stock_item ON faulty_stock (item_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_faulty_stock_branch ON faulty_stock (branch_id)")
+        # Fix resolve_note NOT NULL default on existing tables
+        _ddl(conn, "ALTER TABLE faulty_stock ALTER COLUMN resolve_note SET DEFAULT ''")
+        _ddl(conn, "UPDATE faulty_stock SET resolve_note = '' WHERE resolve_note IS NULL")
+        _ddl(conn, "ALTER TABLE faulty_stock ALTER COLUMN resolve_note SET NOT NULL")
         # Stock return vetting table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS stock_return_vettings (
             id SERIAL PRIMARY KEY,
@@ -1610,8 +1614,8 @@ async def flag_faulty_stock(
     reason_clean = (reason or "").strip()[:400]
 
     db.execute(text(
-        "INSERT INTO faulty_stock (item_id, branch_id, qty_faulty, reason, flagged_by, flagged_at, resolved) "
-        "VALUES (:iid, :bid, :qty, :reason, :uid, NOW(), FALSE)"
+        "INSERT INTO faulty_stock (item_id, branch_id, qty_faulty, reason, flagged_by, flagged_at, resolved, resolve_note) "
+        "VALUES (:iid, :bid, :qty, :reason, :uid, NOW(), FALSE, '')"
     ), {"iid": item_id, "bid": user.branch_id, "qty": qty_faulty,
         "reason": reason_clean, "uid": user.id})
 
