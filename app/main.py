@@ -2917,7 +2917,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "agent_name": (agent.full_name or agent.username) if agent else "Unknown",
             "status": d.status,
             "is_overdue": d.status == "OUT_FOR_DELIVERY",
-            "items": items_to_vet,
+            "item_lines": items_to_vet,
             "all_vetted": all_vetted,
         })
 

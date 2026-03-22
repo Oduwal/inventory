@@ -173,7 +173,7 @@
     </div>
 
     <div class="vet-body">
-      {% for item in row.items %}
+      {% for item in row.item_lines %}
       <div id="return-item-{{ item.di_id }}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap;">
         <div style="flex:1;min-width:150px;">
           <span style="font-weight:600;font-size:13px;">{{ item.item_name }}</span>
