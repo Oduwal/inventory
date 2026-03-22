@@ -382,7 +382,8 @@ def ensure_schema() -> None:
             transaction_id INTEGER REFERENCES transactions(id),
             created_at TIMESTAMP DEFAULT NOW()
         )""")
-        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_stock_return_vetting ON stock_return_vettings (delivery_item_id)")
+        _ddl(conn, "DROP INDEX IF EXISTS ux_stock_return_vetting")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_stock_return_vetting ON stock_return_vettings (delivery_item_id)")
         # Notifications table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS notifications (
             id SERIAL PRIMARY KEY,
@@ -2744,12 +2745,12 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
     delivery_id      = body.get("delivery_id")
     if not delivery_item_id or qty_returned < 0:
         return JSONResponse({"error": "invalid params"}, status_code=400)
-    # Check not already vetted
+    # Check not already vetted TODAY (allow re-vetting on different days for partial returns)
     existing = db.execute(text(
-        "SELECT id FROM stock_return_vettings WHERE delivery_item_id = :diid"
+        "SELECT id FROM stock_return_vettings WHERE delivery_item_id = :diid AND DATE(created_at) = CURRENT_DATE"
     ), {"diid": delivery_item_id}).fetchone()
     if existing:
-        return JSONResponse({"error": "already vetted"}, status_code=400)
+        return JSONResponse({"error": "already vetted today — agent can return remaining items tomorrow"}, status_code=400)
     # Get the delivery item + item info
     di_row = db.execute(
         select(DeliveryItem, Item)
@@ -2896,8 +2897,10 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         if not d_items:
             continue
         # Check which items already vetted
+        # Count as vetted only if all qty was returned (qty_returned > 0 means partial or full)
+        # Items with ANY vetting today are shown as vetted — re-appears tomorrow if more to return
         vetted_ids = {r[0] for r in db.execute(
-            text("SELECT delivery_item_id FROM stock_return_vettings WHERE delivery_id = :did"),
+            text("SELECT delivery_item_id FROM stock_return_vettings WHERE delivery_id = :did AND DATE(created_at) = CURRENT_DATE"),
             {"did": d.id}
         ).fetchall()}
         agent = db.get(User, d.agent_id) if d.agent_id else None

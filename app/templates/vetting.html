@@ -159,6 +159,9 @@
             {% else %}
             <span style="color:{% if row.status == 'FAILED' %}#f87171{% else %}#fbbf24{% endif %};">{{ row.status }}</span>
             {% endif %}
+            · <span id="pending-count-{{ row.delivery_id }}" style="color:#fbbf24;">
+              {{ row.item_lines | selectattr('vetted', 'equalto', false) | list | length }} item(s) still pending
+            </span>
           </div>
         </div>
       </div>
@@ -270,8 +273,13 @@ async function confirmAllReturns(deliveryId, btn) {
 function checkAllVetted(deliveryId) {
   const card = document.getElementById('return-card-' + deliveryId);
   if (!card) return;
-  const pendingBtns = card.querySelectorAll('input[id^="qty-"]');
-  if (pendingBtns.length === 0) {
+  const pendingInputs = card.querySelectorAll('input[id^="qty-"]');
+  const counter = document.getElementById('pending-count-' + deliveryId);
+  if (counter) {
+    counter.textContent = pendingInputs.length + ' item(s) still pending';
+    counter.style.color = pendingInputs.length === 0 ? '#4ade80' : '#fbbf24';
+  }
+  if (pendingInputs.length === 0) {
     card.style.borderTopColor = '#22c55e';
     const hdrBtn = card.querySelector('.vet-header button.btnPrimary');
     if (hdrBtn) hdrBtn.outerHTML = '<span class="badge b-green">✓ All Stock Returned</span>';
