@@ -354,7 +354,12 @@ class Notification(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StockReturnVetting(Base):
-    """Tracks physical return confirmation of items from unsuccessful deliveries."""
+    """Tracks physical return confirmation of items from unsuccessful deliveries.
+    
+    resolved=False  → vetted but shortfall exists — stays on vetting page
+    resolved=True   → fully settled (full return OR written off)
+    resolve_action  → 'returned' | 'written_off'
+    """
     __tablename__ = "stock_return_vettings"
 
     id:               Mapped[int]          = mapped_column(Integer, primary_key=True)
@@ -368,6 +373,11 @@ class StockReturnVetting(Base):
     qty_returned:     Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
     transaction_id:   Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
     created_at:       Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    # Shortfall resolution
+    resolved:         Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
+    resolve_action:   Mapped[str | None]   = mapped_column(String(20), nullable=True)   # 'returned' | 'written_off'
+    resolved_at:      Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by:      Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
 
     __table_args__ = (
         Index("ix_stock_return_vetting", "delivery_item_id"),

@@ -6,14 +6,8 @@
 
 {% block top_right %}
 <form method="get" action="/vetting" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-  <div style="display:flex;align-items:center;gap:6px;">
-    <label style="font-size:11px;color:var(--muted);margin:0;white-space:nowrap;">Filter by date</label>
-    <input type="date" name="date_filter" value="{{ filter_date }}" max="{{ today }}"
-      onchange="this.form.submit()" style="width:auto;padding:8px 12px;" />
-    {% if filter_date %}
-    <a href="/vetting" style="font-size:11px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-decoration:none;" title="Clear date filter">✕ Clear</a>
-    {% endif %}
-  </div>
+  <input type="date" name="date_filter" value="{{ filter_date }}" max="{{ today }}"
+    onchange="this.form.submit()" style="width:auto;padding:8px 12px;" />
   <select name="agent_id" onchange="this.form.submit()" style="width:auto;padding:8px 12px;">
     <option value="">All Agents</option>
     {% for a in agents %}
@@ -37,16 +31,8 @@
 {% if not vetting_rows %}
 <div class="card" style="text-align:center;padding:40px;">
   <div style="font-size:32px;margin-bottom:12px;">✅</div>
-  <div style="font-weight:600;margin-bottom:6px;">
-    {% if filter_date %}No collections on {{ filter_date }}{% else %}All cash has been vetted{% endif %}
-  </div>
-  <div style="color:var(--muted);font-size:13px;">
-    {% if filter_date %}
-    No agents recorded collections on this date.
-    {% else %}
-    There are no unconfirmed cash collections. Use the date filter above to review a specific day.
-    {% endif %}
-  </div>
+  <div style="font-weight:600;margin-bottom:6px;">No collections for {{ filter_date }}</div>
+  <div style="color:var(--muted);font-size:13px;">No agents have recorded cash collections on this date.</div>
 </div>
 {% endif %}
 
@@ -63,11 +49,6 @@
         <div style="font-weight:700;font-size:14px;">{{ row.agent.full_name or row.agent.username }}</div>
         <div style="font-size:11px;color:var(--muted);">
           {{ row.confirmed_count }}/{{ row.total_count }} entries confirmed
-          {% if not filter_date %}
-          · <span style="color:#fbbf24;">unvetted across all dates</span>
-          {% else %}
-          · {{ filter_date }}
-          {% endif %}
         </div>
       </div>
     </div>
@@ -119,11 +100,7 @@
         <span style="color:var(--muted);">{{ entry.note or '—' }}</span>
         {% endif %}
         <div style="font-size:11px;color:var(--muted);margin-top:2px;">
-          {% if filter_date %}
-            {{ entry.created_at.strftime('%I:%M %p') if entry.created_at else '' }}
-          {% else %}
-            {{ entry.created_at.strftime('%d %b %Y  %I:%M %p') if entry.created_at else '' }}
-          {% endif %}
+          {{ entry.created_at.strftime('%I:%M %p') if entry.created_at else '' }}
           {% if entry.kind == 'TRANSFER_PAYMENT' %}
           <span style="color:#7fa8ff;">· Transfer</span>
           {% else %}
@@ -158,17 +135,27 @@
   <div class="card" style="text-align:center;padding:32px;">
     <div style="font-size:28px;margin-bottom:10px;">✅</div>
     <div style="font-weight:600;margin-bottom:4px;">All stock accounted for</div>
-    <div style="color:var(--muted);font-size:13px;">No unsuccessful deliveries with unvetted stock.</div>
+    <div style="color:var(--muted);font-size:13px;">No unsuccessful deliveries with unvetted or unresolved stock.</div>
   </div>
   {% endif %}
 
   {% for row in return_rows %}
+  {% set shortfall_count  = row.item_lines | selectattr('status','equalto','shortfall') | list | length %}
+  {% set unvetted_count   = row.item_lines | selectattr('status','equalto','unvetted')  | list | length %}
+  {% set pending_count    = shortfall_count + unvetted_count %}
   <div class="vet-card" id="return-card-{{ row.delivery_id }}"
-    style="border-top:3px solid {% if row.is_overdue %}#f59e0b{% elif row.all_vetted %}#22c55e{% else %}#ef4444{% endif %};">
+    style="border-top:3px solid
+      {% if row.is_overdue %}#f59e0b
+      {% elif row.all_vetted %}#22c55e
+      {% elif shortfall_count > 0 %}#ef4444
+      {% else %}#f59e0b{% endif %};">
+
     <div class="vet-header">
       <div style="display:flex;align-items:center;gap:12px;">
-        <div style="width:40px;height:40px;border-radius:50%;background:rgba(239,68,68,.12);display:flex;align-items:center;justify-content:center;font-size:18px;">
-          {% if row.is_overdue %}⏰{% elif row.status == "FAILED" %}✕{% else %}↩{% endif %}
+        <div style="width:40px;height:40px;border-radius:50%;
+          background:rgba({% if shortfall_count %}239,68,68{% else %}245,158,11{% endif %},.12);
+          display:flex;align-items:center;justify-content:center;font-size:18px;">
+          {% if row.is_overdue %}⏰{% elif shortfall_count %}⚠{% elif row.status == "FAILED" %}✕{% else %}↩{% endif %}
         </div>
         <div>
           <div style="font-weight:700;font-size:14px;">
@@ -178,36 +165,61 @@
           <div style="font-size:11px;color:var(--muted);margin-top:2px;">
             Agent: {{ row.agent_name }} ·
             {% if row.is_overdue %}
-            <span style="color:#f59e0b;">⏰ OUT FOR DELIVERY 24+ HRS — possible unreturned stock</span>
+            <span style="color:#f59e0b;">⏰ OUT FOR DELIVERY 24+ HRS</span>
             {% else %}
             <span style="color:{% if row.status == 'FAILED' %}#f87171{% else %}#fbbf24{% endif %};">{{ row.status }}</span>
             {% endif %}
-            · <span id="pending-count-{{ row.delivery_id }}" style="color:#fbbf24;">
-              {{ row.item_lines | selectattr('vetted', 'equalto', false) | list | length }} item(s) still pending
+            · <span id="pending-count-{{ row.delivery_id }}"
+                style="color:{% if shortfall_count %}#f87171{% elif pending_count %}#fbbf24{% else %}#4ade80{% endif %};">
+              {% if shortfall_count %}⚠ {{ shortfall_count }} missing item(s){% endif %}
+              {% if unvetted_count %}{{ unvetted_count }} unvetted{% endif %}
+              {% if not pending_count %}✓ All resolved{% endif %}
             </span>
           </div>
         </div>
       </div>
-      {% if not row.all_vetted %}
-      <button class="btnPrimary" onclick="confirmAllReturns({{ row.delivery_id }}, this)"
-        style="background:linear-gradient(135deg,#4f7cff,#3b5ee8);font-size:12px;padding:8px 14px;">
-        ✓ Confirm All Items
-      </button>
-      {% else %}
-      <span class="badge b-green">✓ All Stock Returned</span>
-      {% endif %}
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        {% if unvetted_count > 0 %}
+        <button class="btnPrimary" onclick="confirmAllReturns({{ row.delivery_id }}, this)"
+          style="background:linear-gradient(135deg,#4f7cff,#3b5ee8);font-size:12px;padding:8px 14px;">
+          ✓ Confirm All
+        </button>
+        {% endif %}
+        {% if row.all_vetted %}
+        <span class="badge b-green">✓ All Resolved</span>
+        {% endif %}
+      </div>
     </div>
 
     <div class="vet-body">
       {% for item in row.item_lines %}
-      <div id="return-item-{{ item.di_id }}" style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap;">
-        <div style="flex:1;min-width:150px;">
+      <div id="return-item-{{ item.di_id }}"
+        style="display:flex;align-items:center;gap:10px;padding:10px 0;
+          border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap;
+          {% if item.status == 'shortfall' %}background:rgba(239,68,68,.04);border-radius:8px;padding-left:8px;{% endif %}">
+
+        <div style="flex:1;min-width:160px;">
           <span style="font-weight:600;font-size:13px;">{{ item.item_name }}</span>
-          <span style="color:var(--muted);font-size:12px;margin-left:8px;">Originally: {{ item.qty }}</span>
+          <span style="color:var(--muted);font-size:12px;margin-left:8px;">Original: {{ item.qty }}</span>
+          {% if item.status == 'shortfall' %}
+          <div style="margin-top:3px;">
+            <span style="font-size:11px;background:rgba(239,68,68,.15);color:#f87171;
+              border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:2px 8px;">
+              ⚠ {{ item.qty_back }} returned · {{ item.shortfall }} MISSING
+            </span>
+          </div>
+          {% elif item.status == 'resolved' %}
+          <div style="margin-top:3px;">
+            <span style="font-size:11px;color:#4ade80;">
+              ✓ {% if item.resolve_action == 'written_off' %}Written off{% else %}Fully returned{% endif %}
+            </span>
+          </div>
+          {% endif %}
         </div>
-        {% if item.vetted %}
-        <span class="badge b-green" style="font-size:11px;">✓ Returned</span>
-        {% else %}
+
+        {# ── UNVETTED — show confirm form ── #}
+        {% if item.status == 'unvetted' %}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:6px;">
             <label style="font-size:12px;color:var(--muted);margin:0;">Qty returned:</label>
@@ -215,15 +227,37 @@
               style="width:70px;margin:0;padding:6px 8px;font-size:13px;" />
           </div>
           <button class="btnPrimary" onclick="confirmSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this)"
-            style="font-size:12px;padding:6px 12px;">
-            ✓ Confirm
-          </button>
+            style="font-size:12px;padding:6px 12px;">✓ Confirm</button>
           <button onclick="confirmSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this, true)"
-            style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+            style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);
+              border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
             ✕ Not Returned
           </button>
         </div>
+
+        {# ── SHORTFALL — show resolve options ── #}
+        {% elif item.status == 'shortfall' %}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:11px;color:var(--muted);">Resolve missing {{ item.shortfall }}:</span>
+          <button onclick="resolveShortfall({{ row.delivery_id }}, {{ item.di_id }}, 'returned', this)"
+            style="font-size:12px;padding:6px 12px;background:rgba(34,197,94,.12);
+              border:1px solid rgba(34,197,94,.3);color:#4ade80;border-radius:8px;cursor:pointer;">
+            ✓ Agent Returned It
+          </button>
+          <button onclick="resolveShortfall({{ row.delivery_id }}, {{ item.di_id }}, 'written_off', this)"
+            style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);
+              border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+            ✕ Write Off (Lost)
+          </button>
+        </div>
+
+        {# ── RESOLVED — nothing to do ── #}
+        {% elif item.status == 'resolved' %}
+        <span class="badge b-green" style="font-size:11px;">
+          {% if item.resolve_action == 'written_off' %}✕ Written Off{% else %}✓ Returned{% endif %}
+        </span>
         {% endif %}
+
       </div>
       {% endfor %}
     </div>
@@ -237,6 +271,7 @@ const CSRF = {{ csrf_token | tojson }};
 async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
   const qtyInput = document.getElementById('qty-' + diId);
   const qty = notReturned ? 0 : parseInt(qtyInput ? qtyInput.value : 0);
+  const origQty = qtyInput ? parseInt(qtyInput.max) : qty;
   btn.disabled = true;
   btn.textContent = '⏳';
   try {
@@ -247,14 +282,76 @@ async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
     });
     const data = await res.json();
     if (data.ok) {
-      const row = document.getElementById('return-item-' + diId);
-      if (row) {
-        row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
-          ${qty > 0
-            ? '<span class="badge b-green" style="font-size:11px;">✓ Returned x' + qty + '</span>'
-            : '<span style="font-size:11px;color:#f87171;">✕ Not returned — recorded</span>'}`;
+      const rowEl = document.getElementById('return-item-' + diId);
+      if (rowEl) {
+        if (data.is_full) {
+          // Full return — show green resolved badge
+          rowEl.innerHTML = `
+            <div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}
+              <span style="color:var(--muted);font-size:12px;margin-left:8px;">Original: ${data.original_qty}</span>
+            </div>
+            <span class="badge b-green" style="font-size:11px;">✓ Fully Returned</span>`;
+        } else if (qty === 0) {
+          // Zero returned — show shortfall with resolve buttons
+          rowEl.style.background = 'rgba(239,68,68,.04)';
+          rowEl.style.borderRadius = '8px';
+          rowEl.style.paddingLeft = '8px';
+          rowEl.innerHTML = `
+            <div style="flex:1;min-width:160px;">
+              <span style="font-weight:600;font-size:13px;">${data.item_name}</span>
+              <span style="color:var(--muted);font-size:12px;margin-left:8px;">Original: ${data.original_qty}</span>
+              <div style="margin-top:3px;">
+                <span style="font-size:11px;background:rgba(239,68,68,.15);color:#f87171;
+                  border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:2px 8px;">
+                  ⚠ 0 returned · ${data.original_qty} MISSING
+                </span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:11px;color:var(--muted);">Resolve missing ${data.original_qty}:</span>
+              <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'returned', this)"
+                style="font-size:12px;padding:6px 12px;background:rgba(34,197,94,.12);
+                  border:1px solid rgba(34,197,94,.3);color:#4ade80;border-radius:8px;cursor:pointer;">
+                ✓ Agent Returned It
+              </button>
+              <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'written_off', this)"
+                style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);
+                  border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+                ✕ Write Off (Lost)
+              </button>
+            </div>`;
+        } else {
+          // Partial return — show shortfall with resolve buttons
+          rowEl.style.background = 'rgba(239,68,68,.04)';
+          rowEl.style.borderRadius = '8px';
+          rowEl.style.paddingLeft = '8px';
+          rowEl.innerHTML = `
+            <div style="flex:1;min-width:160px;">
+              <span style="font-weight:600;font-size:13px;">${data.item_name}</span>
+              <span style="color:var(--muted);font-size:12px;margin-left:8px;">Original: ${data.original_qty}</span>
+              <div style="margin-top:3px;">
+                <span style="font-size:11px;background:rgba(239,68,68,.15);color:#f87171;
+                  border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:2px 8px;">
+                  ⚠ ${qty} returned · ${data.shortfall} MISSING
+                </span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:11px;color:var(--muted);">Resolve missing ${data.shortfall}:</span>
+              <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'returned', this)"
+                style="font-size:12px;padding:6px 12px;background:rgba(34,197,94,.12);
+                  border:1px solid rgba(34,197,94,.3);color:#4ade80;border-radius:8px;cursor:pointer;">
+                ✓ Agent Returned It
+              </button>
+              <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'written_off', this)"
+                style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);
+                  border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+                ✕ Write Off (Lost)
+              </button>
+            </div>`;
+        }
       }
-      checkAllVetted(deliveryId);
+      refreshPendingCount(deliveryId);
     } else {
       alert(data.error || 'Error confirming return');
       btn.disabled = false; btn.textContent = '✓ Confirm';
@@ -268,44 +365,78 @@ async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
 async function confirmAllReturns(deliveryId, btn) {
   if (!confirm('Confirm all items returned for delivery #' + deliveryId + '?')) return;
   btn.disabled = true; btn.textContent = '⏳ Confirming...';
-  // Find all unvetted items in this delivery
   const card = document.getElementById('return-card-' + deliveryId);
   const inputs = card.querySelectorAll('input[id^="qty-"]');
-  let allOk = true;
   for (const input of inputs) {
     const diId = parseInt(input.id.replace('qty-', ''));
-    const qty = parseInt(input.value) || 0;
+    const qty  = parseInt(input.value) || 0;
     try {
-      const res = await fetch('/vetting/confirm-return', {
+      const res  = await fetch('/vetting/confirm-return', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({delivery_id: deliveryId, delivery_item_id: diId, qty_returned: qty})
       });
       const data = await res.json();
       if (data.ok) {
-        const row = document.getElementById('return-item-' + diId);
-        if (row) row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
-          <span class="badge b-green" style="font-size:11px;">✓ Returned x${qty}</span>`;
+        await confirmSingleReturn(deliveryId, diId, {disabled:false, textContent:''}, qty === 0);
       }
-    } catch(e) { allOk = false; }
+    } catch(e) {}
   }
-  checkAllVetted(deliveryId);
-  btn.disabled = false; btn.textContent = allOk ? '✓ All Confirmed' : '⚠ Some failed';
+  refreshPendingCount(deliveryId);
+  btn.disabled = false; btn.textContent = '✓ Done';
 }
 
-function checkAllVetted(deliveryId) {
+async function resolveShortfall(deliveryId, diId, action, btn) {
+  const label = action === 'returned' ? 'agent returned the missing stock' : 'write off as lost';
+  if (!confirm('Confirm: ' + label + '?')) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const res  = await fetch('/vetting/resolve-shortfall', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({delivery_id: deliveryId, delivery_item_id: diId, action})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const rowEl = document.getElementById('return-item-' + diId);
+      if (rowEl) {
+        rowEl.style.background = '';
+        rowEl.innerHTML = `
+          <div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
+          <span class="badge b-green" style="font-size:11px;">
+            ${action === 'written_off' ? '✕ Written Off' : '✓ Returned & Resolved'}
+          </span>`;
+      }
+      refreshPendingCount(deliveryId);
+    } else {
+      alert(data.error || 'Error resolving shortfall');
+      btn.disabled = false; btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+
+function refreshPendingCount(deliveryId) {
   const card = document.getElementById('return-card-' + deliveryId);
   if (!card) return;
-  const pendingInputs = card.querySelectorAll('input[id^="qty-"]');
-  const counter = document.getElementById('pending-count-' + deliveryId);
+  // Count items still needing action — those with qty inputs (unvetted) or shortfall resolve buttons
+  const unvetted   = card.querySelectorAll('input[id^="qty-"]').length;
+  const shortfalls = card.querySelectorAll('[onclick*="resolveShortfall"]').length / 2; // 2 buttons per shortfall
+  const pending    = unvetted + Math.floor(shortfalls);
+  const counter    = document.getElementById('pending-count-' + deliveryId);
   if (counter) {
-    counter.textContent = pendingInputs.length + ' item(s) still pending';
-    counter.style.color = pendingInputs.length === 0 ? '#4ade80' : '#fbbf24';
-  }
-  if (pendingInputs.length === 0) {
-    card.style.borderTopColor = '#22c55e';
-    const hdrBtn = card.querySelector('.vet-header button.btnPrimary');
-    if (hdrBtn) hdrBtn.outerHTML = '<span class="badge b-green">✓ All Stock Returned</span>';
+    if (pending === 0) {
+      counter.textContent = '✓ All resolved';
+      counter.style.color = '#4ade80';
+      card.style.borderTopColor = '#22c55e';
+      const confirmAllBtn = card.querySelector('.vet-header button.btnPrimary');
+      if (confirmAllBtn) confirmAllBtn.outerHTML = '<span class="badge b-green">✓ All Resolved</span>';
+    } else {
+      counter.textContent = pending + ' item(s) pending';
+      counter.style.color = '#fbbf24';
+    }
   }
 }
 
