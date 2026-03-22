@@ -92,4 +92,186 @@
     </div>
 </div>
 
+
+{% if user and user.role == "ADMIN" %}
+<!-- ── FAULTY STOCK SECTION ─────────────────────────────── -->
+<div class="card" style="margin-top:14px;border-top:3px solid #f59e0b;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <span class="badge b-yellow">⚠ FAULTY STOCK</span>
+      {% if faulty_qty_active > 0 %}
+      <span style="font-size:12px;color:#fbbf24;margin-left:10px;">
+        {{ faulty_qty_active }} unit(s) currently flagged as faulty
+      </span>
+      {% else %}
+      <span style="font-size:12px;color:var(--muted);margin-left:10px;">No active faulty flags</span>
+      {% endif %}
+    </div>
+    <button onclick="document.getElementById('flag-faulty-form').style.display=document.getElementById('flag-faulty-form').style.display==='none'?'block':'none'"
+      class="btnGhost" style="font-size:12px;padding:7px 14px;">+ Flag Faulty Units</button>
+  </div>
+
+  <!-- Flag new faulty units form -->
+  <div id="flag-faulty-form" style="display:none;background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.2);
+    border-radius:12px;padding:16px;margin-bottom:16px;">
+    <div style="font-size:12px;font-weight:700;color:#fbbf24;text-transform:uppercase;
+      letter-spacing:.06em;margin-bottom:12px;">Flag Units as Faulty</div>
+    <form onsubmit="submitFaultyFlag(event, {{ item.id }})">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" id="faulty-csrf" />
+      <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:10px;align-items:end;flex-wrap:wrap;">
+        <div>
+          <label style="font-size:12px;">Qty Faulty *</label>
+          <input type="number" name="qty_faulty" id="faulty-qty" min="1" max="{{ stock }}"
+            placeholder="e.g. 3" required style="margin:0;" />
+        </div>
+        <div>
+          <label style="font-size:12px;">Reason / Note</label>
+          <input type="text" name="reason" id="faulty-reason"
+            placeholder="e.g. damaged packaging, expired batch" style="margin:0;" maxlength="400" />
+        </div>
+        <div>
+          <label style="font-size:12px;">&nbsp;</label>
+          <button type="submit" class="btnPrimary"
+            style="background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 4px 16px rgba(245,158,11,.3);">
+            ⚠ Flag as Faulty
+          </button>
+        </div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:8px;">
+        Stock count stays unchanged — units are labelled only. You can remove or return them to merchant later.
+      </div>
+    </form>
+  </div>
+
+  <!-- Faulty records table -->
+  {% if faulty_records %}
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Date Flagged</th>
+          <th style="text-align:right;">Qty</th>
+          <th>Reason</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="faulty-records-body">
+        {% for r in faulty_records %}
+        <tr id="faulty-row-{{ r[0] }}">
+          <td style="color:var(--muted);font-size:12px;white-space:nowrap;">
+            {{ r[3].strftime('%d %b %Y') if r[3] else '—' }}
+          </td>
+          <td style="text-align:right;font-weight:700;color:#fbbf24;">{{ r[1] }}</td>
+          <td style="color:var(--muted);font-size:12px;">{{ r[2] or '—' }}</td>
+          <td>
+            {% if r[4] %}
+              {% if r[5] == 'return_merchant' %}
+              <span class="badge b-blue" style="font-size:11px;">↩ Returned to Merchant</span>
+              {% else %}
+              <span class="badge b-red" style="font-size:11px;">✕ Removed from Stock</span>
+              {% endif %}
+            {% else %}
+            <span style="font-size:11px;background:rgba(245,158,11,.15);color:#fbbf24;
+              border:1px solid rgba(245,158,11,.3);border-radius:6px;padding:2px 8px;">⚠ Active</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if not r[4] %}
+            <div style="display:flex;gap:6px;flex-wrap:wrap;" id="resolve-btns-{{ r[0] }}">
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input type="text" id="resolve-note-{{ r[0] }}" placeholder="Note (optional)"
+                  style="width:140px;margin:0;padding:5px 8px;font-size:11px;" maxlength="200" />
+              </div>
+              <button onclick="resolveFaulty({{ r[0] }}, 'return_merchant', this)"
+                style="font-size:11px;padding:5px 10px;background:rgba(79,124,255,.12);
+                  border:1px solid rgba(79,124,255,.3);color:#7fa8ff;border-radius:6px;cursor:pointer;white-space:nowrap;">
+                ↩ Return to Merchant
+              </button>
+              <button onclick="resolveFaulty({{ r[0] }}, 'remove', this)"
+                style="font-size:11px;padding:5px 10px;background:rgba(239,68,68,.12);
+                  border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:6px;cursor:pointer;white-space:nowrap;">
+                ✕ Remove from Stock
+              </button>
+            </div>
+            {% else %}
+            <span style="font-size:11px;color:var(--muted);">
+              {{ r[6].strftime('%d %b %Y') if r[6] else '' }}
+              {% if r[7] %}· {{ r[7] }}{% endif %}
+            </span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align:center;padding:20px;color:var(--muted);font-size:13px;">
+    No faulty stock records for this item.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+async function submitFaultyFlag(e, itemId) {
+  e.preventDefault();
+  const qty    = document.getElementById('faulty-qty').value;
+  const reason = document.getElementById('faulty-reason').value;
+  const csrf   = document.getElementById('faulty-csrf').value;
+  const fd     = new FormData();
+  fd.append('qty_faulty', qty);
+  fd.append('reason', reason);
+  fd.append('csrf_token', csrf);
+  try {
+    const res  = await fetch('/items/' + itemId + '/flag-faulty', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.ok) {
+      // Reload page to show new record
+      window.location.reload();
+    } else {
+      alert(data.error || 'Error flagging faulty stock');
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function resolveFaulty(faultyId, action, btn) {
+  const note  = (document.getElementById('resolve-note-' + faultyId) || {value: ''}).value;
+  const label = action === 'return_merchant' ? 'return to merchant' : 'remove from stock';
+  if (!confirm('Confirm: ' + label + ' these faulty units? This will create an OUT transaction.')) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const res  = await fetch('/faulty-stock/' + faultyId + '/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, resolve_note: note })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const row = document.getElementById('faulty-row-' + faultyId);
+      if (row) {
+        const statusCell = row.querySelector('td:nth-child(4)');
+        const actionCell = row.querySelector('td:nth-child(5)');
+        if (statusCell) statusCell.innerHTML = action === 'return_merchant'
+          ? '<span class="badge b-blue" style="font-size:11px;">↩ Returned to Merchant</span>'
+          : '<span class="badge b-red" style="font-size:11px;">✕ Removed from Stock</span>';
+        if (actionCell) actionCell.innerHTML =
+          '<span style="font-size:11px;color:var(--muted);">Resolved — stock updated</span>';
+      }
+      // Update faulty qty banner
+      const banner = document.querySelector('[style*="fbbf24"]');
+    } else {
+      alert(data.error || 'Error resolving faulty stock');
+      btn.disabled = false;
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+  }
+}
+</script>
+{% endif %}
+
 {% endblock %}

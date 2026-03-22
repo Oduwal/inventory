@@ -99,7 +99,15 @@
         {% if rows and rows|length > 0 %}
         {% for r in rows %}
         <tr>
-          <td style="font-weight:700;">{{ r.name }}</td>
+          <td style="font-weight:700;">
+            {{ r.name }}
+            {% set fqty = faulty_counts.get(r.id, 0) if faulty_counts is defined else 0 %}
+            {% if fqty > 0 %}
+            <span style="font-size:10px;background:rgba(245,158,11,.15);color:#fbbf24;
+              border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 6px;margin-left:4px;
+              white-space:nowrap;">⚠ {{ fqty }} faulty</span>
+            {% endif %}
+          </td>
           <td>
             {% if r.category %}
             <span class="badge b-blue" style="font-size:11px;">{{ r.category }}</span>
@@ -157,6 +165,12 @@
         <tr>
           <td>
             <a href="/items/{{ item.id }}" style="font-weight:700;color:var(--text);">{{ item.name }}</a>
+            {% set fqty = faulty_counts.get(item.id, 0) if faulty_counts is defined else 0 %}
+            {% if fqty > 0 %}
+            <span style="font-size:10px;background:rgba(245,158,11,.15);color:#fbbf24;
+              border:1px solid rgba(245,158,11,.3);border-radius:4px;padding:1px 6px;margin-left:6px;
+              white-space:nowrap;">⚠ {{ fqty }} faulty</span>
+            {% endif %}
           </td>
           {% if user and user.role == "SUPERVISOR" %}
           <td style="color:var(--muted);font-size:12px;">{{ item.branch.name if item.branch else "—" }}</td>

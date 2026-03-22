@@ -372,6 +372,23 @@ def ensure_schema() -> None:
         # Cash confirmation tracking
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_by_admin BOOLEAN DEFAULT FALSE")
         _ddl(conn, "ALTER TABLE cash_entries ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP NULL")
+        # Faulty stock tracking table
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS faulty_stock (
+            id           SERIAL PRIMARY KEY,
+            item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+            branch_id    INTEGER NOT NULL REFERENCES branches(id),
+            qty_faulty   INTEGER NOT NULL DEFAULT 0,
+            reason       VARCHAR(400) DEFAULT '',
+            flagged_by   INTEGER REFERENCES users(id),
+            flagged_at   TIMESTAMP DEFAULT NOW(),
+            resolved     BOOLEAN DEFAULT FALSE,
+            resolve_action VARCHAR(20) DEFAULT NULL,
+            resolved_at  TIMESTAMP DEFAULT NULL,
+            resolved_by  INTEGER REFERENCES users(id),
+            resolve_note VARCHAR(400) DEFAULT ''
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_faulty_stock_item ON faulty_stock (item_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_faulty_stock_branch ON faulty_stock (branch_id)")
         # Stock return vetting table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS stock_return_vettings (
             id SERIAL PRIMARY KEY,
@@ -1314,8 +1331,14 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
                     if q_lower in (item.name or "").lower() or q_lower in (item.category or "").lower()]
         view = "branch"
 
+    # Faulty counts per item for badge display
+    faulty_counts_raw = db.execute(text(
+        "SELECT item_id, SUM(qty_faulty) FROM faulty_stock "
+        "WHERE branch_id = :bid AND resolved = FALSE GROUP BY item_id"
+    ), {"bid": branch_id}).fetchall() if branch_id else []
+    faulty_counts = {r[0]: int(r[1]) for r in faulty_counts_raw}
     return templates.TemplateResponse("items_list.html", {
-        "request": request, "rows": rows, "q": q, "user": user, "active": "items",
+        "request": request, "rows": rows, "q": q, "user": user, "active": "items", "faulty_counts": faulty_counts,
         "view": view, "branches": branches, "branch_filter": branch_filter,
     })
 
@@ -1473,8 +1496,17 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
         .where(Transaction.branch_id == item.branch_id)
         .order_by(desc(Transaction.created_at)).limit(200)
     ).all()
+    # Faulty stock records for this item
+    faulty_records = db.execute(text(
+        "SELECT id, qty_faulty, reason, flagged_at, resolved, resolve_action, resolved_at, resolve_note "
+        "FROM faulty_stock WHERE item_id = :iid AND branch_id = :bid ORDER BY flagged_at DESC"
+    ), {"iid": item_id, "bid": item.branch_id}).fetchall()
+    faulty_qty_active = sum(r[1] for r in faulty_records if not r[4])  # unresolved only
+    csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("item_detail.html", {
-        "request": request, "item": item, "stock": stock, "txs": txs, "user": user, "active": "items",
+        "request": request, "item": item, "stock": stock, "txs": txs, "user": user,
+        "active": "items", "faulty_records": faulty_records,
+        "faulty_qty_active": faulty_qty_active, "csrf_token": csrf_token,
     })
 
 
@@ -1553,6 +1585,115 @@ async def item_edit_save(
 
 
 # ────────────────────────────────────────────────
+#  FAULTY STOCK
+# ────────────────────────────────────────────────
+
+@app.post("/items/{item_id}/flag-faulty", response_class=JSONResponse)
+async def flag_faulty_stock(
+    item_id: int, request: Request, db: Session = Depends(get_db),
+    qty_faulty: int = Form(...), reason: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    """Admin flags a quantity of an item as faulty/bad. Stock count unchanged."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    verify_csrf_token(request, csrf_token)
+
+    item = db.get(Item, item_id)
+    if not item or item.branch_id != user.branch_id:
+        return JSONResponse({"error": "item not found"}, status_code=404)
+    if qty_faulty <= 0:
+        return JSONResponse({"error": "quantity must be greater than zero"}, status_code=400)
+
+    reason_clean = (reason or "").strip()[:400]
+
+    db.execute(text(
+        "INSERT INTO faulty_stock (item_id, branch_id, qty_faulty, reason, flagged_by, flagged_at, resolved) "
+        "VALUES (:iid, :bid, :qty, :reason, :uid, NOW(), FALSE)"
+    ), {"iid": item_id, "bid": user.branch_id, "qty": qty_faulty,
+        "reason": reason_clean, "uid": user.id})
+
+    audit_log(db, user.id, "FAULTY_STOCK_FLAGGED",
+              f"item={item.name} qty={qty_faulty} reason={reason_clean}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return JSONResponse({"ok": True, "item_name": item.name, "qty_faulty": qty_faulty})
+
+
+@app.post("/faulty-stock/{faulty_id}/resolve", response_class=JSONResponse)
+async def resolve_faulty_stock(
+    faulty_id: int, request: Request, db: Session = Depends(get_db),
+):
+    """Admin resolves a faulty stock record.
+    action='remove'           → OUT transaction, stock reduced
+    action='return_merchant'  → OUT transaction labelled as merchant return
+    """
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    body         = await request.json()
+    action       = body.get("action", "")    # "remove" | "return_merchant"
+    resolve_note = (body.get("resolve_note", "") or "").strip()[:400]
+
+    if action not in ("remove", "return_merchant"):
+        return JSONResponse({"error": "action must be remove or return_merchant"}, status_code=400)
+
+    # Get the faulty record
+    row = db.execute(text(
+        "SELECT id, item_id, branch_id, qty_faulty, reason FROM faulty_stock "
+        "WHERE id = :fid AND resolved = FALSE"
+    ), {"fid": faulty_id}).fetchone()
+    if not row:
+        return JSONResponse({"error": "record not found or already resolved"}, status_code=404)
+
+    fs_id, item_id, branch_id, qty_faulty, reason = row
+
+    if branch_id != user.branch_id:
+        return JSONResponse({"error": "forbidden — different branch"}, status_code=403)
+
+    item = db.get(Item, item_id)
+    if not item:
+        return JSONResponse({"error": "item not found"}, status_code=404)
+
+    # Create OUT transaction to remove faulty stock
+    note = (
+        f"Faulty stock returned to merchant — {resolve_note}" if action == "return_merchant"
+        else f"Faulty stock removed — {resolve_note or reason}"
+    ).strip(" —")
+    tx = Transaction(
+        branch_id=user.branch_id,
+        item_id=item_id,
+        type="OUT",
+        quantity=qty_faulty,
+        note=note,
+        reference=f"faulty-{'merchant' if action == 'return_merchant' else 'remove'}-{faulty_id}",
+    )
+    db.add(tx)
+    db.flush()
+
+    # Mark faulty record resolved
+    db.execute(text(
+        "UPDATE faulty_stock SET resolved=TRUE, resolve_action=:act, "
+        "resolved_at=NOW(), resolved_by=:uid, resolve_note=:note WHERE id=:fid"
+    ), {"act": action, "uid": user.id, "note": resolve_note, "fid": faulty_id})
+
+    audit_log(db, user.id, "FAULTY_STOCK_RESOLVED",
+              f"item={item.name} qty={qty_faulty} action={action}",
+              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    db.commit()
+    return JSONResponse({
+        "ok": True,
+        "item_name": item.name,
+        "qty_faulty": qty_faulty,
+        "action": action,
+        "tx_note": note,
+    })
+
+
 #  TRANSACTIONS
 # ────────────────────────────────────────────────
 

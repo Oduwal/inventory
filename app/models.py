@@ -431,3 +431,35 @@ class AdjustmentRequestItem(Base):
     original_amount:  Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     new_amount:       Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     remove_item:      Mapped[bool]  = mapped_column(Boolean, default=False)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAULTY STOCK
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FaultyStock(Base):
+    """Tracks faulty/bad units flagged by admin. Stock count is NOT reduced until resolved.
+    resolve_action: 'remove' | 'return_merchant'
+    """
+    __tablename__ = "faulty_stock"
+
+    id:             Mapped[int]          = mapped_column(Integer, primary_key=True)
+    item_id:        Mapped[int]          = mapped_column(ForeignKey("items.id", ondelete="CASCADE"), nullable=False)
+    branch_id:      Mapped[int]          = mapped_column(ForeignKey("branches.id"), nullable=False)
+    qty_faulty:     Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
+    reason:         Mapped[str]          = mapped_column(String(400), default="")
+    flagged_by:     Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
+    flagged_at:     Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    resolved:       Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
+    resolve_action: Mapped[str | None]   = mapped_column(String(20), nullable=True)   # 'remove' | 'return_merchant'
+    resolved_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by:    Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolve_note:   Mapped[str]          = mapped_column(String(400), default="")
+
+    item:   Mapped["Item"]        = relationship()
+    branch: Mapped["Branch"]      = relationship()
+
+    __table_args__ = (
+        CheckConstraint("qty_faulty > 0", name="ck_faulty_qty_positive"),
+        Index("ix_faulty_stock_item",   "item_id"),
+        Index("ix_faulty_stock_branch", "branch_id"),
+    )
