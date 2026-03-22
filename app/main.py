@@ -2826,7 +2826,11 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
 
 @app.post("/vetting/resolve-shortfall", response_class=JSONResponse)
 async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_db)):
-    """Admin resolves a missing stock shortfall — either agent returned it or it is written off."""
+    """Admin resolves a missing stock shortfall.
+    action='returned'   → admin provides qty_resolved; creates IN tx; if still short, keeps record open
+    action='written_off'→ marks missing qty as lost; no IN tx; marks fully resolved
+    Can be called multiple times for partial resolutions.
+    """
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
     user = user_or
@@ -2835,6 +2839,8 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
     delivery_item_id = body.get("delivery_item_id")
     action           = body.get("action", "")   # "returned" | "written_off"
     delivery_id      = body.get("delivery_id")
+    qty_resolved     = int(body.get("qty_resolved", 0))
+
     if not delivery_item_id or action not in ("returned", "written_off"):
         return JSONResponse({"error": "invalid params — action must be returned or written_off"}, status_code=400)
 
@@ -2848,7 +2854,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         return JSONResponse({"error": "no unresolved record found"}, status_code=404)
     vet_id, qty_already_returned = vet_row[0], vet_row[1]
 
-    # Get item info to calculate remaining shortfall
+    # Get item info
     di_row = db.execute(
         select(DeliveryItem, Item)
         .join(Item, Item.id == DeliveryItem.item_id)
@@ -2856,32 +2862,72 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
     ).first()
     if not di_row:
         return JSONResponse({"error": "delivery item not found"}, status_code=404)
-    di, item  = di_row
-    shortfall = max(0, di.quantity - qty_already_returned)
+    di, item     = di_row
+    current_shortfall = max(0, di.quantity - qty_already_returned)
 
-    if action == "returned" and shortfall > 0:
-        tx = Transaction(
-            branch_id=user.branch_id,
-            item_id=di.item_id,
-            type="IN",
-            quantity=shortfall,
-            note=f"Missing stock returned — delivery #{delivery_id} shortfall resolved by {user.username}",
-            reference=f"shortfall-{delivery_id}",
-            delivery_id=delivery_id,
-        )
-        db.add(tx)
-        db.flush()
+    if action == "returned":
+        # Clamp qty_resolved to current shortfall
+        qty_to_credit = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
+        new_total_returned = qty_already_returned + qty_to_credit
+        remaining_shortfall = max(0, di.quantity - new_total_returned)
+        is_fully_resolved = remaining_shortfall == 0
 
-    db.execute(text(
-        "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action=:act, "
-        "resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
-    ), {"act": action, "uid": user.id, "vid": vet_id})
+        if qty_to_credit > 0:
+            tx = Transaction(
+                branch_id=user.branch_id,
+                item_id=di.item_id,
+                type="IN",
+                quantity=qty_to_credit,
+                note=f"Partial shortfall resolved — delivery #{delivery_id}, {qty_to_credit} returned, confirmed by {user.username}",
+                reference=f"shortfall-{delivery_id}",
+                delivery_id=delivery_id,
+            )
+            db.add(tx)
+            db.flush()
 
-    audit_log(db, user.id, "SHORTFALL_RESOLVED",
-              f"delivery_id={delivery_id} item={item.name} shortfall={shortfall} action={action}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
-    db.commit()
-    return JSONResponse({"ok": True, "item_name": item.name, "shortfall": shortfall, "action": action})
+        if is_fully_resolved:
+            # All accounted for — mark resolved
+            db.execute(text(
+                "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='returned', "
+                "qty_returned=:newqty, resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id})
+        else:
+            # Still some missing — update qty_returned, keep unresolved
+            db.execute(text(
+                "UPDATE stock_return_vettings SET qty_returned=:newqty WHERE id=:vid"
+            ), {"newqty": new_total_returned, "vid": vet_id})
+
+        audit_log(db, user.id, "SHORTFALL_PARTIAL_RESOLVED" if not is_fully_resolved else "SHORTFALL_RESOLVED",
+                  f"delivery_id={delivery_id} item={item.name} credited={qty_to_credit} remaining={remaining_shortfall}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return JSONResponse({
+            "ok": True,
+            "item_name": item.name,
+            "qty_credited": qty_to_credit,
+            "new_total_returned": new_total_returned,
+            "remaining_shortfall": remaining_shortfall,
+            "is_fully_resolved": is_fully_resolved,
+            "action": "returned",
+        })
+
+    else:  # written_off
+        # Record write-off — no IN transaction, mark as resolved
+        db.execute(text(
+            "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
+            "resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
+        ), {"uid": user.id, "vid": vet_id})
+        audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
+                  f"delivery_id={delivery_id} item={item.name} qty_lost={current_shortfall}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return JSONResponse({
+            "ok": True,
+            "item_name": item.name,
+            "qty_lost": current_shortfall,
+            "is_fully_resolved": True,
+            "action": "written_off",
+        })
 
 
 @app.get("/vetting", response_class=HTMLResponse)
@@ -3057,15 +3103,38 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "has_shortfall": has_shortfall,
         })
 
+    # ── Written-off records (for summary card at top) ────────────────────
+    written_off_rows = db.execute(text("""
+        SELECT
+            srv.id, srv.qty_returned, srv.resolved_at,
+            di.quantity AS original_qty,
+            (di.quantity - srv.qty_returned) AS qty_lost,
+            it.name AS item_name,
+            d.id AS delivery_id, d.customer_name,
+            u_agent.full_name AS agent_name, u_agent.username AS agent_username,
+            u_res.full_name AS resolved_by_name, u_res.username AS resolved_by_username
+        FROM stock_return_vettings srv
+        JOIN delivery_items di ON di.id = srv.delivery_item_id
+        JOIN items it          ON it.id = di.item_id
+        JOIN deliveries d      ON d.id  = srv.delivery_id
+        LEFT JOIN users u_agent ON u_agent.id = d.agent_id
+        LEFT JOIN users u_res   ON u_res.id   = srv.resolved_by
+        WHERE srv.resolve_action = 'written_off'
+          AND it.branch_id = :bid
+        ORDER BY srv.resolved_at DESC
+        LIMIT 100
+    """), {"bid": branch_id}).fetchall()
+
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("vetting.html", {
         "request": request, "user": user, "active": "vetting",
         "vetting_rows": vetting_rows, "agents": agents,
-        "filter_date": filter_date.isoformat(),
+        "filter_date": filter_date.isoformat() if filter_date else "",
         "selected_agent_id": selected_agent_id,
         "today": date.today().isoformat(),
         "csrf_token": csrf_token,
         "return_rows": return_rows,
+        "written_off_rows": written_off_rows,
     })
 
 
