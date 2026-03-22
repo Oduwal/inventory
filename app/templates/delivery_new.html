@@ -126,7 +126,10 @@
 
 <script>
 // Pending assignments from server — keyed by agent_id
-const pendingAssignments = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
+// Convert server int keys → string keys so agentId from onchange matches
+const _rawAssignments = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
+const pendingAssignments = {};
+Object.keys(_rawAssignments).forEach(k => { pendingAssignments[String(k)] = _rawAssignments[k]; });
 
 function loadAssignments(agentId) {
   const selector   = document.getElementById('assignment-selector');

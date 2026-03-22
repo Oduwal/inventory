@@ -28,11 +28,85 @@
 .entry-row:last-child { border-bottom:none; }
 </style>
 
+<!-- ── WRITTEN OFF SUMMARY CARD ──────────────────────────── -->
+{% if written_off_rows %}
+<div id="written-off-card" class="card" style="margin-bottom:20px;border-top:3px solid #ef4444;cursor:pointer;"
+  onclick="toggleWrittenOff()">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span style="font-size:20px;">📋</span>
+      <div>
+        <div style="font-weight:700;font-size:14px;color:#f87171;">
+          Written-Off Stock
+          <span style="background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);
+            border-radius:999px;font-size:11px;padding:2px 10px;margin-left:8px;">
+            {{ written_off_rows | length }} record(s)
+          </span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+          Click to expand · {{ written_off_rows | sum(attribute='qty_lost') }} total units lost
+        </div>
+      </div>
+    </div>
+    <span id="wo-chevron" style="color:var(--muted);font-size:18px;transition:transform .2s;">▼</span>
+  </div>
+
+  <div id="wo-details" style="display:none;margin-top:16px;border-top:1px solid var(--border);padding-top:14px;">
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Date Written Off</th>
+            <th>Item</th>
+            <th style="text-align:right;">Qty Returned</th>
+            <th style="text-align:right;color:#f87171;">Qty Lost</th>
+            <th>Delivery</th>
+            <th>Agent</th>
+            <th>Confirmed By</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in written_off_rows %}
+          <tr>
+            <td style="color:var(--muted);white-space:nowrap;font-size:12px;">
+              {{ r.resolved_at.strftime('%d %b %Y %H:%M') if r.resolved_at else '—' }}
+            </td>
+            <td style="font-weight:600;">{{ r.item_name }}</td>
+            <td style="text-align:right;color:#4ade80;">{{ r.qty_returned }}</td>
+            <td style="text-align:right;font-weight:700;color:#f87171;">{{ r.qty_lost }}</td>
+            <td>
+              <a href="/deliveries/{{ r.delivery_id }}" style="color:var(--accent);">
+                #{{ r.delivery_id }} — {{ r.customer_name }}
+              </a>
+            </td>
+            <td style="color:var(--muted);font-size:12px;">{{ r.agent_name or r.agent_username or '—' }}</td>
+            <td style="color:var(--muted);font-size:12px;">{{ r.resolved_by_name or r.resolved_by_username or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--border);font-weight:800;">
+            <td colspan="3">Total Lost</td>
+            <td style="text-align:right;color:#f87171;">{{ written_off_rows | sum(attribute='qty_lost') }} units</td>
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if not vetting_rows %}
 <div class="card" style="text-align:center;padding:40px;">
   <div style="font-size:32px;margin-bottom:12px;">✅</div>
-  <div style="font-weight:600;margin-bottom:6px;">No collections for {{ filter_date }}</div>
-  <div style="color:var(--muted);font-size:13px;">No agents have recorded cash collections on this date.</div>
+  <div style="font-weight:600;margin-bottom:6px;">
+    {% if filter_date %}No collections on {{ filter_date }}{% else %}All cash has been vetted{% endif %}
+  </div>
+  <div style="color:var(--muted);font-size:13px;">
+    {% if filter_date %}No agents recorded collections on this date.
+    {% else %}No unconfirmed collections. Use the date filter to review a specific day.{% endif %}
+  </div>
 </div>
 {% endif %}
 
@@ -284,6 +358,86 @@ function checkAllVetted(deliveryId) {
     const hdrBtn = card.querySelector('.vet-header button.btnPrimary');
     if (hdrBtn) hdrBtn.outerHTML = '<span class="badge b-green">✓ All Stock Returned</span>';
   }
+}
+
+function toggleWrittenOff() {
+  const details = document.getElementById('wo-details');
+  const chevron = document.getElementById('wo-chevron');
+  const expanded = details.style.display !== 'none';
+  details.style.display = expanded ? 'none' : 'block';
+  chevron.style.transform = expanded ? '' : 'rotate(180deg)';
+}
+
+async function resolveShortfall(deliveryId, diId, action, btn) {
+  const qtyInput = document.getElementById('resolve-qty-' + diId);
+  const qtyResolved = qtyInput ? parseInt(qtyInput.value) || 0 : 0;
+  const label = action === 'returned'
+    ? 'confirm ' + qtyResolved + ' unit(s) returned to stock'
+    : 'write off as lost (no stock credit)';
+  if (!confirm('Confirm: ' + label + '?')) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const res = await fetch('/vetting/resolve-shortfall', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ delivery_id: deliveryId, delivery_item_id: diId, action, qty_resolved: qtyResolved })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const rowEl = document.getElementById('return-item-' + diId);
+      if (!rowEl) { refreshPendingCount(deliveryId); return; }
+      if (data.is_fully_resolved) {
+        rowEl.style.background = '';
+        rowEl.style.paddingLeft = '';
+        rowEl.innerHTML = `
+          <div style="flex:1;min-width:160px;">
+            <span style="font-weight:600;font-size:13px;">${data.item_name}</span>
+            <div style="margin-top:3px;"><span style="font-size:11px;color:#4ade80;">
+              ✓ ${action === 'written_off' ? 'Written off (' + (data.qty_lost || 0) + ' lost)' : 'Fully returned'}
+            </span></div>
+          </div>
+          <span class="badge ${action === 'written_off' ? 'b-red' : 'b-green'}" style="font-size:11px;">
+            ${action === 'written_off' ? '✕ Written Off' : '✓ Resolved'}
+          </span>`;
+      } else {
+        const newShortfall = data.remaining_shortfall;
+        rowEl.innerHTML = `
+          <div style="flex:1;min-width:160px;">
+            <span style="font-weight:600;font-size:13px;">${data.item_name}</span>
+            <span style="color:var(--muted);font-size:12px;margin-left:8px;">${data.new_total_returned} returned so far</span>
+            <div style="margin-top:3px;">
+              <span style="font-size:11px;background:rgba(239,68,68,.15);color:#f87171;
+                border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:2px 8px;">
+                ⚠ ${data.qty_credited} credited · ${newShortfall} STILL MISSING
+              </span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--muted);">Resolve remaining ${newShortfall}:</span>
+            <div style="display:flex;align-items:center;gap:5px;">
+              <label style="font-size:11px;color:var(--muted);margin:0;">Qty:</label>
+              <input type="number" id="resolve-qty-${diId}" value="${newShortfall}" min="1" max="${newShortfall}"
+                style="width:60px;margin:0;padding:5px 7px;font-size:12px;" />
+            </div>
+            <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'returned', this)"
+              style="font-size:12px;padding:6px 12px;background:rgba(34,197,94,.12);
+                border:1px solid rgba(34,197,94,.3);color:#4ade80;border-radius:8px;cursor:pointer;">
+              ✓ Agent Returned It
+            </button>
+            <button onclick="resolveShortfall(${deliveryId}, ${diId}, 'written_off', this)"
+              style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);
+                border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+              ✕ Write Off (Lost)
+            </button>
+          </div>`;
+      }
+      refreshPendingCount(deliveryId);
+    } else {
+      alert(data.error || 'Error resolving shortfall');
+      btn.disabled = false;
+      btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off (Lost)';
+    }
+  } catch(e) { alert('Error: ' + e.message); btn.disabled = false; }
 }
 
 async function confirmAgent(agentId, dateStr, btn) {
