@@ -2800,17 +2800,13 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         return HTMLResponse("Forbidden", status_code=403)
     branch_id = get_selected_branch_id(request, user)
 
-    # Date filter
+    # Date filter — optional. When blank, show ALL unvetted entries across all dates.
+    filter_date = None
     if date_filter:
         try:
             filter_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
         except ValueError:
-            filter_date = date.today()
-    else:
-        filter_date = date.today()
-
-    day_start = datetime.combine(filter_date, datetime.min.time())
-    day_end   = day_start + timedelta(days=1)
+            filter_date = None
 
     # All agents in this branch
     agents = db.execute(
@@ -2820,28 +2816,40 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
     selected_agent_id = int(agent_id) if agent_id and agent_id.isdigit() else None
 
     # Build vetting rows per agent
+    # Rule: always show agents who have ANY unconfirmed entries.
+    # When date_filter is set, also show confirmed entries for that date so admin can review.
     vetting_rows = []
     for agent in agents:
         if selected_agent_id and agent.id != selected_agent_id:
             continue
 
-        entries = db.execute(
-            select(CashEntry).where(CashEntry.agent_id == agent.id)
+        # Base query for this agent's collection entries
+        q = (
+            select(CashEntry)
+            .where(CashEntry.agent_id == agent.id)
             .where(CashEntry.branch_id == branch_id)
             .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"]))
-            .where(CashEntry.created_at >= day_start)
-            .where(CashEntry.created_at < day_end)
-            .order_by(CashEntry.created_at.desc())
-        ).scalars().all()
+        )
+
+        if filter_date:
+            # Filter to specific date — show both confirmed and unconfirmed for that day
+            day_start = datetime.combine(filter_date, datetime.min.time())
+            day_end   = day_start + timedelta(days=1)
+            q = q.where(CashEntry.created_at >= day_start).where(CashEntry.created_at < day_end)
+        else:
+            # No date filter — show ONLY unconfirmed entries (across all dates)
+            q = q.where(CashEntry.confirmed_by_admin == False)  # noqa: E712
+
+        entries = db.execute(q.order_by(CashEntry.created_at.desc())).scalars().all()
 
         if not entries:
             continue
 
-        cash_total     = sum(float(e.amount) for e in entries if e.kind in ("COLLECTION", "CASH_PAYMENT"))
-        transfer_total = sum(float(e.amount) for e in entries if e.kind == "TRANSFER_PAYMENT")
-        total          = cash_total + transfer_total
-        confirmed      = all(getattr(e, 'confirmed_by_admin', False) for e in entries)
-        confirmed_count = sum(1 for e in entries if getattr(e, 'confirmed_by_admin', False))
+        cash_total      = sum(float(e.amount) for e in entries if e.kind in ("COLLECTION", "CASH_PAYMENT"))
+        transfer_total  = sum(float(e.amount) for e in entries if e.kind == "TRANSFER_PAYMENT")
+        total           = cash_total + transfer_total
+        confirmed       = all(getattr(e, "confirmed_by_admin", False) for e in entries)
+        confirmed_count = sum(1 for e in entries if getattr(e, "confirmed_by_admin", False))
 
         # Get linked deliveries for these entries
         delivery_ids = list({e.delivery_id for e in entries if e.delivery_id})
@@ -2863,14 +2871,14 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         })
 
     # ── Stock return section ──────────────────────────────────────────────
-    # Unsuccessful deliveries needing stock return vetting (all time, not date filtered)
+    # Always show ALL unsuccessful deliveries with ANY unvetted items — no date restriction.
     unvetted_statuses = ["FAILED", "RETURNED", "ADJUSTMENT_PENDING"]
     unsuccessful = db.execute(
         select(Delivery)
         .where(Delivery.branch_id == branch_id)
         .where(Delivery.status.in_(unvetted_statuses))
         .order_by(Delivery.created_at.desc())
-        .limit(100)
+        .limit(200)
     ).scalars().all()
 
     # Also flag OUT_FOR_DELIVERY for 24+ hours
@@ -2883,12 +2891,14 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         .order_by(Delivery.created_at.asc())
     ).scalars().all()
 
-    # Build return rows
-    all_return_deliveries = {d.id: d for d in unsuccessful + overdue}
     return_rows = []
+    seen_delivery_ids = set()
+
     for d in list(unsuccessful) + list(overdue):
-        if d.id in {r["delivery_id"] for r in return_rows}:
+        if d.id in seen_delivery_ids:
             continue
+        seen_delivery_ids.add(d.id)
+
         d_items = db.execute(
             select(DeliveryItem, Item)
             .join(Item, Item.id == DeliveryItem.item_id)
@@ -2896,43 +2906,51 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         ).all()
         if not d_items:
             continue
-        # Check which items already vetted
-        # Count as vetted only if all qty was returned (qty_returned > 0 means partial or full)
-        # Items with ANY vetting today are shown as vetted — re-appears tomorrow if more to return
+
+        # Vetted = has at least one vetting record (any date, not just today)
         vetted_ids = {r[0] for r in db.execute(
-            text("SELECT delivery_item_id FROM stock_return_vettings WHERE delivery_id = :did AND DATE(created_at) = CURRENT_DATE"),
+            text("SELECT DISTINCT delivery_item_id FROM stock_return_vettings WHERE delivery_id = :did"),
             {"did": d.id}
         ).fetchall()}
-        agent = db.get(User, d.agent_id) if d.agent_id else None
+
+        agent_u = db.get(User, d.agent_id) if d.agent_id else None
         items_to_vet = []
         for di, it in d_items:
-            already = di.id in vetted_ids
             items_to_vet.append({
-                "di_id": di.id, "item_name": it.name,
-                "qty": di.quantity, "vetted": already,
+                "di_id":     di.id,
+                "item_name": it.name,
+                "qty":       di.quantity,
+                "vetted":    di.id in vetted_ids,
             })
+
         all_vetted = all(i["vetted"] for i in items_to_vet)
+
+        # Skip fully vetted non-overdue deliveries — nothing left to do
         if all_vetted and d.status != "OUT_FOR_DELIVERY":
-            continue  # fully resolved, skip
+            continue
+
         return_rows.append({
-            "delivery": d,
+            "delivery":    d,
             "delivery_id": d.id,
-            "agent_name": (agent.full_name or agent.username) if agent else "Unknown",
-            "status": d.status,
-            "is_overdue": d.status == "OUT_FOR_DELIVERY",
-            "item_lines": items_to_vet,
-            "all_vetted": all_vetted,
+            "agent_name":  (agent_u.full_name or agent_u.username) if agent_u else "Unknown",
+            "status":      d.status,
+            "is_overdue":  d.status == "OUT_FOR_DELIVERY",
+            "item_lines":  items_to_vet,
+            "all_vetted":  all_vetted,
         })
 
     csrf_token = get_csrf_token(request)
     return templates.TemplateResponse("vetting.html", {
-        "request": request, "user": user, "active": "vetting",
-        "vetting_rows": vetting_rows, "agents": agents,
-        "filter_date": filter_date.isoformat(),
+        "request":           request,
+        "user":              user,
+        "active":            "vetting",
+        "vetting_rows":      vetting_rows,
+        "agents":            agents,
+        "filter_date":       filter_date.isoformat() if filter_date else "",
         "selected_agent_id": selected_agent_id,
-        "today": date.today().isoformat(),
-        "csrf_token": csrf_token,
-        "return_rows": return_rows,
+        "today":             date.today().isoformat(),
+        "csrf_token":        csrf_token,
+        "return_rows":       return_rows,
     })
 
 

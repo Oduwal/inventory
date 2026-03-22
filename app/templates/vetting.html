@@ -6,8 +6,14 @@
 
 {% block top_right %}
 <form method="get" action="/vetting" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-  <input type="date" name="date_filter" value="{{ filter_date }}" max="{{ today }}"
-    onchange="this.form.submit()" style="width:auto;padding:8px 12px;" />
+  <div style="display:flex;align-items:center;gap:6px;">
+    <label style="font-size:11px;color:var(--muted);margin:0;white-space:nowrap;">Filter by date</label>
+    <input type="date" name="date_filter" value="{{ filter_date }}" max="{{ today }}"
+      onchange="this.form.submit()" style="width:auto;padding:8px 12px;" />
+    {% if filter_date %}
+    <a href="/vetting" style="font-size:11px;color:var(--muted);padding:4px 8px;border:1px solid var(--border);border-radius:6px;text-decoration:none;" title="Clear date filter">✕ Clear</a>
+    {% endif %}
+  </div>
   <select name="agent_id" onchange="this.form.submit()" style="width:auto;padding:8px 12px;">
     <option value="">All Agents</option>
     {% for a in agents %}
@@ -31,8 +37,16 @@
 {% if not vetting_rows %}
 <div class="card" style="text-align:center;padding:40px;">
   <div style="font-size:32px;margin-bottom:12px;">✅</div>
-  <div style="font-weight:600;margin-bottom:6px;">No collections for {{ filter_date }}</div>
-  <div style="color:var(--muted);font-size:13px;">No agents have recorded cash collections on this date.</div>
+  <div style="font-weight:600;margin-bottom:6px;">
+    {% if filter_date %}No collections on {{ filter_date }}{% else %}All cash has been vetted{% endif %}
+  </div>
+  <div style="color:var(--muted);font-size:13px;">
+    {% if filter_date %}
+    No agents recorded collections on this date.
+    {% else %}
+    There are no unconfirmed cash collections. Use the date filter above to review a specific day.
+    {% endif %}
+  </div>
 </div>
 {% endif %}
 
@@ -49,6 +63,11 @@
         <div style="font-weight:700;font-size:14px;">{{ row.agent.full_name or row.agent.username }}</div>
         <div style="font-size:11px;color:var(--muted);">
           {{ row.confirmed_count }}/{{ row.total_count }} entries confirmed
+          {% if not filter_date %}
+          · <span style="color:#fbbf24;">unvetted across all dates</span>
+          {% else %}
+          · {{ filter_date }}
+          {% endif %}
         </div>
       </div>
     </div>
@@ -100,7 +119,11 @@
         <span style="color:var(--muted);">{{ entry.note or '—' }}</span>
         {% endif %}
         <div style="font-size:11px;color:var(--muted);margin-top:2px;">
-          {{ entry.created_at.strftime('%I:%M %p') if entry.created_at else '' }}
+          {% if filter_date %}
+            {{ entry.created_at.strftime('%I:%M %p') if entry.created_at else '' }}
+          {% else %}
+            {{ entry.created_at.strftime('%d %b %Y  %I:%M %p') if entry.created_at else '' }}
+          {% endif %}
           {% if entry.kind == 'TRANSFER_PAYMENT' %}
           <span style="color:#7fa8ff;">· Transfer</span>
           {% else %}
