@@ -38,6 +38,7 @@
       {% endif %}
 
       <!-- Assignment link — shows only when agent has pending assignments -->
+      <!-- Debug: {{ pending_assignments | length if pending_assignments is defined else 0 }} agents with pending assignments -->
       <input type="hidden" name="assignment_id" id="assignment-id-input" value="" />
       <div id="assignment-selector" style="display:none;grid-column:1/-1;">
         <div style="background:rgba(79,124,255,.07);border:1px solid rgba(79,124,255,.25);
@@ -132,17 +133,18 @@ const pendingAssignments = {};
 Object.keys(_rawAssignments).forEach(k => { pendingAssignments[String(k)] = _rawAssignments[k]; });
 
 function loadAssignments(agentId) {
-  const selector   = document.getElementById('assignment-selector');
-  const select     = document.getElementById('assignment-select');
+  const selector    = document.getElementById('assignment-selector');
+  const select      = document.getElementById('assignment-select');
   const hiddenInput = document.getElementById('assignment-id-input');
-  const assignments = pendingAssignments[agentId] || [];
+  const assignments = pendingAssignments[String(agentId)] || [];
+  console.log('[Assignments] agent:', agentId, '→ found:', assignments.length, 'assignments', pendingAssignments);
   if (assignments.length === 0) {
     selector.style.display = 'none';
     hiddenInput.value = '';
     return;
   }
   // Populate dropdown
-  select.innerHTML = '<option value="">— Don't link (new delivery, fresh stock) —</option>';
+  select.innerHTML = '<option value="">— Don\'t link (new delivery, fresh stock) —</option>';
   assignments.forEach(a => {
     const opt = document.createElement('option');
     opt.value = a.id;
