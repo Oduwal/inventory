@@ -829,9 +829,10 @@ def home(request: Request, db: Session = Depends(get_db)):
     del_by_day: dict = {}
     for d in db.execute(
         select(Delivery).where(Delivery.branch_id == branch_id)
-        .where(Delivery.created_at >= datetime.utcnow() - timedelta(days=14))
+        .where(Delivery.status == "DELIVERED")
+        .where(Delivery.delivered_at >= datetime.utcnow() - timedelta(days=14))
     ).scalars().all():
-        k = d.created_at.date().isoformat() if d.created_at else None
+        k = d.delivered_at.date().isoformat() if d.delivered_at else None
         if k: del_by_day[k] = del_by_day.get(k, 0) + 1
     exp_by_day: dict = {}
     for e in db.execute(
@@ -1735,8 +1736,15 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
     if not (is_supervisor(user) and not branch_id):
         stmt = stmt.where(Transaction.branch_id == branch_id)
     txs = db.scalars(stmt).all()
+    # Build item name map for display
+    item_ids = list({t.item_id for t in txs if t.item_id})
+    item_name_map = {}
+    if item_ids:
+        for it in db.scalars(select(Item).where(Item.id.in_(item_ids))).all():
+            item_name_map[it.id] = it.name
     return tpl(request, "transactions_list.html", {
         "request": request, "txs": txs, "user": user, "active": "transactions",
+        "item_name_map": item_name_map,
     })
 
 
@@ -2388,10 +2396,25 @@ async def delivery_create(
     amounts = list(line_amount or [])
     while len(amounts) < len(item_id):
         amounts.append(0.0)
+    assigned_item_ids = set()  # items covered by assignment (already have OUT tx)
+    for aid in (assignment_ids or []):
+        asgn_row = db.execute(text(
+            "SELECT item_id FROM agent_stock_assignments WHERE id = :aid"
+        ), {"aid": aid}).fetchone()
+        if asgn_row:
+            assigned_item_ids.add(int(asgn_row[0]))
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
+            # Create OUT transaction immediately (unless covered by an assignment)
+            if int(iid) not in assigned_item_ids:
+                db.add(Transaction(
+                    branch_id=branch_id, item_id=int(iid), type="OUT", quantity=q,
+                    note=f"Delivery #{d.id} to {cust} — assigned to agent",
+                    reference=f"delivery-{d.id}",
+                    delivery_id=d.id,
+                ))
     # Link assignments if provided — no extra stock OUT needed (already deducted)
     for aid in (assignment_ids or []):
         asgn = db.execute(text(
@@ -2453,7 +2476,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
     expense_by_day: dict = {}
     expenses_raw = db.execute(
         select(CashEntry).where(CashEntry.agent_id == user.id)
-        .where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
     ).scalars().all()
     for e in expenses_raw:
@@ -3484,6 +3507,28 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         LIMIT 100
     """), {"bid": branch_id}).fetchall()
 
+    # ── Return operating cash — unconfirmed returns ──────────────────────
+    # Show per-agent unconfirmed RETURN_OPERATING_CASH entries for admin to vet
+    return_op_rows = []
+    for agent in agents:
+        if selected_agent_id and agent.id != selected_agent_id:
+            continue
+        ret_entries = db.execute(
+            select(CashEntry)
+            .where(CashEntry.agent_id == agent.id)
+            .where(CashEntry.branch_id == branch_id)
+            .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+            .where(CashEntry.confirmed_by_admin == False)  # noqa: E712
+            .order_by(CashEntry.created_at.desc())
+        ).scalars().all()
+        if not ret_entries:
+            continue
+        return_op_rows.append({
+            "agent":   agent,
+            "entries": ret_entries,
+            "total":   sum(float(e.amount) for e in ret_entries),
+        })
+
     csrf_token = get_csrf_token(request)
     return tpl(request, "vetting.html", {
         "request": request, "user": user, "active": "vetting",
@@ -3496,6 +3541,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         "written_off_rows": written_off_rows,
         "assignment_rows": assignment_rows,
         "assign_items": assign_items,
+        "return_op_rows": return_op_rows,
     })
 
 
@@ -3642,7 +3688,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
             for e in _entries(kind_list)
         ]
 
-    expense_entries      = _entry_list(["EXPENSE"])
+    expense_entries      = _entry_list(["EXPENSE", "COLLECTION_EXPENSE"])
     coll_expense_entries = _entry_list(["COLLECTION_EXPENSE"])
     collection_entries   = _entry_list(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"])
     op_cash_entries      = _entry_list(["OPERATING_CASH"])
@@ -3885,7 +3931,16 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         coll_exp  = agent_coll_exp_map.get(aid, 0.0)
         op_exp    = exp - coll_exp   # expenses from operating cash only
         op        = op_cash_map.get(aid, 0.0)
-        balance   = op - op_exp
+        # Subtract confirmed returns from balance (agent already handed back cash)
+        ret_confirmed = float(db.scalar(
+            select(func.coalesce(func.sum(CashEntry.amount), 0))
+            .where(CashEntry.agent_id == aid)
+            .where(CashEntry.kind == "RETURN_OPERATING_CASH")
+            .where(CashEntry.confirmed_by_admin == True)
+            .where(CashEntry.created_at >= start_dt)
+            .where(CashEntry.created_at <= end_dt)
+        ) or 0)
+        balance   = op - op_exp - ret_confirmed
         total_op_cash_given += op
         expenses_from_collections += coll_exp
         if op > 0:

@@ -87,6 +87,7 @@ const ITEMS_BY_ID = {};
 ITEMS.forEach(i => { ITEMS_BY_ID[i.id] = i; });
 const IS_SUPERVISOR = {{ 'true' if user and user.role == 'SUPERVISOR' else 'false' }};
 const SELECTED_BRANCH = {{ selected_branch_id or 0 }};
+const BRANCH_NAME = {{ (branches | selectattr('id','eq',selected_branch_id) | map(attribute='name') | first | default('this branch')) | tojson if selected_branch_id else '"this branch"' }};
 const CSRF = {{ csrf_token | tojson }};
 const AGENTS = [{% for a in agents %}{"id":{{ a.id }},"name":{{ (a.full_name or a.username) | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
 const TODAY = "{{ today }}";
@@ -308,6 +309,40 @@ function confirmCreate(idx) {
   return confirm(`Create Order ${idx+1}? It will be saved and assigned.`);
 }
 
+function showBranchConfirm(count, branchName) {
+  return new Promise(resolve => {
+    // Create modal
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+    overlay.innerHTML = `
+      <div style="background:var(--card,#0d1829);border:1px solid rgba(79,124,255,.3);border-radius:16px;
+        width:100%;max-width:420px;margin:20px;padding:28px;box-shadow:0 24px 60px rgba(0,0,0,.6);">
+        <div style="font-size:22px;margin-bottom:12px;text-align:center;">📋</div>
+        <div style="font-weight:800;font-size:16px;text-align:center;margin-bottom:8px;">Confirm Order Creation</div>
+        <div style="color:var(--muted,#8a9bc4);font-size:13px;text-align:center;margin-bottom:20px;line-height:1.6;">
+          You are about to create <strong style="color:var(--text,#e7eefc);">${count} order${count !== 1 ? 's' : ''}</strong>
+          and send them to<br>
+          <strong style="color:#7fa8ff;font-size:15px;">${branchName}</strong>.
+          <br><br>Are you sure?
+        </div>
+        <div style="display:flex;gap:10px;justify-content:center;">
+          <button id="confirm-yes" style="padding:10px 28px;border-radius:10px;border:none;
+            background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;font-weight:700;font-size:14px;cursor:pointer;">
+            ✓ Yes, Create Orders
+          </button>
+          <button id="confirm-no" style="padding:10px 20px;border-radius:10px;border:1px solid var(--border,rgba(255,255,255,.1));
+            background:transparent;color:var(--muted,#8a9bc4);font-weight:600;font-size:14px;cursor:pointer;">
+            Cancel
+          </button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#confirm-yes').onclick = () => { document.body.removeChild(overlay); resolve(true); };
+    overlay.querySelector('#confirm-no').onclick  = () => { document.body.removeChild(overlay); resolve(false); };
+    overlay.addEventListener('mousedown', e => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(false); } });
+  });
+}
+
 function escHtml(str) {
   return (str||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -333,6 +368,10 @@ function clearAll() {
 async function createAllOrders() {
   const forms = document.querySelectorAll('[id^="form-"]');
   if (forms.length === 0) return;
+  // Confirmation modal before sending
+  const orderCount = forms.length;
+  const confirmed = await showBranchConfirm(orderCount, BRANCH_NAME || 'this branch');
+  if (!confirmed) return;
   const btn = document.getElementById('create-all-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Creating...';
