@@ -102,34 +102,18 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 # Automatically inject csrf_token into every TemplateResponse context
 # so base.html logout form always has it — no need to pass per-route.
-_orig_TemplateResponse = templates.TemplateResponse
-
-def _auto_csrf(name_or_request, context_or_name=None, context=None, *args, **kwargs):
-    """Wrapper that handles both old (name, context) and new (request, name, context) signatures.
-    Also auto-injects csrf_token if missing.
+def tpl(request, name: str, context: dict):
+    """Render a Jinja2 template with auto-injected csrf_token.
+    Uses the Jinja2 env directly to avoid Starlette TemplateResponse signature changes.
     """
-    # Detect which signature is being used
-    from starlette.requests import Request as _Req
-    if isinstance(name_or_request, _Req):
-        # New Starlette signature: TemplateResponse(request, name, context, ...)
-        request  = name_or_request
-        name     = context_or_name
-        ctx      = context if context is not None else {}
-        if "csrf_token" not in ctx:
-            ctx["csrf_token"] = get_csrf_token(request)
-        if "request" not in ctx:
-            ctx["request"] = request
-        return _orig_TemplateResponse(request, name, ctx, *args, **kwargs)
-    else:
-        # Old signature: TemplateResponse(name, context, ...)
-        name = name_or_request
-        ctx  = context_or_name if context_or_name is not None else {}
-        req  = ctx.get("request")
-        if req and "csrf_token" not in ctx:
-            ctx["csrf_token"] = get_csrf_token(req)
-        return _orig_TemplateResponse(name, ctx, *args, **kwargs)
-
-templates.TemplateResponse = _auto_csrf  # type: ignore
+    if "csrf_token" not in context:
+        context["csrf_token"] = get_csrf_token(request)
+    if "request" not in context:
+        context["request"] = request
+    tmpl = templates.env.get_template(name)
+    html = tmpl.render(**context)
+    from starlette.responses import HTMLResponse as _HR
+    return _HR(html)
 
 static_dir = os.path.join(BASE_DIR, "static")
 if os.path.isdir(static_dir):
@@ -689,7 +673,7 @@ def _dt_range_from_dates(preset, start_date, end_date):
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None, "csrf_token": csrf_token})
+    return tpl(request, "login.html", {"request": request, "error": None, "csrf_token": csrf_token})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -705,7 +689,7 @@ async def login(
         limiter.check(request)
     except HTTPException:
         token = get_csrf_token(request)
-        return templates.TemplateResponse("login.html", {
+        return tpl(request, "login.html", {
             "request": request,
             "error": "Too many login attempts. Please wait a minute and try again.",
             "csrf_token": token,
@@ -718,7 +702,7 @@ async def login(
     # [SEC-5] Per-account lockout check
     if account_lockout.is_locked(username_clean):
         token = get_csrf_token(request)
-        return templates.TemplateResponse("login.html", {
+        return tpl(request, "login.html", {
             "request": request,
             "error": "Account temporarily locked due to too many failed attempts. Try again in 15 minutes.",
             "csrf_token": token,
@@ -733,7 +717,7 @@ async def login(
         msg = "Invalid login."
         if remaining <= 2:
             msg = f"Invalid login. {remaining} attempt{'s' if remaining != 1 else ''} remaining before lockout."
-        return templates.TemplateResponse("login.html", {
+        return tpl(request, "login.html", {
             "request": request, "error": msg, "csrf_token": token,
         })
 
@@ -895,7 +879,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         except Exception:
             agent_collections = []  # fallback — column may not exist yet
 
-    return templates.TemplateResponse("dashboard.html", {
+    return tpl(request, "dashboard.html", {
         "request": request, "user": user, "active": "dashboard",
         "branches": branches, "selected_branch_id": branch_id,
         "items_count": items_count, "low_stock_count": low_stock_count,
@@ -994,7 +978,7 @@ def audit_log_viewer(request: Request, db: Session = Depends(get_db), page: int 
     ).scalars().all()
     total = db.scalar(select(func.count(AuditLog.id))) or 0
     user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User)).scalars().all()}
-    return templates.TemplateResponse("audit_log.html", {
+    return tpl(request, "audit_log.html", {
         "request": request, "user": user, "active": "audit",
         "logs": logs, "user_map": user_map,
         "page": page, "total": total, "per_page": per_page,
@@ -1201,7 +1185,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
     ) or 0)
 
-    return templates.TemplateResponse("supervisor_dashboard.html", {
+    return tpl(request, "supervisor_dashboard.html", {
         "request": request, "user": user, "rows": rows,
         "top_items": top_items, "best_agents": best_agents,
         "chart_labels": chart_days_set,
@@ -1248,7 +1232,7 @@ def branches_list(request: Request, db: Session = Depends(get_db)):
     if not is_supervisor(user):
         return HTMLResponse("Forbidden", status_code=403)
     rows = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
-    return templates.TemplateResponse("branches_list.html", {
+    return tpl(request, "branches_list.html", {
         "request": request, "user": user, "rows": rows,
         "active": "branches", "branches": rows, "selected_branch_id": None,
     })
@@ -1264,7 +1248,7 @@ def branch_new_form(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("branch_new.html", {
+    return tpl(request, "branch_new.html", {
         "request": request, "user": user, "error": request.query_params.get("error"),
         "active": "branches", "branches": branches, "selected_branch_id": None,
         "csrf_token": csrf_token,
@@ -1315,7 +1299,7 @@ def api_low_stock_count(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/forgot-password", response_class=HTMLResponse)
 def forgot_password_page(request: Request):
-    return templates.TemplateResponse("forgot_password.html", {
+    return tpl(request, "forgot_password.html", {
         "request": request, "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
     })
@@ -1380,7 +1364,7 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
         "WHERE branch_id = :bid AND resolved = FALSE GROUP BY item_id"
     ), {"bid": branch_id}).fetchall() if branch_id else []
     faulty_counts = {r[0]: int(r[1]) for r in faulty_counts_raw}
-    return templates.TemplateResponse("items_list.html", {
+    return tpl(request, "items_list.html", {
         "request": request, "rows": rows, "q": q, "user": user, "active": "items", "faulty_counts": faulty_counts,
         "view": view, "branches": branches, "branch_filter": branch_filter,
     })
@@ -1396,7 +1380,7 @@ def item_new_form(request: Request, db: Session = Depends(get_db)):
     if forbid:
         return forbid
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("item_new.html", {
+    return tpl(request, "item_new.html", {
         "request": request, "user": user,
         "error": request.query_params.get("error"),
         "active": "items", "csrf_token": csrf_token,
@@ -1451,7 +1435,7 @@ def items_import_form(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("items_import.html", {
+    return tpl(request, "items_import.html", {
         "request": request, "user": user, "branches": branches,
         "active": "items", "selected_branch_id": getattr(user, "branch_id", None),
         "error": request.query_params.get("error"),
@@ -1546,7 +1530,7 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
     ), {"iid": item_id, "bid": item.branch_id}).fetchall()
     faulty_qty_active = sum(r[1] for r in faulty_records if not r[4])  # unresolved only
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("item_detail.html", {
+    return tpl(request, "item_detail.html", {
         "request": request, "item": item, "stock": stock, "txs": txs, "user": user,
         "active": "items", "faulty_records": faulty_records,
         "faulty_qty_active": faulty_qty_active, "csrf_token": csrf_token,
@@ -1565,7 +1549,7 @@ def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)
     item = db.get(Item, item_id)
     require_item_access(request, user, item)
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("item_edit.html", {
+    return tpl(request, "item_edit.html", {
         "request": request, "item": item, "user": user,
         "error": request.query_params.get("error"),
         "active": "items", "csrf_token": csrf_token,
@@ -1751,7 +1735,7 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
     if not (is_supervisor(user) and not branch_id):
         stmt = stmt.where(Transaction.branch_id == branch_id)
     txs = db.scalars(stmt).all()
-    return templates.TemplateResponse("transactions_list.html", {
+    return tpl(request, "transactions_list.html", {
         "request": request, "txs": txs, "user": user, "active": "transactions",
     })
 
@@ -1769,7 +1753,7 @@ def tx_new_form(request: Request, db: Session = Depends(get_db)):
     items = [i for (i, _s) in get_items_with_stock(db) if i.branch_id == branch_id]
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("tx_form.html", {
+    return tpl(request, "tx_form.html", {
         "request": request, "items": items, "error": request.query_params.get("error"),
         "user": user, "active": "transactions", "branches": branches,
         "selected_branch_id": branch_id, "csrf_token": csrf_token,
@@ -1852,7 +1836,7 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
             stale_rows.append({"item": item, "stock": int(stock), "last_tx": last_tx,
                                "days_since": (datetime.utcnow() - last_tx).days if last_tx else 9999})
     stale_rows.sort(key=lambda r: r["days_since"], reverse=True)
-    return templates.TemplateResponse("stale_stock.html", {
+    return tpl(request, "stale_stock.html", {
         "request": request, "user": user, "rows": stale_rows, "days": days, "active": "stale",
     })
 
@@ -1869,7 +1853,7 @@ def low_stock(request: Request, db: Session = Depends(get_db)):
         rows = list(get_low_stock(db))
     else:
         rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
-    return templates.TemplateResponse("low_stock.html", {
+    return tpl(request, "low_stock.html", {
         "request": request, "rows": rows, "user": user, "active": "low",
     })
 
@@ -1898,7 +1882,7 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
             select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
         ).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
-    return templates.TemplateResponse("agents_list.html", {
+    return tpl(request, "agents_list.html", {
         "request": request, "agents": agents, "user": user,
         "branches": branches, "selected_branch_id": branch_id,
     })
@@ -1915,7 +1899,7 @@ def agent_new_form(request: Request, db: Session = Depends(get_db)):
         return forbid
     csrf_token = get_csrf_token(request)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
-    return templates.TemplateResponse("agent_new.html", {
+    return tpl(request, "agent_new.html", {
         "request": request, "user": user,
         "error": request.query_params.get("error"),
         "active": "agents", "csrf_token": csrf_token,
@@ -2052,7 +2036,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("agent_detail.html", {
+    return tpl(request, "agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
         "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
         "deliveries": deliveries, "items_summary": items_summary, "cash_entries": cash_entries,
@@ -2183,7 +2167,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
             "in_transit": sum(1 for d in rows if d.status == "OUT_FOR_DELIVERY"),
             "failed": sum(1 for d in rows if d.status in ("FAILED", "RETURNED")),
         }
-    return templates.TemplateResponse("deliveries_list.html", {
+    return tpl(request, "deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
         "branches": branches, "selected_branch_id": branch_id,
@@ -2287,7 +2271,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
     items  = db.execute(select(Item).where(Item.branch_id == effective_branch_id).order_by(Item.name.asc())).scalars().all()
     csrf_token = get_csrf_token(request)
     items_json = [{"id": i.id, "name": i.name, "category": i.category or "", "unit": i.unit or "pcs", "price": float(i.selling_price or 0)} for i in items]
-    return templates.TemplateResponse("parse_order.html", {
+    return tpl(request, "parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
         "agents": agents, "items": items, "items_json": items_json,
         "branches": branches, "selected_branch_id": effective_branch_id,
@@ -2323,7 +2307,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
                 "note": r[4] or "", "item_name": r[5],
             })
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("delivery_new.html", {
+    return tpl(request, "delivery_new.html", {
         "request": request, "agents": agents, "items": items, "user": user,
         "active": "deliveries_new", "branches": branches, "selected_branch_id": branch_id,
         "today": date.today().isoformat(), "csrf_token": csrf_token,
@@ -2474,7 +2458,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
         .where(CashEntry.agent_id == user.id).where(CashEntry.kind == "EXPENSE")
     ) or 0)
 
-    return templates.TemplateResponse("agent_overview.html", {
+    return tpl(request, "agent_overview.html", {
         "request": request, "user": user, "active": "dashboard",
         "total_deliveries": len(rows), "pending_c": pending_c,
         "ofd_c": ofd_c, "done_c": done_c,
@@ -2511,7 +2495,7 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 
-    return templates.TemplateResponse("my_deliveries.html", {
+    return tpl(request, "my_deliveries.html", {
         "request": request, "rows": rows, "user": user, "active": "deliveries",
         "items_summary": items_summary,
     })
@@ -2563,7 +2547,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             text("SELECT * FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
             {"rid": pending_adj.id}
         ).fetchall()
-    return templates.TemplateResponse("delivery_detail.html", {
+    return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": float(col), "expense_total": float(exp),
         "cash_total": float(cash_total), "transfer_total": float(transfer_total),
@@ -2893,7 +2877,7 @@ async def update_delivery_status(
         except ValueError as e:
             d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
             csrf_token2 = get_csrf_token(request)
-            return templates.TemplateResponse("delivery_detail.html", {
+            return tpl(request, "delivery_detail.html", {
                 "request": request, "d": d, "d_items": d_items, "user": user, "error": str(e),
                 "collection_total": 0, "expense_total": 0,
                 "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
@@ -3489,7 +3473,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
     """), {"bid": branch_id}).fetchall()
 
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("vetting.html", {
+    return tpl(request, "vetting.html", {
         "request": request, "user": user, "active": "vetting",
         "vetting_rows": vetting_rows, "agents": agents,
         "filter_date": filter_date.isoformat() if filter_date else "",
@@ -3654,7 +3638,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     total_collection_expenses = sum(e["amount"] for e in coll_expense_entries)
 
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("cash_dashboard.html", {
+    return tpl(request, "cash_dashboard.html", {
         "request": request, "user": user, "rows": rows,
         "total_collections": float(total_collections), "total_expenses": float(total_expenses),
         "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
@@ -3757,7 +3741,7 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
-    return templates.TemplateResponse("reports_sales.html", {
+    return tpl(request, "reports_sales.html", {
         "request": request, "user": user, "agents": agents,
         "start_date": today, "end_date": today, "active": "reports",
     })
@@ -4134,7 +4118,7 @@ def merchant_receipt_form(request: Request, db: Session = Depends(get_db)):
         select(Item.category).where(Item.branch_id == branch_id)
         .where(Item.category.isnot(None)).distinct().order_by(Item.category.asc())
     ).scalars().all()
-    return templates.TemplateResponse("merchant_receipt_new.html", {
+    return tpl(request, "merchant_receipt_new.html", {
         "request": request, "user": user, "items": items,
         "categories": categories, "mode": "receipt",
         "error": request.query_params.get("error"),
@@ -4216,7 +4200,7 @@ def merchant_return_form(request: Request, db: Session = Depends(get_db)):
         .where(Item.category.isnot(None)).distinct().order_by(Item.category.asc())
     ).scalars().all()
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("merchant_receipt_new.html", {
+    return tpl(request, "merchant_receipt_new.html", {
         "request": request, "user": user, "items": items,
         "categories": categories,
         "mode": "return",  # tells template which tab is active
@@ -4346,7 +4330,7 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
         sent_count     = sum(1 for t in transfers if t.from_branch_id == user.branch_id and t.status in ("OUT_FOR_DELIVERY", "RECEIVED"))
         received_count = sum(1 for t in transfers if t.to_branch_id == user.branch_id and t.status == "RECEIVED")
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("transfers_list.html", {
+    return tpl(request, "transfers_list.html", {
         "request": request, "user": user, "transfers": transfers, "branches": branches,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
         "merchant_receipts": merchant_receipts,
@@ -4368,7 +4352,7 @@ def transfer_new_form(request: Request, db: Session = Depends(get_db)):
     items = get_items_with_stock(db, branch_id=user.branch_id)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).order_by(User.username)).scalars().all()
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("transfer_new.html", {
+    return tpl(request, "transfer_new.html", {
         "request": request, "user": user, "branches": branches, "items": items, "agents": agents,
         "error": request.query_params.get("error"), "active": "transfers",
         "selected_branch_id": user.branch_id, "csrf_token": csrf_token,
@@ -4446,7 +4430,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
     sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
     receiver_agents = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.to_branch_id).order_by(User.username)).scalars().all()  if (is_admin(user) and user.branch_id==transfer.to_branch_id)   else []
     csrf_token = get_csrf_token(request)
-    return templates.TemplateResponse("transfer_detail.html", {
+    return tpl(request, "transfer_detail.html", {
         "request": request, "user": user, "transfer": transfer, "branches": branches,
         "delegated_agent": delegated_agent, "delegated_receiver": delegated_receiver,
         "packed_by": packed_by,
