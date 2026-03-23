@@ -91,12 +91,6 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
     <span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div>
     <div class="kl">Agent Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
   </div>
-  {% if total_collection_expenses is defined and total_collection_expenses > 0 %}
-  <div class="kpi kpi-a" style="cursor:pointer;" onclick="showDrawer('coll_expenses')">
-    <span style="font-size:20px;">💸</span><div class="kv">₦{{ "{:,.0f}".format(total_collection_expenses) }}</div>
-    <div class="kl">Collection Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
-  </div>
-  {% endif %}
   <div class="kpi kpi-t"><span style="font-size:20px;">↩️</span><div class="kv">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div><div class="kl">Op. Cash Returned</div></div>
   <div class="kpi {% if operating_balance >= 0 %}kpi-g{% else %}kpi-r{% endif %}"><span style="font-size:20px;">⚖️</span><div class="kv">₦{{ "{:,.0f}".format(operating_balance) }}</div><div class="kl">Op. Balance</div></div>
   {% if user and user.role == "ADMIN" %}
@@ -140,18 +134,14 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
 
 <script>
 const _data = {
-  expenses:      {{ expense_entries        | tojson }},
-  collections:   {{ collection_entries     | tojson }},
-  op_cash:       {{ op_cash_entries        | tojson }},
-  office:        {{ office_entries         | tojson }},
-  coll_expenses: {{ coll_expense_entries   | default([]) | tojson }},
+  expenses:    {{ expense_entries    | tojson }},
+  collections: {{ collection_entries | tojson }},
+  op_cash:     {{ op_cash_entries    | tojson }},
+  office:      {{ office_entries     | tojson }},
 };
 const _titles = {
-  expenses:      '📤 Agent Expenses',
-  collections:   '💰 Collections',
-  op_cash:       '🏦 Operating Cash Given',
-  office:        '🏢 Office Expenses',
-  coll_expenses: '💸 Collection-funded Expenses',
+  expenses: '📤 Agent Expenses', collections: '💰 Collections',
+  op_cash: '🏦 Operating Cash Given', office: '🏢 Office Expenses'
 };
 const isAdmin = {{ 'true' if user and user.role in ('ADMIN','SUPERVISOR') else 'false' }};
 const fmt = n => '₦' + parseFloat(n).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -200,6 +190,38 @@ function closeDrawer() {
 
 <!-- Entry forms — [FIX-4] CSRF on every POST form -->
 {% if user and user.role == "ADMIN" %}
+<!-- Give Operating Cash to Agent -->
+<div class="ec ec-op" style="margin-bottom:14px;">
+  <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash to Agent</div>
+  <form method="post" action="/cash/new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <input type="hidden" name="kind" value="OPERATING_CASH">
+    <div class="inputs">
+      <div>
+        <label>Agent</label>
+        <select name="agent_id" required>
+          <option value="">— Select agent —</option>
+          {% for a in agents %}
+          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Amount (₦)</label>
+        <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      </div>
+      <div>
+        <label>Note</label>
+        <input type="text" name="note" placeholder="e.g. morning float">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
+      </div>
+    </div>
+  </form>
+</div>
+<!-- Office Expense -->
 <div class="ec ec-off" style="margin-bottom:20px;">
   <div class="ec-hd"><span class="ec-dot" style="background:#f59e0b;"></span>Office Expense</div>
   <form method="post" action="/cash/new">
@@ -231,20 +253,6 @@ function closeDrawer() {
       <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
       <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. fuel, food">
       <button class="ec-btn ec-r" type="submit">📤 Save Expense</button>
-    </form>
-    <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;">
-      💡 If your operating cash balance is <strong>₦0</strong>, this expense will automatically be deducted from your collection.
-    </div>
-  </div>
-
-  <div class="ec ec-op">
-    <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash</div>
-    <form method="post" action="/cash/new">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-      <input type="hidden" name="kind" value="OPERATING_CASH">
-      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. morning float">
-      <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
     </form>
   </div>
 
