@@ -2445,7 +2445,9 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
     chart_days = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
     delivery_by_day: dict = {}
     for d in rows:
-        k = d.created_at.date().isoformat() if d.created_at else None
+        if d.status != "DELIVERED":
+            continue
+        k = d.delivered_at.date().isoformat() if d.delivered_at else (d.created_at.date().isoformat() if d.created_at else None)
         if k:
             delivery_by_day[k] = delivery_by_day.get(k, 0) + 1
     expense_by_day: dict = {}
@@ -4434,7 +4436,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
     delegated_agent    = db.get(User, transfer.delegated_agent_id)    if transfer.delegated_agent_id    else None
     delegated_receiver = db.get(User, transfer.delegated_receiver_id) if transfer.delegated_receiver_id else None
-    packed_by          = db.get(User, transfer.packed_by_id)          if transfer.packed_by_id          else None
+    packed_by          = db.get(User, getattr(transfer, "packed_by_id", None)) if getattr(transfer, "packed_by_id", None) else None
     is_delegated_receiver = is_agent(user) and transfer.delegated_receiver_id == user.id
     # Agents for sender branch (for delegation dropdown — sender admin only)
     sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
