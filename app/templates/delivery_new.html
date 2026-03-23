@@ -163,24 +163,139 @@ function selectAssignment(val) {
   const hiddenInput = document.getElementById('assignment-id-input');
   const noteEl      = document.getElementById('assignment-note');
   hiddenInput.value = val || '';
+
   if (val) {
+    // Get selected option data
+    const sel      = document.getElementById('assignment-select');
+    const opt      = sel.options[sel.selectedIndex];
+    const maxQty   = parseInt(opt.dataset.qty) || 1;
+    const itemId   = opt.dataset.itemId;
+    const itemName = opt.textContent.split(' × ')[0].trim();
+
+    // Show note with qty input
     noteEl.style.display = 'block';
-    noteEl.textContent   = '✓ Linked — stock already deducted from branch. No extra OUT transaction will be created.';
+    noteEl.innerHTML = `
+      <div style="margin-top:8px;color:#4ade80;">✓ Linked — no extra stock deduction.</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
+        <label style="font-size:11px;color:var(--muted);margin:0;">Qty to use (max ${maxQty}):</label>
+        <input type="number" id="asgn-qty" min="1" max="${maxQty}" value="${maxQty}"
+          oninput="updateAssignedRow('${itemId}','${itemName}',${maxQty},this.value)"
+          style="width:70px;margin:0;padding:5px 8px;font-size:12px;" />
+      </div>`;
+
+    // Lock ORDER ITEMS — replace first row with assigned item, keep add button working
+    lockAssignedRow(itemId, itemName, maxQty, maxQty);
   } else {
     noteEl.style.display = 'none';
+    restoreFirstRow();
+  }
+}
+
+function lockAssignedRow(itemId, itemName, maxQty, qty) {
+  const linesDiv = document.getElementById('lines');
+  // Replace only the first row with the locked assigned row
+  const firstRow = linesDiv.querySelector('.line');
+  if (firstRow) {
+    firstRow.id = 'assigned-row';
+    firstRow.style.background = 'rgba(79,124,255,.06)';
+    firstRow.style.borderRadius = '8px';
+    firstRow.style.padding = '6px 8px';
+    firstRow.innerHTML = `
+      <div>
+        <label>Item <span style="font-size:10px;color:#7fa8ff;background:rgba(79,124,255,.15);padding:1px 5px;border-radius:4px;">📦 assigned</span></label>
+        <input value="${itemName}" disabled style="opacity:.7;cursor:not-allowed;" />
+        <input type="hidden" name="item_id" value="${itemId}" />
+      </div>
+      <div>
+        <label>Quantity</label>
+        <input name="quantity" type="number" min="1" max="${maxQty}" value="${qty}" required
+          oninput="syncAssignQty(this.value)"
+          style="border-color:rgba(79,124,255,.5);" />
+      </div>
+      <div>
+        <label>Amount Collected (₦)</label>
+        <input name="line_amount" type="number" step="0.01" min="0" value="0" />
+      </div>
+      <div style="padding-bottom:1px;">
+        <label>&nbsp;</label>
+        <div style="font-size:11px;color:#7fa8ff;text-align:center;padding:8px 0;">📦</div>
+      </div>`;
+  }
+}
+
+function updateAssignedRow(itemId, itemName, maxQty, newQty) {
+  const qty = Math.min(Math.max(parseInt(newQty)||1, 1), maxQty);
+  lockAssignedRow(itemId, itemName, maxQty, qty);
+}
+
+function syncAssignQty(val) {
+  // Keep the note qty input in sync when user edits qty in the row
+  const qi = document.getElementById('asgn-qty');
+  if (qi) qi.value = val;
+}
+
+function restoreFirstRow() {
+  const linesDiv   = document.getElementById('lines');
+  const assignedRow = document.getElementById('assigned-row');
+  if (assignedRow) {
+    assignedRow.id = '';
+    assignedRow.style.background = '';
+    assignedRow.style.borderRadius = '';
+    assignedRow.style.padding = '';
+    assignedRow.innerHTML = `
+      <div>
+        <label>Item</label>
+        <select name="item_id" required>
+          {% for it in items %}<option value="{{ it.id }}">{{ it.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Quantity</label>
+        <input name="quantity" type="number" min="1" value="1" required />
+      </div>
+      <div>
+        <label>Amount Collected (₦)</label>
+        <input name="line_amount" type="number" step="0.01" min="0" value="0" />
+      </div>
+      <div style="padding-bottom:1px;">
+        <label>&nbsp;</label>
+        <button class="btnDanger" type="button" onclick="removeLine(this)" style="width:100%;">✕</button>
+      </div>`;
   }
 }
 
 const lines = document.getElementById("lines");
 document.getElementById("addRowBtn").addEventListener("click", () => {
-  const clone = lines.querySelector(".line").cloneNode(true);
-  clone.querySelector('input[name="quantity"]').value = 1;
-  clone.querySelector('input[name="line_amount"]').value = 0;
-  lines.appendChild(clone);
+  // Always add a fresh normal row (not a clone of a potentially locked row)
+  const div = document.createElement('div');
+  div.className = 'lineRow line';
+  div.innerHTML = `
+    <div>
+      <label>Item</label>
+      <select name="item_id" required>
+        {% for it in items %}<option value="{{ it.id }}">{{ it.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Quantity</label>
+      <input name="quantity" type="number" min="1" value="1" required />
+    </div>
+    <div>
+      <label>Amount Collected (₦)</label>
+      <input name="line_amount" type="number" step="0.01" min="0" value="0" />
+    </div>
+    <div style="padding-bottom:1px;">
+      <label>&nbsp;</label>
+      <button class="btnDanger" type="button" onclick="removeLine(this)" style="width:100%;">✕</button>
+    </div>`;
+  lines.appendChild(div);
 });
 function removeLine(btn) {
+  const row = btn.closest(".line");
+  // Protect the assigned row from being removed
+  if (row && row.id === 'assigned-row') return;
   if (lines.querySelectorAll(".line").length <= 1) return;
-  btn.closest(".line").remove();
+  row.remove();
 }
 </script>
 {% endblock %}
