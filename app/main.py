@@ -52,6 +52,7 @@ from .services import (
 )
 
 # [FIX-1,3,4,5] Import all security helpers from security.py
+import logging
 from .security import (
     get_session_secret,
     limiter,
@@ -101,15 +102,32 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 # Automatically inject csrf_token into every TemplateResponse context
 # so base.html logout form always has it — no need to pass per-route.
-_orig_tr = templates.TemplateResponse.__func__ if hasattr(templates.TemplateResponse, "__func__") else None
-
 _orig_TemplateResponse = templates.TemplateResponse
 
-def _auto_csrf(name, context, *args, **kwargs):
-    req = context.get("request")
-    if req and "csrf_token" not in context:
-        context["csrf_token"] = get_csrf_token(req)
-    return _orig_TemplateResponse(name, context, *args, **kwargs)
+def _auto_csrf(name_or_request, context_or_name=None, context=None, *args, **kwargs):
+    """Wrapper that handles both old (name, context) and new (request, name, context) signatures.
+    Also auto-injects csrf_token if missing.
+    """
+    # Detect which signature is being used
+    from starlette.requests import Request as _Req
+    if isinstance(name_or_request, _Req):
+        # New Starlette signature: TemplateResponse(request, name, context, ...)
+        request  = name_or_request
+        name     = context_or_name
+        ctx      = context if context is not None else {}
+        if "csrf_token" not in ctx:
+            ctx["csrf_token"] = get_csrf_token(request)
+        if "request" not in ctx:
+            ctx["request"] = request
+        return _orig_TemplateResponse(request, name, ctx, *args, **kwargs)
+    else:
+        # Old signature: TemplateResponse(name, context, ...)
+        name = name_or_request
+        ctx  = context_or_name if context_or_name is not None else {}
+        req  = ctx.get("request")
+        if req and "csrf_token" not in ctx:
+            ctx["csrf_token"] = get_csrf_token(req)
+        return _orig_TemplateResponse(name, ctx, *args, **kwargs)
 
 templates.TemplateResponse = _auto_csrf  # type: ignore
 
