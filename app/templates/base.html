@@ -453,7 +453,7 @@ window.addEventListener('appinstalled',()=>{banner.style.display='none';deferred
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
 </script>
 <!-- Notification Panel -->
-<div id="notif-panel" style="display:none;position:fixed;top:64px;right:20px;width:340px;max-height:480px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.7);z-index:9998;opacity:1;">
+<div id="notif-panel" style="display:none;position:fixed;top:64px;right:20px;width:340px;max-height:480px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.8);z-index:9998;">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);">
     <span style="font-weight:700;font-size:14px;">Notifications</span>
     <div style="display:flex;gap:8px;">
