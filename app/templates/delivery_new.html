@@ -37,22 +37,16 @@
       </div>
       {% endif %}
 
-      <!-- Assignment link — shows only when agent has pending assignments -->
-      <!-- Debug: {{ pending_assignments | length if pending_assignments is defined else 0 }} agents with pending assignments -->
-      <input type="hidden" name="assignment_id" id="assignment-id-input" value="" />
-      <div id="assignment-selector" style="display:none;grid-column:1/-1;">
+      <!-- Assignment banner — shown when agent has pending assigned stock -->
+      <div id="assignment-banner" style="display:none;grid-column:1/-1;">
         <div style="background:rgba(79,124,255,.07);border:1px solid rgba(79,124,255,.25);
-          border-radius:12px;padding:14px 16px;">
-          <div style="font-size:11px;font-weight:800;color:#7fa8ff;text-transform:uppercase;
-            letter-spacing:.06em;margin-bottom:10px;">📦 Agent has assigned stock</div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-            This agent has extra stock already assigned. Link it to this delivery — no second stock deduction.
+          border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:10px;">
+          <span style="font-size:16px;">📦</span>
+          <div style="font-size:12px;color:#7fa8ff;">
+            <strong>Assigned stock pre-filled below.</strong>
+            Each assigned item appears as a locked row. You can remove any row to exclude it,
+            or use <strong>+ Add Item</strong> to add fresh stock items.
           </div>
-          <select id="assignment-select" onchange="selectAssignment(this.value)"
-            style="margin:0;width:100%;font-size:13px;">
-            <option value="">— Don't link (new delivery, fresh stock) —</option>
-          </select>
-          <div id="assignment-note" style="font-size:11px;color:#7fa8ff;margin-top:8px;display:none;"></div>
         </div>
       </div>
 
@@ -126,149 +120,72 @@
 </div>
 
 <script>
-// Pending assignments from server — keyed by agent_id
-// Convert server int keys → string keys so agentId from onchange matches
-const _rawAssignments = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
-const pendingAssignments = {};
-Object.keys(_rawAssignments).forEach(k => { pendingAssignments[String(k)] = _rawAssignments[k]; });
+// Convert int keys → string keys
+const _rawAsgn = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
+const pendingAsgn = {};
+Object.keys(_rawAsgn).forEach(k => pendingAsgn[String(k)] = _rawAsgn[k]);
 
 function loadAssignments(agentId) {
-  const selector    = document.getElementById('assignment-selector');
-  const select      = document.getElementById('assignment-select');
-  const hiddenInput = document.getElementById('assignment-id-input');
-  const assignments = pendingAssignments[String(agentId)] || [];
-  console.log('[Assignments] agent:', agentId, '→ found:', assignments.length, 'assignments', pendingAssignments);
-  if (assignments.length === 0) {
-    selector.style.display = 'none';
-    hiddenInput.value = '';
+  const banner = document.getElementById('assignment-banner');
+  const linesEl = document.getElementById('lines');
+  const list   = pendingAsgn[String(agentId)] || [];
+
+  // Remove any previously injected assigned rows
+  linesEl.querySelectorAll('.assigned-row').forEach(r => r.remove());
+
+  if (!list.length) {
+    banner.style.display = 'none';
+    if (!linesEl.querySelector('.normal-row')) addNormalRow();
     return;
   }
-  // Populate dropdown
-  select.innerHTML = '<option value="">— Don\'t link (new delivery, fresh stock) —</option>';
-  assignments.forEach(a => {
-    const opt = document.createElement('option');
-    opt.value = a.id;
-    opt.textContent = `${a.item_name} × ${a.qty}${a.note ? ' — ' + a.note : ''}`;
-    opt.dataset.itemId = a.item_id;
-    opt.dataset.qty    = a.qty;
-    opt.dataset.note   = a.note;
-    select.appendChild(opt);
-  });
-  selector.style.display = 'block';
-  hiddenInput.value = '';
-  selectAssignment('');
-}
 
-function selectAssignment(val) {
-  const hiddenInput = document.getElementById('assignment-id-input');
-  const noteEl      = document.getElementById('assignment-note');
-  hiddenInput.value = val || '';
+  banner.style.display = 'block';
 
-  if (val) {
-    // Get selected option data
-    const sel      = document.getElementById('assignment-select');
-    const opt      = sel.options[sel.selectedIndex];
-    const maxQty   = parseInt(opt.dataset.qty) || 1;
-    const itemId   = opt.dataset.itemId;
-    const itemName = opt.textContent.split(' × ')[0].trim();
-
-    // Show note with qty input
-    noteEl.style.display = 'block';
-    noteEl.innerHTML = `
-      <div style="margin-top:8px;color:#4ade80;">✓ Linked — no extra stock deduction.</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
-        <label style="font-size:11px;color:var(--muted);margin:0;">Qty to use (max ${maxQty}):</label>
-        <input type="number" id="asgn-qty" min="1" max="${maxQty}" value="${maxQty}"
-          oninput="updateAssignedRow('${itemId}','${itemName}',${maxQty},this.value)"
-          style="width:70px;margin:0;padding:5px 8px;font-size:12px;" />
-      </div>`;
-
-    // Lock ORDER ITEMS — replace first row with assigned item, keep add button working
-    lockAssignedRow(itemId, itemName, maxQty, maxQty);
-  } else {
-    noteEl.style.display = 'none';
-    restoreFirstRow();
-  }
-}
-
-function lockAssignedRow(itemId, itemName, maxQty, qty) {
-  const linesDiv = document.getElementById('lines');
-  // Replace only the first row with the locked assigned row
-  const firstRow = linesDiv.querySelector('.line');
-  if (firstRow) {
-    firstRow.id = 'assigned-row';
-    firstRow.style.background = 'rgba(79,124,255,.06)';
-    firstRow.style.borderRadius = '8px';
-    firstRow.style.padding = '6px 8px';
-    firstRow.innerHTML = `
+  // Insert one locked row per assigned item at the top
+  list.slice().reverse().forEach(a => {
+    const div = document.createElement('div');
+    div.className = 'lineRow line assigned-row';
+    div.dataset.asgnId = a.id;
+    div.style.cssText = 'background:rgba(79,124,255,.06);border-radius:8px;padding:6px 8px;';
+    div.innerHTML = `
+      <input type="hidden" name="assignment_ids" value="${a.id}" />
       <div>
-        <label>Item <span style="font-size:10px;color:#7fa8ff;background:rgba(79,124,255,.15);padding:1px 5px;border-radius:4px;">📦 assigned</span></label>
-        <input value="${itemName}" disabled style="opacity:.7;cursor:not-allowed;" />
-        <input type="hidden" name="item_id" value="${itemId}" />
+        <label>Item <span style="font-size:10px;color:#7fa8ff;background:rgba(79,124,255,.15);padding:1px 5px;border-radius:4px;">assigned</span></label>
+        <input value="${a.item_name}" disabled style="opacity:.75;cursor:not-allowed;" />
+        <input type="hidden" name="item_id" value="${a.item_id}" />
       </div>
       <div>
-        <label>Quantity</label>
-        <input name="quantity" type="number" min="1" max="${maxQty}" value="${qty}" required
-          oninput="syncAssignQty(this.value)"
+        <label>Qty <span style="font-size:10px;color:var(--muted);">max ${a.qty}</span></label>
+        <input name="quantity" type="number" min="1" max="${a.qty}" value="${a.qty}" required
           style="border-color:rgba(79,124,255,.5);" />
       </div>
       <div>
-        <label>Amount Collected (₦)</label>
+        <label>Amount (&#8358;)</label>
         <input name="line_amount" type="number" step="0.01" min="0" value="0" />
       </div>
       <div style="padding-bottom:1px;">
         <label>&nbsp;</label>
-        <div style="font-size:11px;color:#7fa8ff;text-align:center;padding:8px 0;">📦</div>
+        <button class="btnDanger" type="button" onclick="removeAssignedRow(this)" style="width:100%;"
+          title="Exclude from delivery">&#10005;</button>
       </div>`;
-  }
+    linesEl.prepend(div);
+  });
+
+  if (!linesEl.querySelector('.normal-row')) addNormalRow();
 }
 
-function updateAssignedRow(itemId, itemName, maxQty, newQty) {
-  const qty = Math.min(Math.max(parseInt(newQty)||1, 1), maxQty);
-  lockAssignedRow(itemId, itemName, maxQty, qty);
+function removeAssignedRow(btn) {
+  const linesEl = document.getElementById('lines');
+  btn.closest('.assigned-row').remove();
+  if (!linesEl.querySelector('.line')) addNormalRow();
+  if (!linesEl.querySelector('.assigned-row'))
+    document.getElementById('assignment-banner').style.display = 'none';
 }
 
-function syncAssignQty(val) {
-  // Keep the note qty input in sync when user edits qty in the row
-  const qi = document.getElementById('asgn-qty');
-  if (qi) qi.value = val;
-}
-
-function restoreFirstRow() {
-  const linesDiv   = document.getElementById('lines');
-  const assignedRow = document.getElementById('assigned-row');
-  if (assignedRow) {
-    assignedRow.id = '';
-    assignedRow.style.background = '';
-    assignedRow.style.borderRadius = '';
-    assignedRow.style.padding = '';
-    assignedRow.innerHTML = `
-      <div>
-        <label>Item</label>
-        <select name="item_id" required>
-          {% for it in items %}<option value="{{ it.id }}">{{ it.name }}</option>{% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Quantity</label>
-        <input name="quantity" type="number" min="1" value="1" required />
-      </div>
-      <div>
-        <label>Amount Collected (₦)</label>
-        <input name="line_amount" type="number" step="0.01" min="0" value="0" />
-      </div>
-      <div style="padding-bottom:1px;">
-        <label>&nbsp;</label>
-        <button class="btnDanger" type="button" onclick="removeLine(this)" style="width:100%;">✕</button>
-      </div>`;
-  }
-}
-
-const lines = document.getElementById("lines");
-document.getElementById("addRowBtn").addEventListener("click", () => {
-  // Always add a fresh normal row (not a clone of a potentially locked row)
+function addNormalRow() {
+  const linesEl = document.getElementById('lines');
   const div = document.createElement('div');
-  div.className = 'lineRow line';
+  div.className = 'lineRow line normal-row';
   div.innerHTML = `
     <div>
       <label>Item</label>
@@ -281,21 +198,31 @@ document.getElementById("addRowBtn").addEventListener("click", () => {
       <input name="quantity" type="number" min="1" value="1" required />
     </div>
     <div>
-      <label>Amount Collected (₦)</label>
+      <label>Amount (&#8358;)</label>
       <input name="line_amount" type="number" step="0.01" min="0" value="0" />
     </div>
     <div style="padding-bottom:1px;">
       <label>&nbsp;</label>
-      <button class="btnDanger" type="button" onclick="removeLine(this)" style="width:100%;">✕</button>
+      <button class="btnDanger" type="button" onclick="removeNormalRow(this)" style="width:100%;">&#10005;</button>
     </div>`;
-  lines.appendChild(div);
-});
+  linesEl.appendChild(div);
+}
+
+function removeNormalRow(btn) {
+  const linesEl = document.getElementById('lines');
+  if (linesEl.querySelectorAll('.line').length <= 1) return;
+  btn.closest('.line').remove();
+}
+
+// Mark the initial default row as normal
+document.querySelector('#lines .line').classList.add('normal-row');
+
+const lines = document.getElementById("lines");
+document.getElementById("addRowBtn").addEventListener("click", addNormalRow);
+
 function removeLine(btn) {
-  const row = btn.closest(".line");
-  // Protect the assigned row from being removed
-  if (row && row.id === 'assigned-row') return;
   if (lines.querySelectorAll(".line").length <= 1) return;
-  row.remove();
+  btn.closest(".line").remove();
 }
 </script>
 {% endblock %}

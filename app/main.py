@@ -2294,13 +2294,25 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     # Pending assignments per agent — for linking assigned stock to delivery
     pending_assignments = {}
     if is_admin(user) and branch_id:
-        rows_a = db.execute(text(
-            "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
-            "it.name AS item_name "
-            "FROM agent_stock_assignments asa "
-            "JOIN items it ON it.id = asa.item_id "
-            "WHERE asa.branch_id = :bid AND asa.returned = FALSE AND asa.delivery_id IS NULL"
-        ), {"bid": branch_id}).fetchall()
+        try:
+            rows_a = db.execute(text(
+                "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
+                "it.name AS item_name "
+                "FROM agent_stock_assignments asa "
+                "JOIN items it ON it.id = asa.item_id "
+                "WHERE asa.branch_id = :bid AND asa.returned = FALSE "
+                "AND (asa.delivery_id IS NULL OR asa.delivery_id = 0)"
+            ), {"bid": branch_id}).fetchall()
+        except Exception:
+            # Fallback if delivery_id column doesn't exist yet
+            db.rollback()
+            rows_a = db.execute(text(
+                "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
+                "it.name AS item_name "
+                "FROM agent_stock_assignments asa "
+                "JOIN items it ON it.id = asa.item_id "
+                "WHERE asa.branch_id = :bid AND asa.returned = FALSE"
+            ), {"bid": branch_id}).fetchall()
         for r in rows_a:
             pending_assignments.setdefault(r[1], []).append({
                 "id": r[0], "item_id": r[2], "qty": r[3],
@@ -2328,7 +2340,7 @@ async def delivery_create(
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
     line_amount: list[float] = Form(default=[]),
-    assignment_id: int | None = Form(None),
+    assignment_ids: list[int] = Form(default=[]),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -2380,18 +2392,16 @@ async def delivery_create(
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
-    # Link to assignment if provided — no extra stock OUT needed (already deducted)
-    if assignment_id:
+    # Link assignments if provided — no extra stock OUT needed (already deducted)
+    for aid in (assignment_ids or []):
         asgn = db.execute(text(
             "SELECT id, agent_id, transaction_out_id FROM agent_stock_assignments "
-            "WHERE id = :aid AND returned = FALSE AND delivery_id IS NULL"
-        ), {"aid": assignment_id}).fetchone()
+            "WHERE id = :aid AND returned = FALSE"
+        ), {"aid": aid}).fetchone()
         if asgn and asgn[1] == target_agent_id:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET delivery_id = :did WHERE id = :aid"
-            ), {"did": d.id, "aid": assignment_id})
-            # Tag the assignment's OUT transaction with this delivery_id
-            # so create_out_transactions_for_delivery_if_needed skips creating another OUT
+            ), {"did": d.id, "aid": aid})
             if asgn[2]:
                 db.execute(text(
                     "UPDATE transactions SET delivery_id = :did WHERE id = :txid"

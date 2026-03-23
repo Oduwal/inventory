@@ -489,46 +489,61 @@ async function confirmAgent(agentId, dateStr, btn) {
       class="btnPrimary" style="font-size:12px;padding:8px 16px;">+ Assign Stock to Agent</button>
   </div>
 
-  <!-- Assign stock form -->
+  <!-- Assign stock form — multi-row -->
   <div id="assign-stock-form" style="display:none;margin-bottom:16px;">
     <div class="card" style="border-top:3px solid var(--accent);">
-      <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;">Assign Extra Stock</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 80px 1fr auto;gap:10px;align-items:end;flex-wrap:wrap;">
-        <div>
-          <label style="font-size:12px;">Agent *</label>
-          <select id="assign-agent" style="margin:0;">
-            <option value="">— Select agent —</option>
-            {% for a in agents %}
-            <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:12px;">Item *</label>
-          <select id="assign-item" style="margin:0;">
-            <option value="">— Select item —</option>
-            {% for row in assign_items %}
-            <option value="{{ row.Item.id }}">{{ row.Item.name }} ({{ row.stock }} in stock)</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label style="font-size:12px;">Qty *</label>
-          <input type="number" id="assign-qty" min="1" value="1" style="margin:0;text-align:right;" />
-        </div>
-        <div>
-          <label style="font-size:12px;">Note</label>
-          <input type="text" id="assign-note" placeholder="e.g. urgent morning run" style="margin:0;" maxlength="200" />
-        </div>
-        <div>
-          <label style="font-size:12px;">&nbsp;</label>
-          <button onclick="assignStock(this)" class="btnPrimary" style="padding:8px 14px;font-size:12px;">
-            📦 Assign
-          </button>
+      <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;">Assign Extra Stock to Agent</div>
+
+      <!-- Agent selector — shared across all rows -->
+      <div style="margin-bottom:14px;max-width:320px;">
+        <label style="font-size:12px;">Agent *</label>
+        <select id="assign-agent" style="margin:0;">
+          <option value="">— Select agent —</option>
+          {% for a in agents %}
+          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Item rows -->
+      <div id="assign-rows" style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
+        <div class="assign-item-row" style="display:grid;grid-template-columns:2fr 80px 1.5fr auto;gap:10px;align-items:end;">
+          <div>
+            <label style="font-size:12px;">Item *</label>
+            <select class="assign-item-sel" style="margin:0;">
+              <option value="">— Select item —</option>
+              {% for row in assign_items %}
+              <option value="{{ row.Item.id }}">{{ row.Item.name }} ({{ row.stock }} in stock)</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;">Qty *</label>
+            <input type="number" class="assign-qty-inp" min="1" value="1" style="margin:0;text-align:right;" />
+          </div>
+          <div>
+            <label style="font-size:12px;">Note</label>
+            <input type="text" class="assign-note-inp" placeholder="e.g. urgent run" style="margin:0;" maxlength="200" />
+          </div>
+          <div>
+            <label style="font-size:12px;">&nbsp;</label>
+            <button type="button" onclick="removeAssignRow(this)"
+              style="width:100%;padding:8px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);
+                color:#f87171;border-radius:8px;cursor:pointer;font-size:13px;">✕</button>
+          </div>
         </div>
       </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button type="button" onclick="addAssignRow()" class="btnGhost" style="font-size:12px;padding:7px 14px;">
+          + Add Item
+        </button>
+        <button type="button" onclick="submitAllAssignments(this)" class="btnPrimary" style="font-size:12px;padding:8px 16px;">
+          📦 Assign All to Agent
+        </button>
+      </div>
       <div style="color:var(--muted);font-size:11px;margin-top:8px;">
-        Stock is deducted immediately from branch inventory. Vet the return below when the agent comes back.
+        Stock is deducted immediately. Each item creates a separate assignment record. Vet returns below.
       </div>
     </div>
   </div>
@@ -584,28 +599,75 @@ async function confirmAgent(agentId, dateStr, btn) {
 </div>
 
 <script>
-async function assignStock(btn) {
-  const agentId  = document.getElementById('assign-agent').value;
-  const itemId   = document.getElementById('assign-item').value;
-  const qty      = parseInt(document.getElementById('assign-qty').value) || 0;
-  const note     = document.getElementById('assign-note').value;
-  if (!agentId || !itemId || qty <= 0) { alert('Please fill in all required fields'); return; }
-  btn.disabled = true; btn.textContent = '⏳';
-  try {
-    const res  = await fetch('/vetting/assign-stock', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({agent_id: parseInt(agentId), item_id: parseInt(itemId), qty, note})
-    });
-    const data = await res.json();
-    if (data.ok) {
-      alert(`✓ ${data.qty} × ${data.item_name} assigned to ${data.agent_name}`);
-      window.location.reload();
-    } else {
-      alert(data.error || 'Error assigning stock');
-      btn.disabled = false; btn.textContent = '📦 Assign';
-    }
-  } catch(e) { alert('Error: ' + e.message); btn.disabled = false; btn.textContent = '📦 Assign'; }
+function addAssignRow() {
+  const container = document.getElementById('assign-rows');
+  const div = document.createElement('div');
+  div.className = 'assign-item-row';
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 1.5fr auto;gap:10px;align-items:end;';
+  div.innerHTML = `
+    <div>
+      <label style="font-size:12px;">Item *</label>
+      <select class="assign-item-sel" style="margin:0;">
+        <option value="">— Select item —</option>
+        {% for row in assign_items %}
+        <option value="{{ row.Item.id }}">{{ row.Item.name }} ({{ row.stock }} in stock)</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="font-size:12px;">Qty *</label>
+      <input type="number" class="assign-qty-inp" min="1" value="1" style="margin:0;text-align:right;" />
+    </div>
+    <div>
+      <label style="font-size:12px;">Note</label>
+      <input type="text" class="assign-note-inp" placeholder="e.g. urgent run" style="margin:0;" maxlength="200" />
+    </div>
+    <div>
+      <label style="font-size:12px;">&nbsp;</label>
+      <button type="button" onclick="removeAssignRow(this)"
+        style="width:100%;padding:8px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);
+          color:#f87171;border-radius:8px;cursor:pointer;font-size:13px;">&#10005;</button>
+    </div>`;
+  container.appendChild(div);
+}
+
+function removeAssignRow(btn) {
+  const container = document.getElementById('assign-rows');
+  if (container.querySelectorAll('.assign-item-row').length <= 1) return;
+  btn.closest('.assign-item-row').remove();
+}
+
+async function submitAllAssignments(btn) {
+  const agentId = document.getElementById('assign-agent').value;
+  if (!agentId) { alert('Please select an agent'); return; }
+  const rows = document.querySelectorAll('.assign-item-row');
+  const items = [];
+  for (const row of rows) {
+    const itemId = row.querySelector('.assign-item-sel').value;
+    const qty    = parseInt(row.querySelector('.assign-qty-inp').value) || 0;
+    const note   = row.querySelector('.assign-note-inp').value;
+    if (!itemId || qty <= 0) { alert('Please fill in all item rows (item and qty required)'); return; }
+    items.push({item_id: parseInt(itemId), qty, note});
+  }
+  btn.disabled = true; btn.textContent = '⏳ Assigning...';
+  let allOk = true;
+  for (const item of items) {
+    try {
+      const res  = await fetch('/vetting/assign-stock', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({agent_id: parseInt(agentId), item_id: item.item_id, qty: item.qty, note: item.note})
+      });
+      const data = await res.json();
+      if (!data.ok) { alert(data.error || 'Error assigning ' + item.item_id); allOk = false; break; }
+    } catch(e) { alert('Error: ' + e.message); allOk = false; break; }
+  }
+  if (allOk) {
+    alert('✓ All items assigned successfully');
+    window.location.reload();
+  } else {
+    btn.disabled = false; btn.textContent = '📦 Assign All to Agent';
+  }
 }
 
 async function returnAssignedStock(assignmentId, btn, notReturned=false) {
