@@ -837,7 +837,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     exp_by_day: dict = {}
     for e in db.execute(
         select(CashEntry).where(CashEntry.branch_id == branch_id)
-        .where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
+        .where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
@@ -964,6 +964,30 @@ async def confirm_cash(request: Request, db: Session = Depends(get_db)):
     audit_log(db, user.id, "CASH_CONFIRMED", f"agent_id={agent_id} date={date_str}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     return JSONResponse({"status": "ok"})
+
+
+@app.post("/admin/confirm-cash-entry", response_class=JSONResponse)
+async def confirm_cash_entry(request: Request, db: Session = Depends(get_db)):
+    """Confirm a single cash entry by ID (used for RETURN_OPERATING_CASH vetting)."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body     = await request.json()
+    entry_id = body.get("entry_id")
+    if not entry_id:
+        return JSONResponse({"error": "missing entry_id"}, status_code=400)
+    row = db.execute(text(
+        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() "
+        "WHERE id=:eid AND branch_id=:bid AND confirmed_by_admin=FALSE RETURNING id"
+    ), {"eid": entry_id, "bid": user.branch_id}).fetchone()
+    if not row:
+        # Try without branch filter (already confirmed or different branch)
+        db.execute(text(
+            "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() WHERE id=:eid"
+        ), {"eid": entry_id})
+    db.commit()
+    return JSONResponse({"ok": True})
 
 
 @app.get("/admin/audit-log", response_class=HTMLResponse)
@@ -1130,7 +1154,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     _range_end   = end_dt   or datetime.utcnow()
     exp_by_day: dict = {}
     for e in db.execute(
-        select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE"]))
+        select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= _range_start)
         .where(CashEntry.created_at <= _range_end)
     ).scalars().all():

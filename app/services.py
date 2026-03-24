@@ -555,9 +555,9 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
         .limit(limit)
     )
     if start:
-        q = q.where(Delivery.created_at >= start)
+        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) >= start)
     if end:
-        q = q.where(Delivery.created_at < end)
+        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) < end)
     return db.execute(q).all()
 
 

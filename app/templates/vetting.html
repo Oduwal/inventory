@@ -349,7 +349,7 @@ async function confirmReturnOp(agentId, btn) {
   for (const row of entryBtns) {
     const entryId = parseInt(row.id.replace('retop-entry-', ''));
     try {
-      const res = await fetch('/admin/confirm-cash', {
+      const res = await fetch('/admin/confirm-cash-entry', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({entry_id: entryId})
@@ -374,7 +374,7 @@ async function confirmReturnOp(agentId, btn) {
 async function confirmSingleReturnOp(entryId, btn) {
   btn.disabled = true; btn.textContent = '⏳';
   try {
-    const res = await fetch('/admin/confirm-cash', {
+    const res = await fetch('/admin/confirm-cash-entry', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({entry_id: entryId})
