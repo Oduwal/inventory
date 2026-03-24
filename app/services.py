@@ -534,16 +534,14 @@ def supervisor_top_items(db: Session, start: datetime | None, end: datetime | No
 
 
 def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | None, limit: int = 8):
-    """Top agents by number of DELIVERED deliveries."""
+    """Top agents by number of DELIVERED deliveries (distinct delivery count)."""
     q = (
         select(
             User.username.label("username"),
             func.coalesce(User.full_name, User.username).label("full_name"),
             Branch.name.label("branch_name"),
-            func.count(Delivery.id).label("delivered"),
-            func.coalesce(
-                func.sum(DeliveryItem.line_amount), 0
-            ).label("collections"),
+            func.count(func.distinct(Delivery.id)).label("delivered"),
+            func.coalesce(func.sum(DeliveryItem.line_amount), 0).label("collections"),
         )
         .select_from(Delivery)
         .join(User, User.id == Delivery.agent_id)
@@ -551,7 +549,7 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
         .where(Delivery.status == "DELIVERED")
         .group_by(User.id, User.username, User.full_name, Branch.name)
-        .order_by(func.count(Delivery.id).desc())
+        .order_by(func.count(func.distinct(Delivery.id)).desc())
         .limit(limit)
     )
     if start:

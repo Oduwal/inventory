@@ -4082,6 +4082,42 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
 #  ADMIN RESET  [FIX-8]
 # ────────────────────────────────────────────────
 
+@app.post("/admin/wipe-data", response_class=JSONResponse)
+async def wipe_all_data(request: Request, db: Session = Depends(get_db)):
+    """Wipe all operational data except users and branches.
+    Deletes: deliveries, transactions, cash entries, stock transfers,
+    items, notifications, audit logs, assignments, faulty stock, vettings.
+    Keeps: users, branches.
+    """
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_supervisor(user): return JSONResponse({"error": "forbidden — supervisor only"}, status_code=403)
+    body = await request.json()
+    if body.get("confirm") != "WIPE ALL DATA":
+        return JSONResponse({"error": "type WIPE ALL DATA to confirm"}, status_code=400)
+    try:
+        db.execute(text("DELETE FROM stock_return_vettings"))
+        db.execute(text("DELETE FROM adjustment_request_items"))
+        db.execute(text("DELETE FROM adjustment_requests"))
+        db.execute(text("DELETE FROM agent_stock_assignments"))
+        db.execute(text("DELETE FROM faulty_stock"))
+        db.execute(text("DELETE FROM notifications"))
+        db.execute(text("DELETE FROM cash_entries"))
+        db.execute(text("DELETE FROM delivery_items"))
+        db.execute(text("DELETE FROM stock_transfer_items"))
+        db.execute(text("DELETE FROM stock_transfers"))
+        db.execute(text("DELETE FROM transactions"))
+        db.execute(text("DELETE FROM deliveries"))
+        db.execute(text("DELETE FROM items"))
+        db.execute(text("DELETE FROM audit_logs"))
+        db.commit()
+        return JSONResponse({"ok": True, "message": "All data wiped. Users and branches preserved."})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/admin/reset-system", response_class=HTMLResponse)
 def reset_system_form(request: Request, db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
