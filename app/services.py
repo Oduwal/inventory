@@ -562,8 +562,8 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
 
 
 def supervisor_daily_deliveries(db: Session, start: datetime | None, end: datetime | None):
-    """Daily delivered count across all branches — for the chart."""
-    day_col = func.date(Delivery.created_at).label("day")
+    """Daily delivered count across all branches — keyed by delivered_at date."""
+    day_col = func.date(func.coalesce(Delivery.delivered_at, Delivery.created_at)).label("day")
     q = (
         select(day_col, func.count(Delivery.id).label("cnt"))
         .where(Delivery.status == "DELIVERED")
@@ -571,7 +571,7 @@ def supervisor_daily_deliveries(db: Session, start: datetime | None, end: dateti
         .order_by(day_col.asc())
     )
     if start:
-        q = q.where(Delivery.created_at >= start)
+        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) >= start)
     if end:
-        q = q.where(Delivery.created_at < end)
+        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) < end)
     return db.execute(q).all()

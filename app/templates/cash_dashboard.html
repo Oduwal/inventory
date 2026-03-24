@@ -91,7 +91,7 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
     <span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div>
     <div class="kl">Agent Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
   </div>
-  <div class="kpi kpi-t"><span style="font-size:20px;">↩️</span><div class="kv">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div><div class="kl">Op. Cash Returned</div></div>
+
   <div class="kpi {% if operating_balance >= 0 %}kpi-g{% else %}kpi-r{% endif %}"><span style="font-size:20px;">⚖️</span><div class="kv">₦{{ "{:,.0f}".format(operating_balance) }}</div><div class="kl">Op. Balance</div></div>
   {% if user and user.role == "ADMIN" %}
   <div class="kpi kpi-a" style="cursor:pointer;" onclick="showDrawer('office')">
@@ -190,38 +190,6 @@ function closeDrawer() {
 
 <!-- Entry forms — [FIX-4] CSRF on every POST form -->
 {% if user and user.role == "ADMIN" %}
-<!-- Give Operating Cash to Agent -->
-<div class="ec ec-op" style="margin-bottom:14px;">
-  <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash to Agent</div>
-  <form method="post" action="/cash/new">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-    <input type="hidden" name="kind" value="OPERATING_CASH">
-    <div class="inputs">
-      <div>
-        <label>Agent</label>
-        <select name="agent_id" required>
-          <option value="">— Select agent —</option>
-          {% for a in agents %}
-          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label>Amount (₦)</label>
-        <input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      </div>
-      <div>
-        <label>Note</label>
-        <input type="text" name="note" placeholder="e.g. morning float">
-      </div>
-      <div>
-        <label>&nbsp;</label>
-        <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
-      </div>
-    </div>
-  </form>
-</div>
-<!-- Office Expense -->
 <div class="ec ec-off" style="margin-bottom:20px;">
   <div class="ec-hd"><span class="ec-dot" style="background:#f59e0b;"></span>Office Expense</div>
   <form method="post" action="/cash/new">
@@ -256,18 +224,28 @@ function closeDrawer() {
     </form>
   </div>
 
+  <div class="ec ec-op">
+    <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash</div>
+    <form method="post" action="/cash/new">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="kind" value="OPERATING_CASH">
+      <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. morning float">
+      <button class="ec-btn ec-b" type="submit">🏦 Give Cash</button>
+    </form>
+  </div>
+
   <div class="ec ec-ret">
-    <div class="ec-hd"><span class="ec-dot" style="background:#14b8a6;"></span>Return Operating Cash Balance</div>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Record cash you are returning to admin after deducting your expenses.</p>
+    <div class="ec-hd"><span class="ec-dot" style="background:#14b8a6;"></span>Agent Returns Balance</div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Record the balance an agent returns after deducting their expenses from operating cash.</p>
     <form method="post" action="/cash/new">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <input type="hidden" name="kind" value="RETURN_OPERATING_CASH">
       <label>Amount Returned (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
-      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. balance returned">
+      <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. balance returned by John">
       <button class="ec-btn ec-t" type="submit">↩️ Record Return</button>
     </form>
   </div>
-
 </div>
 {% endif %}
 

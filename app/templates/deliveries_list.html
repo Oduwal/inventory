@@ -115,6 +115,7 @@
                     <th>Items</th>
                     <th>Status</th>
                     <th>Created</th>
+                    <th>Delivered</th>
                     <th>Open</th>
                 </tr>
             </thead>
@@ -152,7 +153,14 @@
                         {% endif %}
                     </td>
 
-                    <td>{{ d.created_at or "-" }}</td>
+                    <td>{{ d.created_at.strftime('%d %b %Y') if d.created_at else "-" }}</td>
+                    <td>
+                      {% if d.delivered_at %}
+                      <span style="color:#4ade80;font-size:12px;">{{ d.delivered_at.strftime('%d %b %Y') }}</span>
+                      {% else %}
+                      <span style="color:var(--muted);font-size:12px;">—</span>
+                      {% endif %}
+                    </td>
                     <td><a class="btnPrimary" href="/deliveries/{{ d.id }}">View</a></td>
                 </tr>
                 {% endfor %}
