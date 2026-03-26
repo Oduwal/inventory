@@ -1,7 +1,3 @@
-# --- Create deliveries_report.html ---
-$tplPath = ".\app\templates\deliveries_report.html"
-
-@'
 {% extends "base.html" %}
 {% block title %}Reports{% endblock %}
 {% block page_title %}Delivery Report (TXT){% endblock %}
@@ -47,4 +43,3 @@ $tplPath = ".\app\templates\deliveries_report.html"
     </div>
 </div>
 {% endblock %}
-'@ | Set-Content $tplPath -Encoding UTF8
