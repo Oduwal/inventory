@@ -171,84 +171,65 @@ const _catRows        = {{ cat_items_json | tojson if cat_items_json is defined 
 const _catLabels = [{% if cat_rows %}{% for cat, s in cat_rows %}"{{ cat }}"{%- if not loop.last %},{%- endif %}{% endfor %}{% endif %}];
 const _catValues = [{% if cat_rows %}{% for cat, s in cat_rows %}{{ s }}{%- if not loop.last %},{%- endif %}{% endfor %}{% endif %}];
 
-const _axisStyle = {
-  grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
-  ticks: { color: '#8a9bc4', font: { size: 11 } }
-};
-const _baseOpts = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: {
-    backgroundColor: 'rgba(13,24,41,0.95)',
-    borderColor: 'rgba(79,124,255,0.3)',
-    borderWidth: 1,
-    titleColor: '#e7eefc',
-    bodyColor: '#8a9bc4',
-    padding: 10,
-    cornerRadius: 8,
-  }},
-  scales: { x: _axisStyle, y: { ..._axisStyle, beginAtZero: true } },
-  animation: { duration: 600, easing: 'easeOutQuart' }
-};
-function _shortLabels(labels) {
-  return labels.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
-}
-function _barChart(id, labels, data, color) {
-  const el = document.getElementById(id); if (!el) return;
-  new Chart(el, { type: 'bar',
-    data: { labels, datasets: [{ data,
-      backgroundColor: color || 'rgba(79,124,255,0.6)',
-      borderColor: (color||'rgba(79,124,255,0.6)').replace('0.6','1'),
-      borderWidth: 1, borderRadius: 6, borderSkipped: false,
-      hoverBackgroundColor: (color||'rgba(79,124,255,0.6)').replace('0.6','0.85'),
-    }]},
-    options: { ..._baseOpts, scales: { x: _axisStyle,
-      y: { ..._axisStyle, beginAtZero: true,
-           ticks: { ..._axisStyle.ticks, stepSize: 1, precision: 0 } }}}
-  });
-}
-function _lineChart(id, labels, data, color, isCurrency) {
-  const el = document.getElementById(id); if (!el) return;
-  const c = color || '#4f7cff';
-  new Chart(el, { type: 'line',
-    data: { labels, datasets: [{ data,
-      borderColor: c, borderWidth: 2.5,
-      backgroundColor: c.includes('rgb') ? c.replace(/[\d.]+\)$/, '0.12)') : c + '20',
-      pointBackgroundColor: c, pointBorderColor: 'rgba(13,24,41,0.8)',
-      pointBorderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
-      fill: true, tension: 0.4,
-    }]},
-    options: { ..._baseOpts, scales: { x: _axisStyle,
-      y: { ..._axisStyle, beginAtZero: true, ticks: { ..._axisStyle.ticks,
-        callback: v => isCurrency ? '₦'+Number(v).toLocaleString() : v }}}}
-  });
-}
-
 function initDashCharts() {
-  function _shortLabels(labels) {
-    return labels.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
-  }
-  Chart.defaults.color = '#8a9bc4';
-  Chart.defaults.font.family = 'inherit';
-  const _axisStyle = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
-  const _baseOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } }, scales:{ x:_axisStyle, y:{..._axisStyle,beginAtZero:true} }, animation:{duration:600,easing:'easeOutQuart'} };
-  const sl = _shortLabels(_dashLabels);
-  _barChart('chartDashDeliveries', sl, _dashDeliveries, 'rgba(79,124,255,0.65)');
-  _lineChart('chartDashExpenses', sl, _dashExpenses, '#ef4444', true);
-  // Category chart (clickable)
-  const catEl = document.getElementById('catChart');
-  if (catEl && _catLabels.length) {
-    const catChart = new Chart(catEl, { type: 'bar',
-      data: { labels: _catLabels, datasets: [{ data: _catValues,
-        backgroundColor: 'rgba(139,92,246,0.65)', borderColor: 'rgba(139,92,246,1)',
-        borderWidth: 1, borderRadius: 6, borderSkipped: false }]},
-      options: { ..._baseOpts, onClick: (e, els) => {
-        if (!els.length) return;
-        const cat = _catLabels[els[0].index];
-        if (typeof showCatModal === 'function') showCatModal(cat, _catRows[cat]||[]);
-      }}
-    });
-    catEl.style.cursor = 'pointer';
+  try {
+    Chart.defaults.color = '#8a9bc4';
+    Chart.defaults.font.family = 'inherit';
+
+    var ax = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
+    var bo = {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } },
+      scales:{ x:ax, y:{...ax, beginAtZero:true} },
+      animation:{duration:600, easing:'easeOutQuart'}
+    };
+
+    var sl = _dashLabels.map(function(l){ var d=new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
+
+    // Deliveries bar chart
+    var el1 = document.getElementById('chartDashDeliveries');
+    if (el1) {
+      new Chart(el1, { type:'bar',
+        data:{ labels:sl, datasets:[{ data:_dashDeliveries,
+          backgroundColor:'rgba(79,124,255,0.65)', borderColor:'rgba(79,124,255,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo, scales:{ x:ax, y:{...ax, beginAtZero:true, ticks:{...ax.ticks, stepSize:1, precision:0}} }}
+      });
+    }
+
+    // Expenses line chart
+    var el2 = document.getElementById('chartDashExpenses');
+    if (el2) {
+      new Chart(el2, { type:'line',
+        data:{ labels:sl, datasets:[{ data:_dashExpenses,
+          borderColor:'#ef4444', borderWidth:2.5, backgroundColor:'rgba(239,68,68,0.12)',
+          pointBackgroundColor:'#ef4444', pointBorderColor:'rgba(13,24,41,0.8)',
+          pointBorderWidth:2, pointRadius:4, pointHoverRadius:6,
+          fill:true, tension:0.4 }]},
+        options:{...bo, scales:{ x:ax, y:{...ax, beginAtZero:true, ticks:{...ax.ticks,
+          callback: function(v){ return '₦'+Number(v).toLocaleString(); } }} }}
+      });
+    }
+
+    // Category bar chart (clickable)
+    var el3 = document.getElementById('catChart');
+    if (el3 && _catLabels.length) {
+      new Chart(el3, { type:'bar',
+        data:{ labels:_catLabels, datasets:[{ data:_catValues,
+          backgroundColor:'rgba(139,92,246,0.65)', borderColor:'rgba(139,92,246,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo, onClick: function(e, els){
+          if (!els.length) return;
+          var cat = _catLabels[els[0].index];
+          if (typeof showCatModal === 'function') showCatModal(cat, _catRows[cat]||[]);
+        }}
+      });
+      el3.style.cursor = 'pointer';
+    }
+
+    console.log('Dashboard charts initialized OK');
+  } catch(err) {
+    console.error('Dashboard chart init FAILED:', err);
   }
 }
 </script>
