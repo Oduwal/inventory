@@ -1142,14 +1142,14 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     for r in _raw_best_agents:
         cols = list(r)
         # Scan columns: find ints (delivery_count) and floats/numeric (collections)
-        # string cols are name fields
+        # string cols are name fields: username, full_name, branch_name
         str_cols, num_cols = [], []
         for c in cols:
             try:
                 num_cols.append(float(c or 0))
             except (ValueError, TypeError):
                 str_cols.append(str(c) if c is not None else "—")
-        agent_name = str_cols[0] if str_cols else "—"
+        agent_name = str_cols[1] if len(str_cols) > 1 and str_cols[1] != "—" else (str_cols[0] if str_cols else "—")
         delivery_count = int(num_cols[0]) if len(num_cols) > 0 else 0
         total_collections = num_cols[1] if len(num_cols) > 1 else 0.0
         best_agents.append({

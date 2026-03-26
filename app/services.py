@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timedelta
 from sqlalchemy import select, func, case, desc
@@ -381,9 +381,9 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     )
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 #  Supervisor analytics helpers
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 from .models import Branch, User  # noqa: E402  (already imported via models above)
 from sqlalchemy import case as sa_case
@@ -418,13 +418,13 @@ def supervisor_date_range(preset: str | None, start_str: str | None, end_str: st
 
 
 def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime | None):
-    """Per-branch delivery & cash summary — rewritten to use 3 queries total (was 12× branches)."""
+    """Per-branch delivery & cash summary â€” rewritten to use 3 queries total (was 12Ã— branches)."""
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
     branch_ids = [b.id for b in branches]
     if not branch_ids:
         return branches, []
 
-    # ── Query 1: delivery counts by branch and status in one shot ──
+    # â”€â”€ Query 1: delivery counts by branch and status in one shot â”€â”€
     from sqlalchemy import case as sa_case
     del_q = (
         select(
@@ -448,7 +448,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
             "failed": int(row.failed or 0),
         }
 
-    # ── Query 2: delivery collections (line_amount sum) by branch ──
+    # â”€â”€ Query 2: delivery collections (line_amount sum) by branch â”€â”€
     col_q = (
         select(Delivery.branch_id, func.coalesce(func.sum(DeliveryItem.line_amount), 0).label("total"))
         .select_from(Delivery)
@@ -461,7 +461,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     if end:   col_q = col_q.where(Delivery.created_at < end)
     col_map: dict[int, float] = {row.branch_id: float(row.total) for row in db.execute(col_q).all()}
 
-    # ── Query 3: all cash kinds by branch in one shot ──
+    # â”€â”€ Query 3: all cash kinds by branch in one shot â”€â”€
     cash_q = (
         select(
             CashEntry.branch_id,
@@ -478,7 +478,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     for row in db.execute(cash_q).all():
         cash_map.setdefault(row.branch_id, {})[row.kind] = float(row.total)
 
-    # ── Assemble rows ──
+    # â”€â”€ Assemble rows â”€â”€
     rows = []
     for branch in branches:
         d = del_map.get(branch.id, {})
@@ -540,7 +540,7 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
             User.username.label("username"),
             func.coalesce(User.full_name, User.username).label("full_name"),
             Branch.name.label("branch_name"),
-            func.count(Delivery.id).label("delivered"),
+            func.count(func.distinct(Delivery.id)).label("delivered"),
             func.coalesce(
                 func.sum(DeliveryItem.line_amount), 0
             ).label("collections"),
@@ -551,7 +551,7 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
         .where(Delivery.status == "DELIVERED")
         .group_by(User.id, User.username, User.full_name, Branch.name)
-        .order_by(func.count(Delivery.id).desc())
+        .order_by(func.count(func.distinct(Delivery.id)).desc())
         .limit(limit)
     )
     if start:
@@ -562,7 +562,7 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
 
 
 def supervisor_daily_deliveries(db: Session, start: datetime | None, end: datetime | None):
-    """Daily delivered count across all branches — for the chart."""
+    """Daily delivered count across all branches â€” for the chart."""
     day_col = func.date(Delivery.created_at).label("day")
     q = (
         select(day_col, func.count(Delivery.id).label("cnt"))
