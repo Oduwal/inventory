@@ -3367,35 +3367,30 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         })
 
     else:  # written_off
-        # Clamp qty_resolved to current shortfall
+        # Write-off means accepting the loss for the current shortfall (or entered qty).
+        # We do NOT increase qty_returned — that stays as "physically returned" only.
+        # The written_off_rows query uses (di.quantity - srv.qty_returned) to show qty_lost.
         qty_to_writeoff = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
-        # The written-off units are truly lost — increase qty_returned to account for them
-        # (they won't create an IN transaction, they're just marked as accounted for)
-        new_total_accounted = qty_already_returned + qty_to_writeoff
-        remaining_shortfall = max(0, di.quantity - new_total_accounted)
-        is_fully_resolved = remaining_shortfall == 0
 
-        if is_fully_resolved:
-            db.execute(text(
-                "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-                "qty_returned=:newqty, resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
-            ), {"newqty": new_total_accounted, "uid": user.id, "vid": vet_id})
-        else:
-            # Partial write-off — record what was written off but keep open for remaining
-            db.execute(text(
-                "UPDATE stock_return_vettings SET qty_returned=:newqty WHERE id=:vid"
-            ), {"newqty": new_total_accounted, "vid": vet_id})
+        # Always resolve fully on write-off — the entered qty is what's being written off,
+        # the rest (qty_already_returned) was already physically returned.
+        db.execute(text(
+            "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
+            "resolved_at=NOW(), resolved_by=:uid, "
+            "resolve_note=:note WHERE id=:vid"
+        ), {"uid": user.id, "vid": vet_id,
+            "note": f"Written off {qty_to_writeoff} unit(s) as lost"})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
-                  f"delivery_id={delivery_id} item={item.name} qty_written_off={qty_to_writeoff} remaining={remaining_shortfall}",
+                  f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
         return JSONResponse({
             "ok": True,
             "item_name": item.name,
             "qty_lost": qty_to_writeoff,
-            "remaining_shortfall": remaining_shortfall,
-            "is_fully_resolved": is_fully_resolved,
+            "remaining_shortfall": 0,
+            "is_fully_resolved": True,
             "action": "written_off",
         })
 
