@@ -162,162 +162,93 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
+const _dashLabels     = {{ chart_labels | tojson }};
+const _dashDeliveries = {{ chart_deliveries | tojson }};
+const _dashExpenses   = {{ chart_expenses | tojson }};
+const _catRows        = {{ cat_items_json | tojson }};
+const _catLabels = [{% if cat_rows %}{% for cat, s in cat_rows %}"{{ cat }}"{%- if not loop.last %},{%- endif %}{% endfor %}{% endif %}];
+const _catValues = [{% if cat_rows %}{% for cat, s in cat_rows %}{{ s }}{%- if not loop.last %},{%- endif %}{% endfor %}{% endif %}];
 
-/* ── Pure Canvas Charts (no CDN) ─────────────────────────────────────── */
-function drawBarChart(canvas, labels, values, color) {
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 400, H = canvas.offsetHeight || 190;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  const pad = {t:14, r:8, b:38, l:42};
-  const cw = W - pad.l - pad.r, ch = H - pad.t - pad.b;
-  const max = Math.max(...values, 1);
-
-  // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.t + ch - (i / 4) * ch;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cw, y); ctx.stroke();
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
-    ctx.fillText(Math.round(max * i / 4), pad.l - 4, y + 3);
-  }
-  // Bars
-  const bw = Math.max(4, cw / labels.length * 0.6);
-  const gap = cw / labels.length;
-  labels.forEach((lbl, i) => {
-    const x = pad.l + i * gap + gap / 2;
-    const bh = (values[i] / max) * ch;
-    const y = pad.t + ch - bh;
-    ctx.fillStyle = color || 'rgba(79,124,255,0.7)';
-    ctx.beginPath();
-    ctx.roundRect(x - bw/2, y, bw, bh, 3);
-    ctx.fill();
-    // Label
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(lbl, x, H - 6);
+Chart.defaults.color = '#8a9bc4';
+Chart.defaults.font.family = 'inherit';
+Chart.defaults.plugins.legend.display = false;
+const _axisStyle = {
+  grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
+  ticks: { color: '#8a9bc4', font: { size: 11 } }
+};
+const _baseOpts = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { display: false }, tooltip: {
+    backgroundColor: 'rgba(13,24,41,0.95)',
+    borderColor: 'rgba(79,124,255,0.3)',
+    borderWidth: 1,
+    titleColor: '#e7eefc',
+    bodyColor: '#8a9bc4',
+    padding: 10,
+    cornerRadius: 8,
+  }},
+  scales: { x: _axisStyle, y: { ..._axisStyle, beginAtZero: true } },
+  animation: { duration: 600, easing: 'easeOutQuart' }
+};
+function _shortLabels(labels) {
+  return labels.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
+}
+function _barChart(id, labels, data, color) {
+  const el = document.getElementById(id); if (!el) return;
+  new Chart(el, { type: 'bar',
+    data: { labels, datasets: [{ data,
+      backgroundColor: color || 'rgba(79,124,255,0.6)',
+      borderColor: (color||'rgba(79,124,255,0.6)').replace('0.6','1'),
+      borderWidth: 1, borderRadius: 6, borderSkipped: false,
+      hoverBackgroundColor: (color||'rgba(79,124,255,0.6)').replace('0.6','0.85'),
+    }]},
+    options: { ..._baseOpts, scales: { x: _axisStyle,
+      y: { ..._axisStyle, beginAtZero: true,
+           ticks: { ..._axisStyle.ticks, stepSize: 1, precision: 0 } }}}
   });
 }
-
-function drawLineChart(canvas, labels, values, color, currency) {
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 400, H = canvas.offsetHeight || 190;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  const pad = {t:14, r:8, b:38, l: currency ? 64 : 42};
-  const cw = W - pad.l - pad.r, ch = H - pad.t - pad.b;
-  const max = Math.max(...values, 1);
-
-  // Grid + Y labels
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.t + ch - (i / 4) * ch;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cw, y); ctx.stroke();
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
-    const val = max * i / 4;
-    const lbl = currency ? '₦' + (val >= 1000 ? (val/1000).toFixed(0)+'k' : val.toFixed(0)) : Math.round(val).toString();
-    ctx.fillText(lbl, pad.l - 4, y + 3);
-  }
-  // Fill
-  if (values.length > 1) {
-    ctx.beginPath();
-    values.forEach((v, i) => {
-      const x = pad.l + (i / (values.length-1)) * cw;
-      const y = pad.t + ch - (v / max) * ch;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    ctx.lineTo(pad.l + cw, pad.t + ch);
-    ctx.lineTo(pad.l, pad.t + ch);
-    ctx.closePath();
-    ctx.fillStyle = color ? color.replace(')',',0.12)').replace('rgb(','rgba(') : 'rgba(239,68,68,0.12)';
-    ctx.fill();
-    // Line
-    ctx.beginPath();
-    values.forEach((v, i) => {
-      const x = pad.l + (i / (values.length-1)) * cw;
-      const y = pad.t + ch - (v / max) * ch;
-      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    });
-    ctx.strokeStyle = color || '#ef4444'; ctx.lineWidth = 2; ctx.stroke();
-    // Dots
-    values.forEach((v, i) => {
-      const x = pad.l + (i / (values.length-1)) * cw;
-      const y = pad.t + ch - (v / max) * ch;
-      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2);
-      ctx.fillStyle = color || '#ef4444'; ctx.fill();
-    });
-  }
-  // X labels
-  labels.forEach((lbl, i) => {
-    const x = pad.l + (labels.length > 1 ? (i / (labels.length-1)) * cw : cw/2);
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-    if (i % Math.ceil(labels.length / 7) === 0 || i === labels.length - 1)
-      ctx.fillText(lbl, x, H - 6);
+function _lineChart(id, labels, data, color, isCurrency) {
+  const el = document.getElementById(id); if (!el) return;
+  const c = color || '#4f7cff';
+  new Chart(el, { type: 'line',
+    data: { labels, datasets: [{ data,
+      borderColor: c, borderWidth: 2.5,
+      backgroundColor: (function(){ 
+        // will be set via gradient after creation
+        return c.replace('rgb','rgba').replace(')',',0.15)');
+      })(),
+      pointBackgroundColor: c, pointBorderColor: 'rgba(13,24,41,0.8)',
+      pointBorderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
+      fill: true, tension: 0.4,
+    }]},
+    options: { ..._baseOpts, scales: { x: _axisStyle,
+      y: { ..._axisStyle, beginAtZero: true, ticks: { ..._axisStyle.ticks,
+        callback: v => isCurrency ? '₦'+Number(v).toLocaleString() : v }}}}
   });
 }
-
-function drawBarChartClickable(canvas, labels, values, color, onClick) {
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.offsetWidth || 400, H = canvas.offsetHeight || 190;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  const pad = {t:14, r:8, b:38, l:42};
-  const cw = W - pad.l - pad.r, ch = H - pad.t - pad.b;
-  const max = Math.max(...values, 1);
-  const gap = cw / labels.length;
-  const bw = Math.max(4, gap * 0.6);
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.t + ch - (i / 4) * ch;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + cw, y); ctx.stroke();
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
-    ctx.fillText(Math.round(max * i / 4), pad.l - 4, y + 3);
-  }
-  labels.forEach((lbl, i) => {
-    const x = pad.l + i * gap + gap / 2;
-    const bh = (values[i] / max) * ch;
-    const y = pad.t + ch - bh;
-    ctx.fillStyle = color || 'rgba(139,92,246,0.7)';
-    ctx.beginPath(); ctx.roundRect(x - bw/2, y, bw, bh, 3); ctx.fill();
-    ctx.fillStyle = '#8a9bc4'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(lbl, x, H - 6);
-  });
-  canvas.style.cursor = 'pointer';
-  canvas.onclick = function(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    for (let i = 0; i < labels.length; i++) {
-      const x = pad.l + i * gap + gap / 2;
-      if (Math.abs(mx - x) < gap / 2) { onClick(i, labels[i]); break; }
-    }
-  };
-}
-
-const _dashChartLabels = {{ chart_labels | tojson }};
-const _dashDeliveries  = {{ chart_deliveries | tojson }};
-const _dashExpenses    = {{ chart_expenses | tojson }};
-const _catRows         = {{ cat_items_json | tojson }};
-const _catLabels = [{% if cat_rows %}{% for cat, s in cat_rows %}"{{ cat }}"{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
-const _catValues = [{% if cat_rows %}{% for cat, s in cat_rows %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
 
 function initDashCharts() {
-  const sl = (() => { const _l = _dashChartLabels; return _l.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); }); })();
+  const sl = _shortLabels(_dashLabels);
+  _barChart('chartDashDeliveries', sl, _dashDeliveries, 'rgba(79,124,255,0.65)');
+  _lineChart('chartDashExpenses', sl, _dashExpenses, '#ef4444', true);
   // Category chart (clickable)
-  drawBarChartClickable(document.getElementById('catChart'), _catLabels, _catValues, 'rgba(139,92,246,0.7)',
-    function(i, cat) { if(typeof showCatModal==='function') showCatModal(cat, _catRows[cat]||[]); });
-  {% if chart_labels %}
-  // Deliveries bar chart
-  drawBarChart(document.getElementById('chartDashDeliveries'), sl, _dashDeliveries, 'rgba(79,124,255,0.7)');
-  // Expenses line chart
-  drawLineChart(document.getElementById('chartDashExpenses'), sl, _dashExpenses, '#ef4444', true);
-  {% endif %}
+  const catEl = document.getElementById('catChart');
+  if (catEl && _catLabels.length) {
+    const catChart = new Chart(catEl, { type: 'bar',
+      data: { labels: _catLabels, datasets: [{ data: _catValues,
+        backgroundColor: 'rgba(139,92,246,0.65)', borderColor: 'rgba(139,92,246,1)',
+        borderWidth: 1, borderRadius: 6, borderSkipped: false }]},
+      options: { ..._baseOpts, onClick: (e, els) => {
+        if (!els.length) return;
+        const cat = _catLabels[els[0].index];
+        if (typeof showCatModal === 'function') showCatModal(cat, _catRows[cat]||[]);
+      }}
+    });
+    catEl.style.cursor = 'pointer';
+  }
 }
 window.addEventListener('load', initDashCharts);
 </script>
