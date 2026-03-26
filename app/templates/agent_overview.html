@@ -37,11 +37,13 @@
     <div style="font-size:26px;font-weight:800;color:#fbbf24;">{{ pending_c }}</div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px;">Pending</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:16px;">
+  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:16px;cursor:pointer;"
+    onclick="openDeliveryModal('DELIVERED')">
     <div style="font-size:20px;font-weight:800;color:#4ade80;">₦{{ '{:,.0f}'.format(total_collected) }}</div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px;">Total Collected</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:16px;">
+  <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:16px;cursor:pointer;"
+    onclick="openExpenseModal()">
     <div style="font-size:20px;font-weight:800;color:#f87171;">₦{{ '{:,.0f}'.format(total_expenses) }}</div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px;">Total Expenses</div>
   </div>
@@ -64,9 +66,10 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
+  onload="initCharts()" onerror="console.warn('Chart.js failed to load')"></script>
 <script>
-(function(){
+function initCharts(){
   const labels = {{ chart_labels | tojson }};
   const shortLabels = labels.map(l => {
     const d = new Date(l + 'T00:00:00');
@@ -109,7 +112,7 @@
         callback: v => '₦' + Number(v).toLocaleString() }}
     }}
   });
-})();
+}
 </script>
 {% endif %}
 
@@ -186,6 +189,13 @@ function openDeliveryModal(filter) {
 
 function closeDeliveryModal() {
   document.getElementById('delivery-modal').style.display = 'none';
+}
+
+function openExpenseModal() {
+  document.getElementById('modal-title').textContent = '💸 My Expenses';
+  const body = document.getElementById('modal-body');
+  body.innerHTML = '<div style="text-align:center;padding:20px;"><a href="/cash" style="color:var(--accent);font-size:14px;">View full expense history →</a></div>';
+  document.getElementById('delivery-modal').style.display = 'flex';
 }
 </script>
 

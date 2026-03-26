@@ -162,8 +162,10 @@
     </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
+  onload="initDashCharts()" onerror="console.warn('Chart CDN failed')"></script>
 <script>
+function initDashCharts() {
     // Category chart
     const labels = [
       {% if cat_rows %}
@@ -243,6 +245,7 @@
       });
     })();
     {% endif %}
+} // end initDashCharts
 </script>
 
 

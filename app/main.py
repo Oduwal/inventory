@@ -3536,6 +3536,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
                 "qty_back":   qty_back if vet else 0,
                 "shortfall":  shortfall if vet else di.quantity,
                 "status":     status_flag,   # unvetted | shortfall | resolved
+                "vetted":     status_flag in ("resolved", "shortfall"),  # True if any vetting record exists
+                "has_shortfall": status_flag == "shortfall",
                 "resolve_action": vet["resolve_action"] if (vet and vet.get("resolved")) else None,
             })
 
