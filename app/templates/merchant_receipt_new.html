@@ -121,6 +121,8 @@
 </form>
 
 <script>
+const isReturnMode = {% if mode == 'return' %}true{% else %}false{% endif %};
+
 const items = [
   {% for item, stock in items %}
   { id: {{ item.id }}, name: {{ item.name | tojson }}, stock: {{ stock | int }}, unit: {{ (item.unit or '') | tojson }} },
@@ -139,9 +141,10 @@ function addRow() {
   div.className = 'item-row';
   div.id = 'row_' + idx;
 
-  const opts = items.map(it =>
-    `<option value="${it.id}">${it.name}${it.unit ? ' ('+it.unit+')' : ''} — stock: ${it.stock}</option>`
-  ).join('');
+  const opts = items.map(it => {
+    const oos = isReturnMode && it.stock <= 0;
+    return `<option value="${it.id}" ${oos ? 'disabled style="color:#f87171;"' : ''}>${it.name}${it.unit ? ' ('+it.unit+')' : ''} — stock: ${it.stock}${oos ? ' — OUT OF STOCK' : ''}</option>`;
+  }).join('');
 
   div.innerHTML = `
     <select name="item_ids" required onchange="checkSubmit()">

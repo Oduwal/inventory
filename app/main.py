@@ -2808,21 +2808,20 @@ async def review_adjustment(
         ).fetchall()
         for ai in adj_items:
             if ai.remove_item:
-                # Return stock by creating an IN transaction, then remove the delivery item
+                # Item was refused by customer — still physically with the agent.
+                # Zero out the delivery item (keep it for vetting FK) and create vetting record.
                 di = db.get(DeliveryItem, ai.delivery_item_id)
-                if di:
-                    item = db.get(Item, di.item_id)
-                    if item and di.quantity > 0:
-                        db.add(Transaction(
-                            branch_id=d.branch_id,
-                            item_id=di.item_id,
-                            type="IN",
-                            quantity=di.quantity,
-                            note=f"Returned — adjustment approved for delivery #{d.id}",
-                            reference=f"adj-approval-{d.id}",
-                            delivery_id=d.id,
-                        ))
-                    db.delete(di)
+                if di and di.quantity > 0:
+                    db.execute(text(
+                        "INSERT INTO stock_return_vettings "
+                        "(delivery_id, delivery_item_id, vetted_by, qty_returned, created_at, resolved) "
+                        "VALUES (:did, :diid, NULL, 0, NOW(), FALSE)"
+                    ), {"did": d.id, "diid": di.id})
+                    # Zero out amount but keep the item record for vetting reference
+                    db.execute(
+                        text("UPDATE delivery_items SET line_amount=0 WHERE id=:did"),
+                        {"did": ai.delivery_item_id}
+                    )
             else:
                 db.execute(
                     text("UPDATE delivery_items SET line_amount=:amt WHERE id=:did"),
@@ -3576,10 +3575,27 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         .order_by(Delivery.created_at.asc())
     ).scalars().all()
 
+    # Also include any delivery that has unresolved vetting records
+    # (e.g. from adjustment-removed items where delivery is still OUT_FOR_DELIVERY)
+    existing_ids = {d.id for d in unsuccessful + overdue}
+    unresolved_delivery_ids = db.execute(text(
+        "SELECT DISTINCT srv.delivery_id FROM stock_return_vettings srv "
+        "JOIN deliveries d ON d.id = srv.delivery_id "
+        "WHERE (srv.resolved IS NULL OR srv.resolved = FALSE) "
+        "AND d.branch_id = :bid AND d.status NOT IN ('FAILED','RETURNED','ADJUSTMENT_PENDING')"
+    ), {"bid": branch_id}).fetchall()
+    extra_delivery_ids = [r[0] for r in unresolved_delivery_ids if r[0] not in existing_ids]
+    if extra_delivery_ids:
+        extra_deliveries = db.execute(
+            select(Delivery).where(Delivery.id.in_(extra_delivery_ids))
+        ).scalars().all()
+    else:
+        extra_deliveries = []
+
     # Build return rows
-    all_return_deliveries = {d.id: d for d in unsuccessful + overdue}
+    all_return_deliveries = {d.id: d for d in unsuccessful + overdue + extra_deliveries}
     return_rows = []
-    for d in list(unsuccessful) + list(overdue):
+    for d in list(unsuccessful) + list(overdue) + list(extra_deliveries):
         if d.id in {r["delivery_id"] for r in return_rows}:
             continue
         d_items = db.execute(
@@ -3673,6 +3689,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         JOIN users u_agent      ON u_agent.id = asa.agent_id
         LEFT JOIN users u_assigner ON u_assigner.id = asa.assigned_by
         WHERE asa.branch_id = :bid AND asa.returned = FALSE
+          AND (asa.delivery_id IS NULL)
         ORDER BY asa.assigned_at DESC
         LIMIT 100
     """), {"bid": branch_id}).fetchall()

@@ -66,8 +66,9 @@
             <select name="item_ids" required onchange="updateStock(0)" style="min-width:200px;">
               <option value="">Select item...</option>
               {% for row in items %}
-              <option value="{{ row.Item.id }}" data-stock="{{ row.stock }}">
-                {{ row.Item.name }} — {{ row.stock }} in stock
+              <option value="{{ row.Item.id }}" data-stock="{{ row.stock }}"
+                {% if row.stock <= 0 %}disabled style="color:#f87171;"{% endif %}>
+                {{ row.Item.name }} — {{ row.stock }} in stock{% if row.stock <= 0 %} — OUT OF STOCK{% endif %}
               </option>
               {% endfor %}
             </select>
@@ -87,7 +88,7 @@
 </form>
 
 <script>
-const itemOptions = `{% for row in items %}<option value="{{ row.Item.id }}" data-stock="{{ row.stock }}">{{ row.Item.name }} — {{ row.stock }} in stock</option>{% endfor %}`;
+const itemOptions = `{% for row in items %}<option value="{{ row.Item.id }}" data-stock="{{ row.stock }}" {% if row.stock <= 0 %}disabled style="color:#f87171;"{% endif %}>{{ row.Item.name }} — {{ row.stock }} in stock{% if row.stock <= 0 %} — OUT OF STOCK{% endif %}</option>{% endfor %}`;
 let rowCount = 1;
 function updateStock(index) {
   const sel = document.querySelector(`#row-${index} select`);
