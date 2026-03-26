@@ -469,7 +469,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
             func.coalesce(func.sum(CashEntry.amount), 0).label("total"),
         )
         .where(CashEntry.branch_id.in_(branch_ids))
-        .where(CashEntry.kind.in_(["COLLECTION","EXPENSE","OFFICE_EXPENSE","OPERATING_CASH","RETURN_OPERATING_CASH"]))
+        .where(CashEntry.kind.in_(["COLLECTION","EXPENSE","OFFICE_EXPENSE","OPERATING_CASH","RETURN_OPERATING_CASH","COLLECTION_EXPENSE","CASH_PAYMENT","TRANSFER_PAYMENT"]))
         .group_by(CashEntry.branch_id, CashEntry.kind)
     )
     if start: cash_q = cash_q.where(CashEntry.created_at >= start)
@@ -484,8 +484,8 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
         d = del_map.get(branch.id, {})
         c = cash_map.get(branch.id, {})
         delivery_collections = col_map.get(branch.id, 0.0)
-        extra_col       = c.get("COLLECTION",            0.0)
-        agent_expenses  = c.get("EXPENSE",               0.0)
+        extra_col       = c.get("COLLECTION", 0.0) + c.get("CASH_PAYMENT", 0.0) + c.get("TRANSFER_PAYMENT", 0.0)
+        agent_expenses  = c.get("EXPENSE", 0.0) + c.get("COLLECTION_EXPENSE", 0.0)
         office_expenses = c.get("OFFICE_EXPENSE",        0.0)
         operating_cash  = c.get("OPERATING_CASH",        0.0)
         returned_op     = c.get("RETURN_OPERATING_CASH", 0.0)
@@ -534,14 +534,16 @@ def supervisor_top_items(db: Session, start: datetime | None, end: datetime | No
 
 
 def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | None, limit: int = 8):
-    """Top agents by number of DELIVERED deliveries (distinct delivery count)."""
+    """Top agents by number of DELIVERED deliveries."""
     q = (
         select(
             User.username.label("username"),
             func.coalesce(User.full_name, User.username).label("full_name"),
             Branch.name.label("branch_name"),
-            func.count(func.distinct(Delivery.id)).label("delivered"),
-            func.coalesce(func.sum(DeliveryItem.line_amount), 0).label("collections"),
+            func.count(Delivery.id).label("delivered"),
+            func.coalesce(
+                func.sum(DeliveryItem.line_amount), 0
+            ).label("collections"),
         )
         .select_from(Delivery)
         .join(User, User.id == Delivery.agent_id)
@@ -549,19 +551,19 @@ def supervisor_best_agents(db: Session, start: datetime | None, end: datetime | 
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
         .where(Delivery.status == "DELIVERED")
         .group_by(User.id, User.username, User.full_name, Branch.name)
-        .order_by(func.count(func.distinct(Delivery.id)).desc())
+        .order_by(func.count(Delivery.id).desc())
         .limit(limit)
     )
     if start:
-        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) >= start)
+        q = q.where(Delivery.created_at >= start)
     if end:
-        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) < end)
+        q = q.where(Delivery.created_at < end)
     return db.execute(q).all()
 
 
 def supervisor_daily_deliveries(db: Session, start: datetime | None, end: datetime | None):
-    """Daily delivered count across all branches — keyed by delivered_at date."""
-    day_col = func.date(func.coalesce(Delivery.delivered_at, Delivery.created_at)).label("day")
+    """Daily delivered count across all branches — for the chart."""
+    day_col = func.date(Delivery.created_at).label("day")
     q = (
         select(day_col, func.count(Delivery.id).label("cnt"))
         .where(Delivery.status == "DELIVERED")
@@ -569,7 +571,7 @@ def supervisor_daily_deliveries(db: Session, start: datetime | None, end: dateti
         .order_by(day_col.asc())
     )
     if start:
-        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) >= start)
+        q = q.where(Delivery.created_at >= start)
     if end:
-        q = q.where(func.coalesce(Delivery.delivered_at, Delivery.created_at) < end)
+        q = q.where(Delivery.created_at < end)
     return db.execute(q).all()

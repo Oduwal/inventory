@@ -150,88 +150,43 @@
 
 
 <script>
+const _supLabels    = {{ chart_labels | tojson }};
+const _supDeliveries = {{ chart_data | tojson }};
+const _supExpenses  = {{ chart_expenses | tojson }};
 function initSupCharts(){
   const axisStyle = {
-    grid: { color: 'rgba(255,255,255,0.04)' },
-    ticks: { color: '#8a9bc4', font: { size: 10 } }
+    grid:{color:'rgba(255,255,255,0.04)'},
+    ticks:{color:'#8a9bc4', font:{size:10}}
   };
   const baseOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: { x: axisStyle, y: { ...axisStyle, beginAtZero: true } }
+    responsive:true, maintainAspectRatio:false,
+    plugins:{legend:{display:false}},
+    scales:{x:axisStyle, y:{...axisStyle,beginAtZero:true}}
   };
-
-  // Shorten date labels e.g. "2026-03-11" → "3/11"
-  const rawLabels = {{ chart_labels | tojson }};
-  const shortLabels = rawLabels.map(l => {
-    const d = new Date(l + 'T00:00:00');
-    return (d.getMonth()+1) + '/' + d.getDate();
+  const shortLabels = _supLabels.map(l => {
+    const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate();
   });
-
-  // Daily deliveries chart
-  const elDel = document.getElementById('chartDeliveries');
-  if(elDel) new Chart(elDel, {
-    type: 'bar',
-    data: { labels: shortLabels, datasets: [{ data: {{ chart_data | tojson }},
-      backgroundColor: 'rgba(79,124,255,0.55)', borderColor: '#4f7cff',
-      borderWidth: 1, borderRadius: 4 }] },
-    options: { ...baseOpts, scales: { x: axisStyle,
-      y: { ...axisStyle, beginAtZero: true, ticks: { ...axisStyle.ticks, stepSize: 1 } } } }
+  const elD = document.getElementById('chartDeliveries');
+  if(elD && shortLabels.length) new Chart(elD, { type:'bar',
+    data:{ labels:shortLabels, datasets:[{ data:_supDeliveries,
+      backgroundColor:'rgba(79,124,255,0.55)', borderColor:'#4f7cff',
+      borderWidth:1, borderRadius:4 }] },
+    options:{ ...baseOpts, scales:{ x:axisStyle,
+      y:{...axisStyle,beginAtZero:true,ticks:{color:'#8a9bc4',font:{size:10},stepSize:1}} }}
   });
-
-  // Daily expenses chart — identical config to admin dashboard
-  const elExp = document.getElementById('chartExpenses');
-  if(elExp) new Chart(elExp, {
-    type: 'line',
-    data: { labels: shortLabels, datasets: [{ data: {{ chart_expenses | tojson }},
-      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.12)',
-      borderWidth: 2, pointBackgroundColor: '#ef4444',
-      pointRadius: 3, fill: true, tension: 0.35 }] },
-    options: { ...baseOpts, scales: { x: axisStyle,
-      y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
-        callback: v => '₦' + Number(v).toLocaleString() } } } }
-  });
-
-  // Category chart
-  const catLabels = [{% if all_cat_rows %}{% for c,s in all_cat_rows %}"{{ c }}"{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
-  const catValues = [{% if all_cat_rows %}{% for c,s in all_cat_rows %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}{% endif %}];
-  const catItemsData = {{ all_cat_items_json | tojson }};
-  const catCtx = document.getElementById('catChart');
-  if(catCtx && catLabels.length) {
-    new Chart(catCtx, {
-      type: 'bar',
-      data: { labels: catLabels, datasets: [{ data: catValues,
-        backgroundColor: 'rgba(79,124,255,0.6)', borderRadius: 4 }] },
-      options: { ...baseOpts, scales: {
-        x: { ...axisStyle }, y: { ...axisStyle, beginAtZero: true } },
-        onClick: (e, els) => {
-          if(!els.length) return;
-          const cat = catLabels[els[0].index];
-          showCatModal(cat, catItemsData[cat] || []);
-        }
-      }
-    });
-    catCtx.style.cursor = 'pointer';
-  }
-
-  // Remittance by branch chart
-  const branchLabels  = [{% for r in rows %}"{{ r.branch.name if r.branch else r.branch_name }}"{% if not loop.last %},{% endif %}{% endfor %}];
-  const branchRemit   = [{% for r in rows %}{{ r.remittance }}{% if not loop.last %},{% endif %}{% endfor %}];
-  const branchColors  = ['rgba(139,92,246,0.7)','rgba(79,124,255,0.7)','rgba(34,197,94,0.7)','rgba(245,158,11,0.7)','rgba(20,184,166,0.7)'];
-  const remitCtx = document.getElementById('remitChart');
-  if(remitCtx && branchLabels.length) new Chart(remitCtx, {
-    type: 'bar',
-    data: { labels: branchLabels, datasets: [{ data: branchRemit,
-      backgroundColor: branchColors.slice(0, branchLabels.length), borderRadius: 6 }] },
-    options: { ...baseOpts, scales: {
-      x: axisStyle,
-      y: { ...axisStyle, beginAtZero: true, ticks: { color: '#8a9bc4', font: { size: 10 },
-        callback: v => '₦' + Number(v).toLocaleString() } } } }
+  const elE = document.getElementById('chartExpenses');
+  if(elE && shortLabels.length) new Chart(elE, { type:'line',
+    data:{ labels:shortLabels, datasets:[{ data:_supExpenses,
+      borderColor:'#ef4444', backgroundColor:'rgba(239,68,68,0.12)',
+      borderWidth:2, pointBackgroundColor:'#ef4444', pointRadius:3, fill:true, tension:0.35 }] },
+    options:{ ...baseOpts, scales:{ x:axisStyle,
+      y:{...axisStyle,beginAtZero:true,ticks:{color:'#8a9bc4',font:{size:10},
+        callback:v=>'₦'+Number(v).toLocaleString()}} }}
   });
 }
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
-  onload="initSupCharts()" onerror="console.warn('Chart CDN failed')"></script>
+  onload="initSupCharts()"></script>
 
 <!-- Category drill-down modal -->
 <div id="cat-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
