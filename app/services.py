@@ -483,7 +483,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     for branch in branches:
         d = del_map.get(branch.id, {})
         c = cash_map.get(branch.id, {})
-        delivery_collections = col_map.get(branch.id, 0.0)
+        delivery_collections = 0.0  # disabled: CashEntry COLLECTION already captures this
         extra_col       = c.get("COLLECTION", 0.0) + c.get("CASH_PAYMENT", 0.0) + c.get("TRANSFER_PAYMENT", 0.0)
         agent_expenses  = c.get("EXPENSE", 0.0) + c.get("COLLECTION_EXPENSE", 0.0)
         office_expenses = c.get("OFFICE_EXPENSE",        0.0)
