@@ -493,7 +493,7 @@ async function resolveShortfall(deliveryId, diId, btn, action) {
   const qty = parseInt(qtyInput ? qtyInput.value : 0) || 0;
   const msg = action === 'returned'
     ? 'Confirm agent returned ' + qty + ' unit(s)?'
-    : 'Write off missing stock? This cannot be undone.';
+    : 'Write off ' + qty + ' unit(s) as lost? This cannot be undone.';
   if (!confirm(msg)) return;
   btn.disabled = true; btn.textContent = '⏳';
   // Disable ALL buttons in this row to prevent double-click
