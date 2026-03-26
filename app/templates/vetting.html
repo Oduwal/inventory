@@ -68,7 +68,13 @@
             <td style="font-weight:600;">{{ r.item_name }}</td>
             <td style="text-align:right;color:#4ade80;">{{ r.qty_returned }}</td>
             <td style="text-align:right;font-weight:700;color:#f87171;">{{ r.qty_lost }}</td>
-            <td><a href="/deliveries/{{ r.delivery_id }}" style="color:var(--accent);">#{{ r.delivery_id }} — {{ r.customer_name }}</a></td>
+            <td>
+              {% if r.source == 'assignment' %}
+              <span class="badge b-blue" style="font-size:11px;">📦 Assigned Stock</span>
+              {% else %}
+              <a href="/deliveries/{{ r.delivery_id }}" style="color:var(--accent);">#{{ r.delivery_id }} — {{ r.customer_name }}</a>
+              {% endif %}
+            </td>
             <td style="color:var(--muted);font-size:12px;">{{ r.agent_name or r.agent_username or '—' }}</td>
             <td style="color:var(--muted);font-size:12px;">{{ r.resolved_by_name or r.resolved_by_username or '—' }}</td>
           </tr>
@@ -699,7 +705,10 @@ async function confirmAgent(agentId, dateStr, btn) {
             <select class="assign-item-sel" style="margin:0;">
               <option value="">— Select item —</option>
               {% for row in assign_items %}
-              <option value="{{ row.Item.id }}">{{ row.Item.name }} ({{ row.stock }} in stock)</option>
+              <option value="{{ row.Item.id }}" data-stock="{{ row.stock }}"
+                {% if row.stock <= 0 %}disabled style="color:#f87171;" data-oos="1"{% endif %}>
+                {{ row.Item.name }} ({{ row.stock }} in stock){% if row.stock <= 0 %} — OUT OF STOCK{% endif %}
+              </option>
               {% endfor %}
             </select>
           </div>
@@ -749,13 +758,15 @@ async function confirmAgent(agentId, dateStr, btn) {
           {% if r[2] %}<div style="font-size:11px;color:var(--muted);margin-top:2px;">Note: {{ r[2] }}</div>{% endif %}
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    </div>
+    <div style="padding:12px 16px;">
+      <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <div style="display:flex;align-items:center;gap:5px;">
           <label style="font-size:11px;color:var(--muted);margin:0;">Qty returned:</label>
-          <input type="number" id="return-assign-qty-{{ r[0] }}" value="{{ r[1] - r[4] }}" min="0" max="{{ r[1] }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
+          <input type="number" id="return-assign-qty-{{ r[0] }}" value="{{ r[1] - (r[4] or 0) }}" min="0" max="{{ r[1] }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
         </div>
-        <button onclick="returnAssignedStock({{ r[0] }}, this)" class="btnPrimary" style="font-size:12px;padding:8px 14px;">✓ Vet Return</button>
-        <button onclick="returnAssignedStock({{ r[0] }}, this, true)" style="font-size:12px;padding:8px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Not Returned</button>
+        <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this)" class="btnPrimary" style="font-size:12px;padding:8px 14px;">✓ Confirm Return</button>
+        <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this, true)" style="font-size:12px;padding:8px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Not Returned</button>
       </div>
     </div>
   </div>
@@ -775,7 +786,7 @@ function addAssignRow() {
   const div = document.createElement('div');
   div.className = 'assign-item-row';
   div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 1.5fr auto;gap:10px;align-items:end;';
-  div.innerHTML = `<div><label style="font-size:12px;">Item *</label><select class="assign-item-sel" style="margin:0;"><option value="">— Select item —</option>{% for row in assign_items %}<option value="{{ row.Item.id }}">{{ row.Item.name }} ({{ row.stock }} in stock)</option>{% endfor %}</select></div><div><label style="font-size:12px;">Qty *</label><input type="number" class="assign-qty-inp" min="1" value="1" style="margin:0;text-align:right;" /></div><div><label style="font-size:12px;">Note</label><input type="text" class="assign-note-inp" placeholder="e.g. urgent run" style="margin:0;" maxlength="200" /></div><div><label style="font-size:12px;">&nbsp;</label><button type="button" onclick="removeAssignRow(this)" style="width:100%;padding:8px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;font-size:13px;">&#10005;</button></div>`;
+  div.innerHTML = `<div><label style="font-size:12px;">Item *</label><select class="assign-item-sel" style="margin:0;"><option value="">— Select item —</option>{% for row in assign_items %}<option value="{{ row.Item.id }}" data-stock="{{ row.stock }}" {% if row.stock <= 0 %}disabled style="color:#f87171;" data-oos="1"{% endif %}>{{ row.Item.name }} ({{ row.stock }} in stock){% if row.stock <= 0 %} — OUT OF STOCK{% endif %}</option>{% endfor %}</select></div><div><label style="font-size:12px;">Qty *</label><input type="number" class="assign-qty-inp" min="1" value="1" style="margin:0;text-align:right;" /></div><div><label style="font-size:12px;">Note</label><input type="text" class="assign-note-inp" placeholder="e.g. urgent run" style="margin:0;" maxlength="200" /></div><div><label style="font-size:12px;">&nbsp;</label><button type="button" onclick="removeAssignRow(this)" style="width:100%;padding:8px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;font-size:13px;">&#10005;</button></div>`;
   container.appendChild(div);
 }
 function removeAssignRow(btn) {
@@ -789,10 +800,17 @@ async function submitAllAssignments(btn) {
   const rows = document.querySelectorAll('.assign-item-row');
   const items = [];
   for (const row of rows) {
-    const itemId = row.querySelector('.assign-item-sel').value;
+    const sel = row.querySelector('.assign-item-sel');
+    const itemId = sel.value;
     const qty    = parseInt(row.querySelector('.assign-qty-inp').value) || 0;
     const note   = row.querySelector('.assign-note-inp').value;
     if (!itemId || qty <= 0) { alert('Please fill in all item rows'); return; }
+    // Check OOS
+    const opt = sel.options[sel.selectedIndex];
+    if (opt && opt.dataset.oos === '1') {
+      alert('Cannot assign out-of-stock item: ' + opt.textContent.trim());
+      return;
+    }
     items.push({item_id: parseInt(itemId), qty, note});
   }
   btn.disabled = true; btn.textContent = '⏳ Assigning...';
@@ -803,17 +821,107 @@ async function submitAllAssignments(btn) {
   }
   alert('✓ All items assigned'); window.location.reload();
 }
-async function returnAssignedStock(assignmentId, btn, notReturned=false) {
+async function returnAssignedStock(assignmentId, qtyAssigned, btn, notReturned=false) {
   const qtyInput = document.getElementById('return-assign-qty-' + assignmentId);
   const qty = notReturned ? 0 : parseInt(qtyInput ? qtyInput.value : 0);
   if (!confirm(notReturned ? 'Mark all as not returned?' : 'Confirm ' + qty + ' unit(s) returned?')) return;
   btn.disabled = true; btn.textContent = '⏳';
-  const res  = await fetch('/vetting/return-assigned-stock', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({assignment_id:assignmentId,qty_returned:qty})});
-  const data = await res.json();
-  if (data.ok) {
-    const card = document.getElementById('assign-card-' + assignmentId);
-    if (card) { card.style.borderTopColor='#22c55e'; card.querySelector('.vet-header').innerHTML=`<div style="display:flex;align-items:center;gap:12px;"><div style="font-size:18px;">✓</div><div><div style="font-weight:700;font-size:14px;">${data.item_name}</div><div style="font-size:11px;color:var(--muted);">${data.qty_assigned} assigned · ${data.qty_returned > 0 ? data.qty_returned+' returned ✓' : '0 returned — recorded as lost'}</div></div></div><span class="badge b-green" style="font-size:11px;">✓ Vetted</span>`; }
-  } else { alert(data.error||'Error'); btn.disabled=false; btn.textContent=notReturned?'✕ Not Returned':'✓ Vet Return'; }
+  const card = document.getElementById('assign-card-' + assignmentId);
+  if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+  try {
+    const res = await fetch('/vetting/return-assigned-stock', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({assignment_id: assignmentId, qty_returned: qty})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const shortfall = qtyAssigned - qty;
+      const actionDiv = document.getElementById('assign-action-' + assignmentId);
+      if (shortfall > 0 && qty < qtyAssigned) {
+        // Partial return — show shortfall with resolve buttons
+        if (card) card.style.borderTopColor = '#f59e0b';
+        if (actionDiv) {
+          actionDiv.innerHTML = `
+            <div style="margin-bottom:8px;">
+              <span style="font-size:12px;color:#4ade80;">${qty} returned ✓</span>
+              <span style="font-size:12px;color:#f59e0b;margin-left:10px;">⚠ ${shortfall} missing</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <label style="font-size:12px;color:var(--muted);margin:0;">Resolve qty:</label>
+                <input type="number" id="resolve-assign-qty-${assignmentId}" value="${shortfall}"
+                  min="0" max="${shortfall}"
+                  style="width:70px;margin:0;padding:6px 8px;font-size:13px;" />
+              </div>
+              <button class="btnPrimary" onclick="resolveAssignShortfall(${assignmentId}, this, 'returned')"
+                style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">
+                ✓ Agent Returned It
+              </button>
+              <button onclick="resolveAssignShortfall(${assignmentId}, this, 'written_off')"
+                style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+                ✕ Write Off
+              </button>
+            </div>`;
+        }
+      } else {
+        // Full return — mark as done
+        if (card) {
+          card.style.borderTopColor = '#22c55e';
+          if (actionDiv) {
+            actionDiv.innerHTML = `<span class="badge b-green" style="font-size:11px;">✓ ${qty} returned — fully vetted</span>`;
+          }
+        }
+      }
+    } else {
+      alert(data.error || 'Error');
+      if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+  }
+}
+
+async function resolveAssignShortfall(assignmentId, btn, action) {
+  const qtyInput = document.getElementById('resolve-assign-qty-' + assignmentId);
+  const qty = parseInt(qtyInput ? qtyInput.value : 0) || 0;
+  const msg = action === 'returned'
+    ? 'Confirm agent returned ' + qty + ' more unit(s)?'
+    : 'Write off ' + qty + ' unit(s) as lost? This cannot be undone.';
+  if (!confirm(msg)) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  const card = document.getElementById('assign-card-' + assignmentId);
+  if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
+  try {
+    const res = await fetch('/vetting/resolve-assign-shortfall', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({assignment_id: assignmentId, qty_resolved: qty, action: action})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const actionDiv = document.getElementById('assign-action-' + assignmentId);
+      if (data.remaining_shortfall > 0) {
+        // Still some missing
+        var ri = document.getElementById('resolve-assign-qty-' + assignmentId);
+        if (ri) { ri.max = data.remaining_shortfall; ri.value = data.remaining_shortfall; }
+        if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+      } else {
+        // Fully resolved
+        if (card) card.style.borderTopColor = action === 'returned' ? '#22c55e' : '#ef4444';
+        if (actionDiv) {
+          actionDiv.innerHTML = action === 'returned'
+            ? '<span class="badge b-green" style="font-size:11px;">✓ All stock returned — fully vetted</span>'
+            : '<span style="font-size:11px;color:#f87171;">✕ Written off — ' + (data.qty_lost || qty) + ' unit(s) lost</span>';
+        }
+      }
+    } else {
+      alert(data.error || 'Error');
+      if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+  }
 }
 </script>
 

@@ -3142,7 +3142,10 @@ async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db))
 
 @app.post("/vetting/return-assigned-stock", response_class=JSONResponse)
 async def return_assigned_stock(request: Request, db: Session = Depends(get_db)):
-    """Admin vets return of extra stock assigned to agent — creates IN transaction."""
+    """Admin vets return of extra stock assigned to agent.
+    Full return → creates IN tx, marks returned=TRUE
+    Partial return → creates IN tx for what came back, updates qty_returned but keeps returned=FALSE for shortfall resolution
+    """
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
     user = user_or
@@ -3167,28 +3170,116 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
     item  = db.get(Item, item_id)
     agent = db.get(User, agent_id)
     tx_in_id = None
+    is_full = qty_returned >= qty_assigned
 
     if qty_returned > 0:
         tx = Transaction(
-            branch_id=branch_id, item_id=item_id, type="IN", quantity=qty_returned,
-            note=f"Unused assigned stock returned by {agent.full_name or agent.username if agent else 'agent'}",
+            branch_id=branch_id, item_id=item_id, type="IN", quantity=min(qty_returned, qty_assigned),
+            note=f"Assigned stock returned by {agent.full_name or agent.username if agent else 'agent'}",
             reference=f"agent-return-{assignment_id}",
         )
         db.add(tx)
         db.flush()
         tx_in_id = tx.id
 
-    db.execute(text(
-        "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
-        "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
-    ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
+    if is_full:
+        # Full return — mark complete
+        db.execute(text(
+            "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
+            "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
+        ), {"qty": min(qty_returned, qty_assigned), "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
+    else:
+        # Partial — update qty_returned but keep returned=FALSE for shortfall resolution
+        db.execute(text(
+            "UPDATE agent_stock_assignments SET qty_returned=:qty, "
+            "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
+        ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
 
     audit_log(db, user.id, "ASSIGNED_STOCK_RETURNED",
-              f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}",
+              f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}/{qty_assigned}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
     db.commit()
     return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
-                         "qty_returned": qty_returned, "qty_assigned": qty_assigned})
+                         "qty_returned": qty_returned, "qty_assigned": qty_assigned,
+                         "is_full": is_full})
+
+
+@app.post("/vetting/resolve-assign-shortfall", response_class=JSONResponse)
+async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_db)):
+    """Resolve shortfall on an assigned stock return.
+    action='returned'    → agent brought back more; creates IN tx
+    action='written_off' → accept loss; no IN tx; mark complete
+    """
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
+    body          = await request.json()
+    assignment_id = body.get("assignment_id")
+    action        = body.get("action", "")
+    qty_resolved  = int(body.get("qty_resolved", 0))
+    if not assignment_id or action not in ("returned", "written_off"):
+        return JSONResponse({"error": "invalid params"}, status_code=400)
+
+    row = db.execute(text(
+        "SELECT id, agent_id, item_id, branch_id, qty_assigned, qty_returned FROM agent_stock_assignments "
+        "WHERE id = :aid AND returned = FALSE"
+    ), {"aid": assignment_id}).fetchone()
+    if not row:
+        return JSONResponse({"error": "assignment not found or already resolved"}, status_code=404)
+    asgn_id, agent_id, item_id, branch_id, qty_assigned, qty_already_returned = row
+    current_shortfall = max(0, qty_assigned - qty_already_returned)
+
+    if branch_id != user.branch_id:
+        return JSONResponse({"error": "forbidden — different branch"}, status_code=403)
+
+    item = db.get(Item, item_id)
+
+    if action == "returned":
+        qty_to_credit = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
+        new_total = qty_already_returned + qty_to_credit
+        remaining = max(0, qty_assigned - new_total)
+
+        if qty_to_credit > 0:
+            tx = Transaction(
+                branch_id=branch_id, item_id=item_id, type="IN", quantity=qty_to_credit,
+                note=f"Shortfall resolved — assigned stock returned by agent",
+                reference=f"agent-shortfall-{assignment_id}",
+            )
+            db.add(tx)
+            db.flush()
+
+        if remaining == 0:
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
+                "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id})
+        else:
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET qty_returned=:qty WHERE id=:aid"
+            ), {"qty": new_total, "aid": asgn_id})
+
+        audit_log(db, user.id, "ASSIGN_SHORTFALL_RESOLVED",
+                  f"assignment_id={asgn_id} item={item.name if item else item_id} credited={qty_to_credit} remaining={remaining}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
+                             "remaining_shortfall": remaining, "action": "returned"})
+
+    else:  # written_off
+        # Accept the loss — mark as returned (complete) but don't credit stock
+        db.execute(text(
+            "UPDATE agent_stock_assignments SET returned=TRUE, "
+            "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
+        ), {"uid": user.id, "aid": asgn_id})
+
+        audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
+                  f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={current_shortfall}",
+                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+        db.commit()
+        return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
+                             "qty_lost": current_shortfall, "remaining_shortfall": 0,
+                             "action": "written_off"})
 
 
 @app.post("/vetting/confirm-return", response_class=JSONResponse)
@@ -3598,7 +3689,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             it.name AS item_name,
             d.id AS delivery_id, d.customer_name,
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
-            u_res.full_name AS resolved_by_name, u_res.username AS resolved_by_username
+            u_res.full_name AS resolved_by_name, u_res.username AS resolved_by_username,
+            'delivery' AS source
         FROM stock_return_vettings srv
         JOIN delivery_items di ON di.id = srv.delivery_item_id
         JOIN items it          ON it.id = di.item_id
@@ -3607,7 +3699,28 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         LEFT JOIN users u_res   ON u_res.id   = srv.resolved_by
         WHERE srv.resolve_action = 'written_off'
           AND it.branch_id = :bid
-        ORDER BY srv.resolved_at DESC
+
+        UNION ALL
+
+        SELECT
+            asa.id, asa.qty_returned, asa.vetted_at AS resolved_at,
+            asa.qty_assigned AS original_qty,
+            (asa.qty_assigned - asa.qty_returned) AS qty_lost,
+            it.name AS item_name,
+            COALESCE(asa.delivery_id, 0) AS delivery_id,
+            'Assigned Stock' AS customer_name,
+            u_agent.full_name AS agent_name, u_agent.username AS agent_username,
+            u_vet.full_name AS resolved_by_name, u_vet.username AS resolved_by_username,
+            'assignment' AS source
+        FROM agent_stock_assignments asa
+        JOIN items it         ON it.id = asa.item_id
+        JOIN users u_agent    ON u_agent.id = asa.agent_id
+        LEFT JOIN users u_vet ON u_vet.id = asa.vetted_by
+        WHERE asa.returned = TRUE
+          AND asa.qty_returned < asa.qty_assigned
+          AND asa.branch_id = :bid
+
+        ORDER BY resolved_at DESC
         LIMIT 100
     """), {"bid": branch_id}).fetchall()
 
