@@ -3376,10 +3376,8 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         # the rest (qty_already_returned) was already physically returned.
         db.execute(text(
             "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-            "resolved_at=NOW(), resolved_by=:uid, "
-            "resolve_note=:note WHERE id=:vid"
-        ), {"uid": user.id, "vid": vet_id,
-            "note": f"Written off {qty_to_writeoff} unit(s) as lost"})
+            "resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
+        ), {"uid": user.id, "vid": vet_id})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
                   f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff}",
