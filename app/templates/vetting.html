@@ -377,10 +377,30 @@ async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
     if (data.ok) {
       const row = document.getElementById('return-item-' + diId);
       if (row) {
-        row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
-          ${qty > 0
-            ? '<span class="badge b-green" style="font-size:11px;">✓ Returned x' + qty + '</span>'
-            : '<span style="font-size:11px;color:#f87171;">✕ Not returned — recorded</span>'}`;
+        if (data.is_full) {
+          row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
+            <span class="badge b-green" style="font-size:11px;">✓ Returned x${qty}</span>`;
+        } else {
+          row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}
+            <span style="color:#f59e0b;font-size:11px;margin-left:6px;">⚠ ${data.shortfall} missing</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:#4ade80;">${qty} returned</span>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <label style="font-size:12px;color:var(--muted);margin:0;">Resolve qty:</label>
+                <input type="number" id="resolve-qty-${diId}" value="${data.shortfall}"
+                  min="0" max="${data.shortfall}"
+                  style="width:70px;margin:0;padding:6px 8px;font-size:13px;" />
+              </div>
+              <button class="btnPrimary" onclick="resolveShortfall(${deliveryId}, ${diId}, this, 'returned')"
+                style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">
+                ✓ Agent Returned It
+              </button>
+              <button onclick="resolveShortfall(${deliveryId}, ${diId}, this, 'written_off')"
+                style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
+                ✕ Write Off
+              </button>
+            </div>`;
+        }
       }
       checkAllVetted(deliveryId);
     } else {
@@ -429,6 +449,9 @@ async function resolveShortfall(deliveryId, diId, btn, action) {
     : 'Write off missing stock? This cannot be undone.';
   if (!confirm(msg)) return;
   btn.disabled = true; btn.textContent = '⏳';
+  // Disable ALL buttons in this row to prevent double-click
+  const row = document.getElementById('return-item-' + diId);
+  if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
   try {
     const res = await fetch('/vetting/resolve-shortfall', {
       method: 'POST',
@@ -438,45 +461,52 @@ async function resolveShortfall(deliveryId, diId, btn, action) {
     });
     const data = await res.json();
     if (data.ok) {
-      const row = document.getElementById('return-item-' + diId);
       if (row) {
         if (data.remaining_shortfall > 0) {
-          row.querySelector('[id^="resolve-qty-"]').max = data.remaining_shortfall;
-          row.querySelector('[id^="resolve-qty-"]').value = data.remaining_shortfall;
-          const warn = row.querySelector('span[style*="f59e0b"]');
+          // Still some missing — update qty but keep buttons
+          var resolveInput = row.querySelector('[id^="resolve-qty-"]');
+          if (resolveInput) { resolveInput.max = data.remaining_shortfall; resolveInput.value = data.remaining_shortfall; }
+          var warn = row.querySelector('span[style*="f59e0b"]');
           if (warn) warn.textContent = '⚠ ' + data.remaining_shortfall + ' still missing';
-          btn.disabled = false; btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+          row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+          btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
         } else {
+          // Fully resolved — replace entire row, no more buttons
           row.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name + '</div>'
             + (action === 'returned'
                ? '<span class="badge b-green" style="font-size:11px;">✓ All Returned</span>'
-               : '<span style="font-size:11px;color:#f87171;">✕ Written Off</span>');
+               : '<span style="font-size:11px;color:#f87171;">✕ Written Off — ' + (data.qty_lost || 0) + ' unit(s) lost</span>');
           checkAllVetted(deliveryId);
         }
       }
     } else {
       alert(data.error || 'Error resolving shortfall');
-      btn.disabled = false; btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+      if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+      btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
     }
   } catch(e) {
     alert('Error: ' + e.message);
-    btn.disabled = false; btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+    if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+    btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
   }
 }
 
 function checkAllVetted(deliveryId) {
   const card = document.getElementById('return-card-' + deliveryId);
   if (!card) return;
-  const pendingInputs = card.querySelectorAll('input[id^="qty-"]');
+  // Check for any remaining actionable inputs — both unvetted (qty-*) and shortfall (resolve-qty-*)
+  const pendingInputs = card.querySelectorAll('input[id^="qty-"], input[id^="resolve-qty-"]');
   const counter = document.getElementById('pending-count-' + deliveryId);
   if (counter) {
-    counter.textContent = pendingInputs.length + ' item(s) still pending';
+    counter.textContent = pendingInputs.length > 0
+      ? pendingInputs.length + ' item(s) still pending'
+      : 'All items accounted for';
     counter.style.color = pendingInputs.length === 0 ? '#4ade80' : '#fbbf24';
   }
   if (pendingInputs.length === 0) {
     card.style.borderTopColor = '#22c55e';
     const hdrBtn = card.querySelector('.vet-header button.btnPrimary');
-    if (hdrBtn) hdrBtn.outerHTML = '<span class="badge b-green">✓ All Stock Returned</span>';
+    if (hdrBtn) hdrBtn.outerHTML = '<span class="badge b-green">✓ All Stock Accounted For</span>';
   }
 }
 
