@@ -160,8 +160,6 @@ const _supCatItems  = {{ all_cat_items_json | tojson if all_cat_items_json is de
 const _supRemit  = [{% for r in rows %}{{ r.remittance | round(0) | int }}{%- if not loop.last %},{%- endif %}{% endfor %}];
 const _supBranch = [{% for r in rows %}"{{ r.branch.name if r.branch else '?' }}"{%- if not loop.last %},{%- endif %}{% endfor %}];
 
-Chart.defaults.color = '#8a9bc4';
-Chart.defaults.font.family = 'inherit';
 const _axisStyle = {
   grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
   ticks: { color: '#8a9bc4', font: { size: 11 } }
@@ -209,7 +207,11 @@ function _lineChart(id, labels, data, color, isCurrency) {
 }
 
 function initSupCharts() {
-  const sl = _shortLabels(_supLabels);
+  Chart.defaults.color = '#8a9bc4';
+  Chart.defaults.font.family = 'inherit';
+  const _axisStyle = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
+  const _baseOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } }, scales:{ x:_axisStyle, y:{..._axisStyle,beginAtZero:true} }, animation:{duration:600,easing:'easeOutQuart'} };
+  const sl = (() => { const _l = _aoLabels||_dashChartLabels||_supLabels||[]; return _l.map(l => { const d=new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); }); })();
   _barChart('chartDeliveries', sl, _supDeliveries, 'rgba(79,124,255,0.65)');
   _lineChart('chartExpenses', sl, _supExpenses, '#ef4444', true);
   _barChart('remitChart', _supBranch, _supRemit, 'rgba(20,184,166,0.65)');

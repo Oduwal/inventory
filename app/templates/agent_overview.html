@@ -70,8 +70,6 @@ const _aoLabels     = {{ chart_labels | tojson }};
 const _aoDeliveries = {{ chart_deliveries | tojson }};
 const _aoExpenses   = {{ chart_expenses | tojson }};
 
-Chart.defaults.color = '#8a9bc4';
-Chart.defaults.font.family = 'inherit';
 const _axisStyle = {
   grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
   ticks: { color: '#8a9bc4', font: { size: 11 } }
@@ -119,7 +117,11 @@ function _lineChart(id, labels, data, color, isCurrency) {
 }
 
 function initCharts() {
-  const sl = _shortLabels(_aoLabels);
+  Chart.defaults.color = '#8a9bc4';
+  Chart.defaults.font.family = 'inherit';
+  const _axisStyle = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
+  const _baseOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } }, scales:{ x:_axisStyle, y:{..._axisStyle,beginAtZero:true} }, animation:{duration:600,easing:'easeOutQuart'} };
+  const sl = (() => { const _l = _aoLabels||_dashChartLabels||_supLabels||[]; return _l.map(l => { const d=new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); }); })();
   _barChart('chartDeliveries', sl, _aoDeliveries, 'rgba(79,124,255,0.65)');
   _lineChart('chartExpenses', sl, _aoExpenses, '#ef4444', true);
 }
