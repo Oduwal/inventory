@@ -247,15 +247,50 @@ def sanitize_amount(value: float, field_name: str = "amount") -> float:
 #   Requires an AuditLog table — see models.py addition below
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _humanize_audit(action: str, detail: str) -> str:
+    """Convert technical audit detail to plain English for non-technical users."""
+    d = detail or ""
+    a = action.upper()
+    parts = {}
+    try:
+        parts = dict(p.split("=", 1) for p in d.split() if "=" in p)
+    except Exception:
+        pass
+    if a == "LOGIN": return "Logged in successfully"
+    if a == "LOGIN_FAILED": return f"Failed login attempt"
+    if a == "LOGOUT": return "Logged out"
+    if a == "DELIVERY_DELIVERED": return f"Delivery #{parts.get('delivery_id','?')} marked as delivered"
+    if a == "ADJUSTMENT_REQUESTED": return f"Agent requested price/qty adjustment on delivery #{parts.get('delivery_id','?')}"
+    if a == "ADJUSTMENT_APPROVED": return f"Admin approved adjustment on delivery #{parts.get('delivery_id','?')}"
+    if a == "ADJUSTMENT_REJECTED": return f"Admin rejected adjustment on delivery #{parts.get('delivery_id','?')}"
+    if a == "STOCK_RETURN_VETTED": return f"Stock return confirmed for delivery #{parts.get('delivery_id','?')} — {parts.get('item','?')}"
+    if a == "SHORTFALL_RESOLVED": return f"Missing stock resolved for {parts.get('item','?')} — action: {parts.get('action','?')}"
+    if a == "SHORTFALL_WRITTEN_OFF": return f"Missing stock written off for {parts.get('item','?')} — qty lost: {parts.get('qty_lost','?')}"
+    if a == "CASH_CONFIRMED": return f"Agent cash confirmed for {parts.get('date','?')}"
+    if a == "FAULTY_STOCK_FLAGGED": return f"Faulty stock flagged — {parts.get('item','?')} qty: {parts.get('qty','?')}"
+    if a == "FAULTY_STOCK_RESOLVED": return f"Faulty stock resolved — {parts.get('item','?')} — {parts.get('action','?')}"
+    if a == "STOCK_ASSIGNED_TO_AGENT": return f"Extra stock assigned — {parts.get('item','?')} × {parts.get('qty','?')} to {parts.get('agent','?')}"
+    if a == "ASSIGNED_STOCK_RETURNED": return f"Agent returned assigned stock for assignment #{parts.get('assignment_id','?')}"
+    if a == "MERCHANT_RETURN": return f"Goods returned to merchant — {parts.get('merchant','?')}"
+    if a == "TRANSFER_PACKED": return f"Stock transfer #{parts.get('transfer_id','?')} packed and sent"
+    if a == "TRANSFER_RECEIVED": return f"Stock transfer #{parts.get('transfer_id','?')} received by branch"
+    if a == "DATA_RESET": return "All operational data was wiped by supervisor"
+    if a == "PASSWORD_RESET": return f"Password reset performed"
+    if a == "NEW_AGENT": return f"New agent account created"
+    if a == "NEW_ADMIN": return f"New branch admin account created"
+    return f"{action.replace('_',' ').title()}" + (f" — {d}" if d else "")
+
+
 def audit_log(db, user_id: Optional[int], action: str, detail: str = "",
               ip: str = "") -> None:
     """Write an audit entry. Silently swallows errors so it never breaks the main flow."""
     try:
         from .models import AuditLog  # imported here to avoid circular import
+        human_detail = _humanize_audit(action, detail)
         entry = AuditLog(
             user_id=user_id,
             action=action[:100],
-            detail=detail[:500],
+            detail=human_detail[:500],
             ip=ip[:45],
             created_at=datetime.utcnow(),
         )

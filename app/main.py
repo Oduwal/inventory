@@ -1761,17 +1761,21 @@ async def resolve_faulty_stock(
 # ────────────────────────────────────────────────
 
 @app.get("/transactions", response_class=HTMLResponse)
-def transactions_list(request: Request, db: Session = Depends(get_db)):
+def transactions_list(request: Request, branch_filter: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    filter_bid = int(branch_filter) if branch_filter and branch_filter.isdigit() else None
     stmt = select(Transaction).order_by(desc(Transaction.created_at)).limit(300)
-    if not (is_supervisor(user) and not branch_id):
+    if is_supervisor(user):
+        if filter_bid:
+            stmt = stmt.where(Transaction.branch_id == filter_bid)
+    else:
         stmt = stmt.where(Transaction.branch_id == branch_id)
     txs = db.scalars(stmt).all()
-    # Build item name map for display
     item_ids = list({t.item_id for t in txs if t.item_id})
     item_name_map = {}
     if item_ids:
@@ -1779,7 +1783,7 @@ def transactions_list(request: Request, db: Session = Depends(get_db)):
             item_name_map[it.id] = it.name
     return tpl(request, "transactions_list.html", {
         "request": request, "txs": txs, "user": user, "active": "transactions",
-        "item_name_map": item_name_map,
+        "item_name_map": item_name_map, "branches": branches, "branch_filter": branch_filter,
     })
 
 
@@ -1885,19 +1889,22 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
 
 
 @app.get("/low-stock", response_class=HTMLResponse)
-def low_stock(request: Request, db: Session = Depends(get_db)):
+def low_stock(request: Request, branch_filter: str = "", db: Session = Depends(get_db)):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
     user = user_or
     branch_id = get_selected_branch_id(request, user)
+    branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
+    filter_bid = int(branch_filter) if branch_filter and branch_filter.isdigit() else None
     if is_supervisor(user):
-        # Supervisor sees all branches
-        rows = list(get_low_stock(db))
+        all_rows = list(get_low_stock(db))
+        rows = [(item, stock) for (item, stock) in all_rows if not filter_bid or item.branch_id == filter_bid]
     else:
         rows = [(item, stock) for (item, stock) in get_low_stock(db) if item.branch_id == branch_id]
     return tpl(request, "low_stock.html", {
         "request": request, "rows": rows, "user": user, "active": "low",
+        "branches": branches, "branch_filter": branch_filter,
     })
 
 
@@ -2332,7 +2339,9 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden — only admins can create orders", status_code=403)
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
-    items = db.execute(select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())).scalars().all()
+    # Get items with current stock levels for out-of-stock labelling
+    _items_with_stock = get_items_with_stock(db, branch_id=branch_id)
+    items = [(it, int(stock)) for it, stock in _items_with_stock]
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     # Pending assignments per agent — for linking assigned stock to delivery
     pending_assignments = {}
@@ -2521,11 +2530,23 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
 
     total_collected = float(db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.agent_id == user.id).where(CashEntry.kind == "COLLECTION")
+        .where(CashEntry.agent_id == user.id)
+        .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"]))
+    ) or 0)
+    cash_collected = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.agent_id == user.id)
+        .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT"]))
+    ) or 0)
+    transfer_collected = float(db.scalar(
+        select(func.coalesce(func.sum(CashEntry.amount), 0))
+        .where(CashEntry.agent_id == user.id)
+        .where(CashEntry.kind == "TRANSFER_PAYMENT")
     ) or 0)
     total_expenses = float(db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
-        .where(CashEntry.agent_id == user.id).where(CashEntry.kind == "EXPENSE")
+        .where(CashEntry.agent_id == user.id)
+        .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
     ) or 0)
 
     return tpl(request, "agent_overview.html", {
@@ -2533,6 +2554,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
         "total_deliveries": len(rows), "pending_c": pending_c,
         "ofd_c": ofd_c, "done_c": done_c,
         "total_collected": total_collected, "total_expenses": total_expenses,
+        "cash_collected": cash_collected, "transfer_collected": transfer_collected,
         "chart_labels": [str(d) for d in chart_days],
         "chart_deliveries": [delivery_by_day.get(d.isoformat(), 0) for d in chart_days],
         "chart_expenses": [round(expense_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
@@ -2690,6 +2712,7 @@ async def request_adjustment(
     reason: str = Form(""),
     item_ids: list[int] = Form(default=[]),
     new_amounts: list[float] = Form(default=[]),
+    new_quantities: list[int] = Form(default=[]),
     remove_flags: list[str] = Form(default=[]),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -2718,12 +2741,28 @@ async def request_adjustment(
     for i, item_id in enumerate(item_ids):
         if item_id not in item_map: continue
         di, it = item_map[item_id]
-        new_amt = float(new_amounts[i]) if i < len(new_amounts) else float(di.line_amount)
-        remove = remove_flags[i] == "1" if i < len(remove_flags) else False
+        new_amt  = float(new_amounts[i]) if i < len(new_amounts) else float(di.line_amount)
+        new_qty  = int(new_quantities[i]) if i < len(new_quantities) and new_quantities[i] else di.quantity
+        new_qty  = max(0, min(new_qty, di.quantity))  # clamp 0..original
+        remove   = remove_flags[i] == "1" if i < len(remove_flags) else (new_qty == 0)
         db.execute(text(
             "INSERT INTO adjustment_request_items (request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item) "
             "VALUES (:rid, :diid, :name, :orig, :new, :rem)"
-        ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": float(di.line_amount), "new": new_amt, "rem": remove})
+        ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": float(di.line_amount), "new": new_amt if not remove else 0, "rem": remove})
+        # Store new quantity in remove_item logic — use new_amount=0 + note for qty reduction
+        if not remove and new_qty != di.quantity:
+            # Update the line amount proportionally
+            if di.quantity > 0:
+                proportional_amt = float(di.line_amount) * new_qty / di.quantity
+                new_amt = proportional_amt if float(new_amounts[i] if i < len(new_amounts) else 0) == 0 else new_amt
+            db.execute(text(
+                "UPDATE adjustment_request_items SET new_amount=:amt WHERE request_id=:rid AND delivery_item_id=:diid"
+            ), {"amt": new_amt, "rid": req_id, "diid": di.id})
+        # Store new qty in item name field as suffix for review
+        if new_qty != di.quantity and not remove:
+            db.execute(text(
+                "UPDATE adjustment_request_items SET item_name=:name WHERE request_id=:rid AND delivery_item_id=:diid"
+            ), {"name": f"{it.name} (qty: {di.quantity}→{new_qty})", "rid": req_id, "diid": di.id})
     d.status = "ADJUSTMENT_PENDING"
     notify_branch_admins(db, d.branch_id, "⚠️ Adjustment Request",
            f"Agent requested price adjustment on delivery #{d.id} ({d.customer_name}). Reason: {(reason or '').strip()[:100]}",
@@ -2901,9 +2940,9 @@ async def update_delivery_status(
     status_clean = (status or "").strip().upper()
     if status_clean not in {"PENDING", "OUT_FOR_DELIVERY", "DELIVERED", "FAILED", "RETURNED"}:
         raise HTTPException(status_code=400, detail="Invalid status")
-    # Lock: once DELIVERED, no further status changes allowed
-    if d.status == "DELIVERED":
-        return redirect(f"/deliveries/{delivery_id}?error=This+order+has+already+been+delivered+and+cannot+be+updated")
+    # Lock: once DELIVERED, FAILED, or RETURNED — no further status changes
+    if d.status in ("DELIVERED", "FAILED", "RETURNED"):
+        return redirect(f"/deliveries/{delivery_id}?error=This+order+is+{d.status.lower()}+and+cannot+be+updated")
     if d.status == "ADJUSTMENT_PENDING" and status_clean == "DELIVERED":
         return redirect(f"/deliveries/{delivery_id}?error=Cannot+mark+delivered+while+adjustment+request+is+pending+admin+approval")
     if status_clean == "DELIVERED":
@@ -4622,6 +4661,10 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
     transfer.status = "RECEIVED"
     transfer.received_by_id = user.id
     transfer.received_at = datetime.utcnow()
+    notify_branch_admins(db, transfer.from_branch_id,
+        "✅ Stock Transfer Received",
+        f"{transfer.to_branch.name} has confirmed receipt of stock transfer #{transfer_id}.",
+        f"/transfers/{transfer_id}", "success")
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
 
@@ -4664,6 +4707,10 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
     transfer.packed_by_id = user.id
     transfer.packed_at = datetime.utcnow()
     transfer.status = "OUT_FOR_DELIVERY"
+    notify_branch_admins(db, transfer.to_branch_id,
+        "📦 Stock Transfer On Its Way",
+        f"Stock from {transfer.from_branch.name} has been packed and sent to your branch (transfer #{transfer_id}).",
+        f"/transfers/{transfer_id}", "info")
     db.commit()
     audit_log(db, user.id, "TRANSFER_SENT", f"transfer_id={transfer_id}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))

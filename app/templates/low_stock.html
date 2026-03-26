@@ -6,6 +6,21 @@
 
 {% block content %}
 
+{% if user and user.role == "SUPERVISOR" and branches %}
+<form method="get" action="/low-stock" style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+  <label style="font-size:12px;color:var(--muted);">Filter by branch:</label>
+  <select name="branch_filter" onchange="this.form.submit()" style="width:auto;padding:7px 12px;font-size:13px;">
+    <option value="">All branches</option>
+    {% for b in branches %}
+    <option value="{{ b.id }}" {% if branch_filter and branch_filter|int == b.id %}selected{% endif %}>{{ b.name }}</option>
+    {% endfor %}
+  </select>
+  {% if branch_filter %}
+  <a href="/low-stock" style="font-size:12px;color:var(--muted);">✕ Clear</a>
+  {% endif %}
+</form>
+{% endif %}
+
 {% if rows %}
 <!-- Summary -->
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px;">

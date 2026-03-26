@@ -87,14 +87,18 @@
       </div>
 
       <div id="lines" style="display:flex;flex-direction:column;gap:10px;">
-        <div class="lineRow line">
+        <div class="lineRow line normal-row">
           <div>
             <label>Item</label>
-            <select name="item_id" required>
-              {% for it in items %}
-              <option value="{{ it.id }}">{{ it.name }}</option>
+            <select name="item_id" required onchange="checkStock(this)">
+              {% for it, stock in items %}
+              <option value="{{ it.id }}" data-stock="{{ stock }}"
+                {% if stock <= 0 %}style="color:#f87171;" data-oos="1"{% endif %}>
+                {{ it.name }}{% if stock <= 0 %} — OUT OF STOCK{% endif %}
+              </option>
               {% endfor %}
             </select>
+            <div class="oos-warning" style="display:none;color:#f87171;font-size:11px;margin-top:4px;">⚠ This item is out of stock and cannot be ordered</div>
           </div>
           <div>
             <label>Quantity</label>
@@ -216,6 +220,30 @@ function removeNormalRow(btn) {
 
 // Mark the initial default row as normal
 document.querySelector('#lines .line').classList.add('normal-row');
+
+// ── out of stock check ─────────────────────────────────────────────────
+function checkStock(sel) {
+  const opt  = sel.options[sel.selectedIndex];
+  const warn = sel.closest('.line').querySelector('.oos-warning');
+  if (opt && opt.dataset.oos === '1') {
+    if (warn) warn.style.display = 'block';
+    sel.style.borderColor = 'rgba(239,68,68,.6)';
+  } else {
+    if (warn) warn.style.display = 'none';
+    sel.style.borderColor = '';
+  }
+}
+// Block form submit if any OOS item is selected
+document.querySelector('form[action="/deliveries/new"]').addEventListener('submit', function(e) {
+  const oosWarnings = document.querySelectorAll('.oos-warning');
+  for (const w of oosWarnings) {
+    if (w.style.display !== 'none') {
+      e.preventDefault();
+      alert('One or more selected items are out of stock. Please change or remove them before submitting.');
+      return;
+    }
+  }
+});
 
 const lines = document.getElementById("lines");
 document.getElementById("addRowBtn").addEventListener("click", addNormalRow);

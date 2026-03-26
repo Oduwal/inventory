@@ -24,7 +24,7 @@
 .vet-card { border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden; }
 .vet-header { display:flex;justify-content:space-between;align-items:center;padding:14px 16px;flex-wrap:wrap;gap:10px; }
 .vet-body { padding:0 16px 16px; }
-.entry-row { display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px; }
+.entry-row { display:grid;grid-template-columns:1fr auto auto auto auto;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px; }
 .entry-row:last-child { border-bottom:none; }
 </style>
 
@@ -162,17 +162,30 @@
           {{ entry.created_at.strftime('%I:%M %p') if entry.created_at else '' }}
           {% if entry.kind == 'TRANSFER_PAYMENT' %}
           <span style="color:#7fa8ff;">· Transfer</span>
-          {% else %}
+          {% elif entry.kind == 'CASH_PAYMENT' %}
           <span style="color:#a3e635;">· Cash</span>
+          {% else %}
+          <span style="color:#4ade80;">· Collection</span>
           {% endif %}
         </div>
       </div>
       <div style="font-weight:700;color:#4ade80;">₦{{ '{:,.2f}'.format(entry.amount|float) }}</div>
-      <div>
+      <div id="entry-status-{{ entry.id }}">
         {% if entry.confirmed_by_admin %}
         <span style="font-size:11px;color:#4ade80;">✓ confirmed</span>
         {% else %}
         <span style="font-size:11px;color:#f59e0b;">pending</span>
+        {% endif %}
+      </div>
+      <div>
+        {% if entry.confirmed_by_admin %}
+        <span style="font-size:16px;color:#4ade80;">✓</span>
+        {% else %}
+        <button onclick="confirmSingleEntry({{ entry.id }}, this)"
+          title="Mark this collection as confirmed"
+          style="width:30px;height:30px;border-radius:8px;border:1px solid rgba(34,197,94,.3);
+            background:rgba(34,197,94,.08);color:#4ade80;cursor:pointer;font-size:15px;
+            display:flex;align-items:center;justify-content:center;">☐</button>
         {% endif %}
       </div>
     </div>
@@ -428,6 +441,26 @@ async function confirmReturnOp(agentId, btn) {
   } else {
     btn.disabled = false; btn.textContent = '✓ Confirm All Returns';
   }
+}
+
+async function confirmSingleEntry(entryId, btn) {
+  btn.textContent = '⏳'; btn.disabled = true;
+  try {
+    const res = await fetch('/admin/confirm-cash-entry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({entry_id: entryId})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      btn.outerHTML = '<span style="font-size:16px;color:#4ade80;">✓</span>';
+      const statusEl = document.getElementById('entry-status-' + entryId);
+      if (statusEl) statusEl.innerHTML = '<span style="font-size:11px;color:#4ade80;">✓ confirmed</span>';
+    } else {
+      btn.textContent = '☐'; btn.disabled = false;
+      alert(data.error || 'Error confirming entry');
+    }
+  } catch(e) { btn.textContent = '☐'; btn.disabled = false; }
 }
 
 async function confirmSingleReturnOp(entryId, btn) {

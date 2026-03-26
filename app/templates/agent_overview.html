@@ -33,9 +33,19 @@
     <div style="font-size:26px;font-weight:800;color:#fbbf24;">{{ pending_c }}</div>
     <div style="font-size:11px;color:var(--muted);margin-top:4px;">Pending</div>
   </div>
-  <div class="card" style="text-align:center;border-top:3px solid #22c55e;padding:16px;">
-    <div style="font-size:20px;font-weight:800;color:#4ade80;">₦{{ '{:,.0f}'.format(total_collected) }}</div>
-    <div style="font-size:11px;color:var(--muted);margin-top:4px;">Total Collected</div>
+  <div class="card" style="text-align:left;border-top:3px solid #22c55e;padding:14px 16px;">
+    <div style="font-size:18px;font-weight:800;color:#4ade80;">₦{{ '{:,.0f}'.format(total_collected) }}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px;">Total Collected</div>
+    {% if cash_collected or transfer_collected %}
+    <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap;">
+      {% if cash_collected %}
+      <div style="font-size:11px;"><span style="color:#a3e635;">💵 Cash:</span> <strong>₦{{ '{:,.0f}'.format(cash_collected) }}</strong></div>
+      {% endif %}
+      {% if transfer_collected %}
+      <div style="font-size:11px;"><span style="color:#7fa8ff;">🏦 Transfer:</span> <strong>₦{{ '{:,.0f}'.format(transfer_collected) }}</strong></div>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
   <div class="card" style="text-align:center;border-top:3px solid #ef4444;padding:16px;">
     <div style="font-size:20px;font-weight:800;color:#f87171;">₦{{ '{:,.0f}'.format(total_expenses) }}</div>
@@ -60,7 +70,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 (function(){
   const labels = {{ chart_labels | tojson }};

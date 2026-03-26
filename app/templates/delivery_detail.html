@@ -311,31 +311,62 @@
       </div>
       <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Adjust Items</div>
       {% for di, it in d_items %}
-      <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:12px;margin-bottom:8px;">
+      <div style="background:rgba(255,255,255,.03);border-radius:8px;padding:12px;margin-bottom:8px;" id="adj-row-{{ di.id }}">
         <input type="hidden" name="item_ids" value="{{ di.id }}" />
-        <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;">
+        <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;">
           <div>
             <div style="font-weight:600;font-size:13px;">{{ it.name }}</div>
-            <div style="font-size:11px;color:var(--muted);">Original: ₦{{ '%.2f'|format(di.line_amount|float) }}</div>
+            <div style="font-size:11px;color:var(--muted);">Ordered: {{ di.quantity }} · ₦{{ '%.2f'|format(di.line_amount|float) }}</div>
+          </div>
+          <div>
+            <label style="font-size:11px;">New Qty</label>
+            <input type="number" name="new_quantities" min="0" max="{{ di.quantity }}"
+              value="{{ di.quantity }}"
+              style="margin:0;width:70px;text-align:right;"
+              id="qty-{{ di.id }}"
+              oninput="onQtyChange('{{ di.id }}', {{ di.quantity }}, {{ di.line_amount|float }})"  />
           </div>
           <div>
             <label style="font-size:11px;">New Amount (₦)</label>
             <input type="number" name="new_amounts" step="0.01" min="0"
               value="{{ '%.2f'|format(di.line_amount|float) }}"
-              style="margin:0;width:120px;"
-              id="amt-{{ di.id }}"
-              oninput="document.getElementById('rem-{{ di.id }}').checked && (this.value='0')" />
+              style="margin:0;width:110px;"
+              id="amt-{{ di.id }}" />
           </div>
           <div style="text-align:center;">
             <label style="font-size:11px;display:block;margin-bottom:4px;">Remove</label>
             <input type="hidden" name="remove_flags" id="rem-flag-{{ di.id }}" value="0" />
             <input type="checkbox" id="rem-{{ di.id }}"
-              onchange="document.getElementById('rem-flag-{{ di.id }}').value=this.checked?'1':'0'; if(this.checked){document.getElementById('amt-{{ di.id }}').value='0';}"
+              onchange="onRemoveChange('{{ di.id }}')"
               style="width:18px;height:18px;cursor:pointer;" />
           </div>
         </div>
       </div>
       {% endfor %}
+      <script>
+      function onQtyChange(id, origQty, origAmt) {
+        const qty = parseInt(document.getElementById('qty-' + id).value) || 0;
+        const amtField = document.getElementById('amt-' + id);
+        if (qty === 0) {
+          document.getElementById('rem-' + id).checked = true;
+          document.getElementById('rem-flag-' + id).value = '1';
+          amtField.value = '0.00';
+        } else {
+          document.getElementById('rem-' + id).checked = false;
+          document.getElementById('rem-flag-' + id).value = '0';
+          // Proportionally adjust amount
+          amtField.value = (origAmt * qty / origQty).toFixed(2);
+        }
+      }
+      function onRemoveChange(id) {
+        const checked = document.getElementById('rem-' + id).checked;
+        document.getElementById('rem-flag-' + id).value = checked ? '1' : '0';
+        if (checked) {
+          document.getElementById('qty-' + id).value = '0';
+          document.getElementById('amt-' + id).value = '0.00';
+        }
+      }
+      </script>
       <button type="submit" class="btnPrimary" style="width:100%;justify-content:center;margin-top:8px;">
         📨 Submit Adjustment Request
       </button>
@@ -356,43 +387,6 @@
     </div>
     {% endif %}
   </div>
-  <div class="card" style="border-top:3px solid #ef4444;">
-    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Expenses</div>
-    <div style="font-size:24px;font-weight:800;color:#f87171;">₦{{ '%.2f'|format(expense_total) }}</div>
-  </div>
-</div>
-
-<!-- Record cash entry -->
-<div class="card">
-  <div class="badge b-blue" style="margin-bottom:6px;">RECORD EXPENSE / EXTRA COLLECTION</div>
-  <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">Operating cash is recorded from the Cash page as it is not tied to a single delivery.</p>
-
-  <!-- [FIX-4] CSRF on cash entry -->
-  <form method="post" action="/cash/new">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
-    <input type="hidden" name="delivery_id" value="{{ d.id }}">
-    <div class="inputs">
-      <div>
-        <label>Type</label>
-        <select name="kind" required>
-          <option value="COLLECTION">Extra Collection</option>
-          <option value="EXPENSE">Expense</option>
-        </select>
-      </div>
-      <div>
-        <label>Amount (₦)</label>
-        <input type="number" name="amount" step="0.01" min="0.01" required />
-      </div>
-      <div style="min-width:200px;">
-        <label>Note</label>
-        <input type="text" name="note" placeholder="e.g. Fuel, dispatch fee" />
-      </div>
-      <div style="min-width:auto;flex:0;">
-        <label>&nbsp;</label>
-        <button class="btnPrimary" type="submit">Save</button>
-      </div>
-    </div>
-  </form>
 </div>
 <script>
 function addRejectionNote(form) {
