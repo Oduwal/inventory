@@ -149,7 +149,7 @@
 
 
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
 const _supLabels     = {{ chart_labels | tojson }};
 const _supDeliveries = {{ chart_data | tojson }};
@@ -223,8 +223,8 @@ function initSupCharts() {
     });
   }
 }
-window.addEventListener('load', initSupCharts);
 </script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initSupCharts()"></script>
 
 <!-- Category drill-down modal -->
 <div id="cat-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">

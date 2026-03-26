@@ -162,7 +162,7 @@
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
 const _dashLabels     = {{ chart_labels | tojson }};
 const _dashDeliveries = {{ chart_deliveries | tojson }};
@@ -250,8 +250,8 @@ function initDashCharts() {
     catEl.style.cursor = 'pointer';
   }
 }
-window.addEventListener('load', initDashCharts);
 </script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initDashCharts()"></script>
 
 
 

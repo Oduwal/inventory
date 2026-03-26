@@ -4270,7 +4270,7 @@ def pwa_manifest():
 
 @app.get("/sw.js", response_class=PlainTextResponse)
 def service_worker():
-    sw = """const CACHE = "invkeeper-v2";
+    sw = """const CACHE = "invkeeper-v3";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
@@ -4284,9 +4284,11 @@ self.addEventListener("activate", e => {
 });
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
-  // Only intercept same-origin requests — let external CDN scripts load freely
-  const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin) return;
+  // Only intercept same-origin requests
+  try {
+    const url = new URL(e.request.url);
+    if (url.origin !== self.location.origin) return;
+  } catch(err) { return; }
   e.respondWith(
     fetch(e.request).then(res => {
       if (res.ok && e.request.destination === "document") {
