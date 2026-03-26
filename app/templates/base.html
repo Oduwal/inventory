@@ -291,7 +291,7 @@
         <span class="nav-icon">🚚</span>Deliveries
         {% if role == "ADMIN" %}<span id="adj-badge" style="display:none;position:absolute;top:6px;right:8px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:16px;text-align:center;"></span>{% endif %}
       </a>
-      {% if role in ("ADMIN", "AGENT") %}
+      {% if role == "ADMIN" %}
       <a href="/deliveries/new" data-active="{% if active == 'deliveries_new' %}1{% else %}0{% endif %}">
         <span class="nav-icon">➕</span>New Order
       </a>
@@ -367,24 +367,8 @@
     </nav>
   </aside>
 
-  <!-- Top-right controls: notification bell + theme toggle — side by side, static -->
-  <div style="position:fixed;top:16px;right:20px;z-index:200;display:flex;align-items:center;gap:8px;">
-    {% if user %}
-    <div style="position:relative;">
-      <button id="notif-bell" onclick="toggleNotifPanel()" title="Notifications"
-        style="width:38px;height:38px;border-radius:12px;border:1px solid var(--border);
-               background:var(--card);color:var(--muted);cursor:pointer;
-               display:flex;align-items:center;justify-content:center;font-size:17px;
-               transition:all .2s;box-shadow:var(--shadow);"
-        onmouseover="this.style.color='var(--accent)';this.style.borderColor='rgba(79,124,255,.3)'"
-        onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border)'">
-        🔔
-        <span id="notif-bell-count" style="display:none;position:absolute;top:-5px;right:-5px;
-          background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;
-          border-radius:10px;min-width:16px;text-align:center;"></span>
-      </button>
-    </div>
-    {% endif %}
+  <!-- Theme toggle button (fixed top-right) -->
+  <div style="position:fixed;top:16px;right:20px;z-index:200;">
     <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode"
       style="width:38px;height:38px;border-radius:12px;border:1px solid var(--border);
              background:var(--card);color:var(--muted);cursor:pointer;
@@ -403,7 +387,12 @@
         <p>{% block page_subtitle %}{% endblock %}</p>
       </div>
       <div>{% block top_right %}{% endblock %}
-
+      {% if user %}
+      <button id="notif-bell" onclick="toggleNotifPanel()"
+        style="position:relative;background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:8px;padding:7px 10px;cursor:pointer;color:var(--text);font-size:16px;line-height:1;margin-left:8px;">
+        🔔<span id="notif-bell-count" style="display:none;position:absolute;top:-6px;right:-6px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:16px;text-align:center;"></span>
+      </button>
+      {% endif %}
     </div>
     </div>
     {% block content %}{% endblock %}
@@ -453,7 +442,7 @@ window.addEventListener('appinstalled',()=>{banner.style.display='none';deferred
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
 </script>
 <!-- Notification Panel -->
-<div id="notif-panel" style="display:none;position:fixed;top:64px;right:20px;width:340px;max-height:480px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.8);z-index:9998;">
+<div id="notif-panel" style="display:none;position:fixed;top:60px;right:16px;width:340px;max-height:480px;overflow-y:auto;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,.4);z-index:9998;">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border);">
     <span style="font-weight:700;font-size:14px;">Notifications</span>
     <div style="display:flex;gap:8px;">
@@ -611,7 +600,7 @@ async function pollNotifications() {
       updateBell();
     }
   } catch(e) {}
-  setInterval(pollNotifications, 5000);
+  setInterval(pollNotifications, 3000);
 })();
 {% endif %}
 </script>

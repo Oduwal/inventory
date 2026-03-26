@@ -2549,12 +2549,19 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
         .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
     ) or 0)
 
+    import json as _json
+    deliveries_json = [
+        {"id": d.id, "customer_name": d.customer_name, "status": d.status,
+         "address": d.address or "", "created_at": d.created_at.strftime("%d %b %Y") if d.created_at else ""}
+        for d in rows
+    ]
     return tpl(request, "agent_overview.html", {
         "request": request, "user": user, "active": "dashboard",
         "total_deliveries": len(rows), "pending_c": pending_c,
         "ofd_c": ofd_c, "done_c": done_c,
         "total_collected": total_collected, "total_expenses": total_expenses,
         "cash_collected": cash_collected, "transfer_collected": transfer_collected,
+        "deliveries_json": deliveries_json,
         "chart_labels": [str(d) for d in chart_days],
         "chart_deliveries": [delivery_by_day.get(d.isoformat(), 0) for d in chart_days],
         "chart_expenses": [round(expense_by_day.get(d.isoformat(), 0), 2) for d in chart_days],
@@ -2994,6 +3001,19 @@ async def update_delivery_status(
             })
         return redirect(f"/deliveries/{delivery_id}")
     d.status = status_clean
+    # Notify agent of status change
+    if status_clean == "OUT_FOR_DELIVERY" and d.agent_id:
+        notify(db, d.agent_id, "🚚 Delivery Dispatched",
+               f"Delivery #{d.id} to {d.customer_name} is now out for delivery.",
+               f"/deliveries/{d.id}", "info")
+    elif status_clean == "FAILED" and d.agent_id:
+        notify(db, d.agent_id, "✕ Delivery Marked Failed",
+               f"Delivery #{d.id} to {d.customer_name} has been marked as failed.",
+               f"/deliveries/{d.id}", "danger")
+    elif status_clean == "RETURNED" and d.agent_id:
+        notify(db, d.agent_id, "↩ Delivery Marked Returned",
+               f"Delivery #{d.id} to {d.customer_name} has been marked as returned.",
+               f"/deliveries/{d.id}", "warning")
     # If delivery fails/returns and has a linked assignment — notify admin to vet stock return
     if status_clean in ("FAILED", "RETURNED"):
         linked = db.execute(text(
@@ -3852,6 +3872,11 @@ async def cash_new(
         branch_id=branch_id, agent_id=target_agent_id, delivery_id=d_id,
         kind=k, amount=amt, note=sanitize_text(note, 400, "Note") or None,
     ))
+    # Notify agent when admin gives them operating cash
+    if k == "OPERATING_CASH" and is_admin(user) and target_agent_id != user.id:
+        notify(db, target_agent_id, "💰 Operating Cash Received",
+               f"Admin has given you ₦{float(amt):,.0f} operating cash." + (f" Note: {(note or '').strip()}" if note else ""),
+               "/cash", "success")
     db.commit()
     if d_id:
         return redirect(f"/deliveries/{d_id}")
