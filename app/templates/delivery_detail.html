@@ -47,6 +47,7 @@
       {% elif d.status == "OUT_FOR_DELIVERY" %}<span class="badge b-blue" style="font-size:14px;padding:8px 16px;">🚚 OUT FOR DELIVERY</span>
       {% elif d.status == "PENDING" %}<span class="badge b-yellow" style="font-size:14px;padding:8px 16px;">⏳ PENDING</span>
       {% elif d.status == "FAILED" %}<span class="badge b-red" style="font-size:14px;padding:8px 16px;">✕ FAILED</span>
+      {% elif d.status == "ADJUSTMENT_PENDING" %}<span class="badge b-purple" style="font-size:14px;padding:8px 16px;">📝 ADJUSTMENT PENDING</span>
       {% else %}<span class="badge" style="font-size:14px;padding:8px 16px;">{{ d.status }}</span>
       {% endif %}
     </div>

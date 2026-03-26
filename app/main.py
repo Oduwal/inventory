@@ -2823,10 +2823,40 @@ async def review_adjustment(
                         {"did": ai.delivery_item_id}
                     )
             else:
+                # Price/qty change — update the line amount
                 db.execute(
                     text("UPDATE delivery_items SET line_amount=:amt WHERE id=:did"),
                     {"amt": ai.new_amount, "did": ai.delivery_item_id}
                 )
+                # Check if qty was reduced (encoded in item_name as "Name (qty: X→Y)")
+                import re as _re
+                qty_match = _re.search(r'\(qty:\s*(\d+)\s*→\s*(\d+)\)', ai.item_name or '')
+                if qty_match:
+                    old_qty = int(qty_match.group(1))
+                    new_qty = int(qty_match.group(2))
+                    reduced_by = old_qty - new_qty
+                    if reduced_by > 0:
+                        di = db.get(DeliveryItem, ai.delivery_item_id)
+                        if di:
+                            # Update the active delivery item to the new qty
+                            db.execute(
+                                text("UPDATE delivery_items SET quantity=:qty WHERE id=:did"),
+                                {"qty": new_qty, "did": ai.delivery_item_id}
+                            )
+                            # Create a new delivery_item for the reduced portion (for vetting)
+                            db.execute(text(
+                                "INSERT INTO delivery_items (delivery_id, item_id, quantity, line_amount) "
+                                "VALUES (:did, :iid, :qty, 0) RETURNING id"
+                            ), {"did": d.id, "iid": di.item_id, "qty": reduced_by})
+                            new_di_id = db.execute(text(
+                                "SELECT id FROM delivery_items WHERE delivery_id=:did AND item_id=:iid AND quantity=:qty AND line_amount=0 ORDER BY id DESC LIMIT 1"
+                            ), {"did": d.id, "iid": di.item_id, "qty": reduced_by}).scalar()
+                            if new_di_id:
+                                db.execute(text(
+                                    "INSERT INTO stock_return_vettings "
+                                    "(delivery_id, delivery_item_id, vetted_by, qty_returned, created_at, resolved) "
+                                    "VALUES (:did, :diid, NULL, 0, NOW(), FALSE)"
+                                ), {"did": d.id, "diid": new_di_id})
         db.execute(
             text("UPDATE adjustment_requests SET status='APPROVED', reviewed_by=:uid, reviewed_at=NOW() WHERE id=:rid"),
             {"uid": user.id, "rid": pending.id}
