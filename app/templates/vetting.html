@@ -414,13 +414,14 @@ async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
 }
 
 async function confirmAllReturns(deliveryId, btn) {
-  if (!confirm('Confirm all items returned for delivery #' + deliveryId + '?')) return;
+  if (!confirm('Confirm all items fully returned for delivery #' + deliveryId + '?')) return;
   btn.disabled = true; btn.textContent = '⏳ Confirming...';
-  // Find all unvetted items in this delivery
   const card = document.getElementById('return-card-' + deliveryId);
-  const inputs = card.querySelectorAll('input[id^="qty-"]');
-  let allOk = true;
-  for (const input of inputs) {
+  let processed = 0, allOk = true;
+
+  // 1. Process unvetted items (qty-* inputs) → confirm-return endpoint
+  const unvetted = card.querySelectorAll('input[id^="qty-"]');
+  for (const input of unvetted) {
     const diId = parseInt(input.id.replace('qty-', ''));
     const qty = parseInt(input.value) || 0;
     try {
@@ -431,14 +432,60 @@ async function confirmAllReturns(deliveryId, btn) {
       });
       const data = await res.json();
       if (data.ok) {
+        processed++;
         const row = document.getElementById('return-item-' + diId);
-        if (row) row.innerHTML = `<div style="flex:1;font-weight:600;font-size:13px;">${data.item_name}</div>
-          <span class="badge b-green" style="font-size:11px;">✓ Returned x${qty}</span>`;
-      }
+        if (row) {
+          if (data.is_full) {
+            row.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name + '</div>'
+              + '<span class="badge b-green" style="font-size:11px;">✓ Returned x' + qty + '</span>';
+          } else {
+            row.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name
+              + ' <span style="color:#f59e0b;font-size:11px;margin-left:6px;">⚠ ' + data.shortfall + ' missing</span></div>'
+              + '<span style="font-size:12px;color:#4ade80;">' + qty + ' returned — shortfall pending</span>';
+          }
+        }
+      } else { allOk = false; }
     } catch(e) { allOk = false; }
   }
+
+  // 2. Process shortfall items (resolve-qty-* inputs) → resolve-shortfall endpoint as "returned"
+  const shortfalls = card.querySelectorAll('input[id^="resolve-qty-"]');
+  for (const input of shortfalls) {
+    const diId = parseInt(input.id.replace('resolve-qty-', ''));
+    const qty = parseInt(input.value) || 0;
+    try {
+      const res = await fetch('/vetting/resolve-shortfall', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({delivery_item_id: diId, delivery_id: deliveryId,
+                              qty_resolved: qty, action: 'returned'})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        processed++;
+        const row = document.getElementById('return-item-' + diId);
+        if (row) {
+          if (data.remaining_shortfall > 0) {
+            var ri = row.querySelector('[id^="resolve-qty-"]');
+            if (ri) { ri.max = data.remaining_shortfall; ri.value = data.remaining_shortfall; }
+            var warn = row.querySelector('span[style*="f59e0b"]');
+            if (warn) warn.textContent = '⚠ ' + data.remaining_shortfall + ' still missing';
+          } else {
+            row.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name + '</div>'
+              + '<span class="badge b-green" style="font-size:11px;">✓ All Returned</span>';
+          }
+        }
+      } else { allOk = false; }
+    } catch(e) { allOk = false; }
+  }
+
   checkAllVetted(deliveryId);
-  btn.disabled = false; btn.textContent = allOk ? '✓ All Confirmed' : '⚠ Some failed';
+  if (processed === 0) {
+    alert('No pending items found to confirm.');
+    btn.disabled = false; btn.textContent = '✓ Confirm All Items';
+  } else {
+    btn.textContent = allOk ? '✓ All Confirmed' : '⚠ Some failed — reload page';
+  }
 }
 
 async function resolveShortfall(deliveryId, diId, btn, action) {
