@@ -126,11 +126,11 @@
     <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <span class="badge b-yellow">🏆 TOP AGENTS</span>
-            <span class="muted small">By deliveries</span>
+            <span class="muted small">By delivered orders</span>
         </div>
         {% if best_agents %}
         <table>
-            <thead><tr><th>Agent</th><th style="text-align:right;">Deliveries</th><th style="text-align:right;">Collections</th></tr></thead>
+            <thead><tr><th>Agent</th><th style="text-align:right;">Delivered</th><th style="text-align:right;">Collections</th></tr></thead>
             <tbody>
             {% for a in best_agents %}
             <tr>
@@ -160,72 +160,70 @@ const _supCatItems  = {{ all_cat_items_json | tojson if all_cat_items_json is de
 const _supRemit  = [{% for r in rows %}{{ r.remittance | round(0) | int }}{%- if not loop.last %},{%- endif %}{% endfor %}];
 const _supBranch = [{% for r in rows %}"{{ r.branch.name if r.branch else '?' }}"{%- if not loop.last %},{%- endif %}{% endfor %}];
 
-const _axisStyle = {
-  grid: { color: 'rgba(255,255,255,0.05)', drawBorder: false },
-  ticks: { color: '#8a9bc4', font: { size: 11 } }
-};
-const _baseOpts = {
-  responsive: true, maintainAspectRatio: false,
-  plugins: { legend: { display: false }, tooltip: {
-    backgroundColor: 'rgba(13,24,41,0.95)',
-    borderColor: 'rgba(79,124,255,0.3)', borderWidth: 1,
-    titleColor: '#e7eefc', bodyColor: '#8a9bc4', padding: 10, cornerRadius: 8,
-  }},
-  scales: { x: _axisStyle, y: { ..._axisStyle, beginAtZero: true } },
-  animation: { duration: 600, easing: 'easeOutQuart' }
-};
-function _shortLabels(labels) {
-  return labels.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
-}
-function _barChart(id, labels, data, color) {
-  const el = document.getElementById(id); if (!el) return;
-  new Chart(el, { type: 'bar',
-    data: { labels, datasets: [{ data,
-      backgroundColor: color || 'rgba(79,124,255,0.65)',
-      borderColor: (color||'rgba(79,124,255,0.65)').replace('0.65','1'),
-      borderWidth: 1, borderRadius: 6, borderSkipped: false,
-    }]},
-    options: { ..._baseOpts, scales: { x: _axisStyle,
-      y: { ..._axisStyle, beginAtZero: true, ticks: { ..._axisStyle.ticks, stepSize: 1, precision: 0 }}}}
-  });
-}
-function _lineChart(id, labels, data, color, isCurrency) {
-  const el = document.getElementById(id); if (!el) return;
-  const c = color || '#4f7cff';
-  new Chart(el, { type: 'line',
-    data: { labels, datasets: [{ data,
-      borderColor: c, borderWidth: 2.5,
-      backgroundColor: c.includes('rgb') ? c.replace(/[\d.]+\)$/, '0.12)') : c + '20',
-      pointBackgroundColor: c, pointBorderColor: 'rgba(13,24,41,0.8)',
-      pointBorderWidth: 2, pointRadius: 4, pointHoverRadius: 6,
-      fill: true, tension: 0.4,
-    }]},
-    options: { ..._baseOpts, scales: { x: _axisStyle,
-      y: { ..._axisStyle, beginAtZero: true, ticks: { ..._axisStyle.ticks,
-        callback: v => isCurrency ? '₦'+Number(v).toLocaleString() : v }}}}
-  });
-}
-
 function initSupCharts() {
-  function _shortLabels(labels) {
-    return labels.map(l => { const d = new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
-  }
-  Chart.defaults.color = '#8a9bc4';
-  Chart.defaults.font.family = 'inherit';
-  const _axisStyle = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
-  const _baseOpts = { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } }, scales:{ x:_axisStyle, y:{..._axisStyle,beginAtZero:true} }, animation:{duration:600,easing:'easeOutQuart'} };
-  const sl = _shortLabels(_supLabels);
-  _barChart('chartDeliveries', sl, _supDeliveries, 'rgba(79,124,255,0.65)');
-  _lineChart('chartExpenses', sl, _supExpenses, '#ef4444', true);
-  _barChart('remitChart', _supBranch, _supRemit, 'rgba(20,184,166,0.65)');
-  const catEl = document.getElementById('catChart');
-  if (catEl && _supCatLabels.length) {
-    new Chart(catEl, { type: 'bar',
-      data: { labels: _supCatLabels, datasets: [{ data: _supCatValues,
-        backgroundColor: 'rgba(139,92,246,0.65)', borderColor: 'rgba(139,92,246,1)',
-        borderWidth: 1, borderRadius: 6, borderSkipped: false }]},
-      options: { ..._baseOpts }
-    });
+  try {
+    Chart.defaults.color = '#8a9bc4';
+    Chart.defaults.font.family = 'inherit';
+
+    var ax = { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8a9bc4', font: { size: 11 } } };
+    var bo = {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false}, tooltip:{ backgroundColor:'rgba(13,24,41,0.95)', borderColor:'rgba(79,124,255,0.3)', borderWidth:1, titleColor:'#e7eefc', bodyColor:'#8a9bc4', padding:10, cornerRadius:8 } },
+      scales:{ x:ax, y:{...ax, beginAtZero:true} },
+      animation:{duration:600, easing:'easeOutQuart'}
+    };
+
+    var sl = _supLabels.map(function(l){ var d=new Date(l+'T00:00:00'); return (d.getMonth()+1)+'/'+d.getDate(); });
+
+    // Daily deliveries bar chart
+    var el1 = document.getElementById('chartDeliveries');
+    if (el1) {
+      new Chart(el1, { type:'bar',
+        data:{ labels:sl, datasets:[{ data:_supDeliveries,
+          backgroundColor:'rgba(79,124,255,0.65)', borderColor:'rgba(79,124,255,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo, scales:{ x:ax, y:{...ax, beginAtZero:true, ticks:{...ax.ticks, stepSize:1, precision:0}} }}
+      });
+    }
+
+    // Daily expenses — BAR chart (not line)
+    var el2 = document.getElementById('chartExpenses');
+    if (el2) {
+      new Chart(el2, { type:'bar',
+        data:{ labels:sl, datasets:[{ data:_supExpenses,
+          backgroundColor:'rgba(239,68,68,0.6)', borderColor:'rgba(239,68,68,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo, scales:{ x:ax, y:{...ax, beginAtZero:true, ticks:{...ax.ticks,
+          callback: function(v){ return '₦'+Number(v).toLocaleString(); } }} }}
+      });
+    }
+
+    // Remittance by branch bar chart
+    var el3 = document.getElementById('remitChart');
+    if (el3) {
+      new Chart(el3, { type:'bar',
+        data:{ labels:_supBranch, datasets:[{ data:_supRemit,
+          backgroundColor:'rgba(20,184,166,0.65)', borderColor:'rgba(20,184,166,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo, scales:{ x:ax, y:{...ax, beginAtZero:true, ticks:{...ax.ticks,
+          callback: function(v){ return '₦'+Number(v).toLocaleString(); } }} }}
+      });
+    }
+
+    // Category bar chart
+    var el4 = document.getElementById('catChart');
+    if (el4 && _supCatLabels.length) {
+      new Chart(el4, { type:'bar',
+        data:{ labels:_supCatLabels, datasets:[{ data:_supCatValues,
+          backgroundColor:'rgba(139,92,246,0.65)', borderColor:'rgba(139,92,246,1)',
+          borderWidth:1, borderRadius:6, borderSkipped:false }]},
+        options:{...bo}
+      });
+    }
+
+    console.log('Supervisor charts initialized OK');
+  } catch(err) {
+    console.error('Supervisor chart init FAILED:', err);
   }
 }
 </script>
