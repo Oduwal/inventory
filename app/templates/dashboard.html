@@ -232,26 +232,7 @@ function initDashCharts() {
   {% endif %}
 }
 </script>
-<script>
-(function() {
-  var attempts = 0;
-  function tryInit() {
-    if (typeof Chart !== 'undefined') { initDashCharts(); return; }
-    if (attempts++ < 20) { setTimeout(tryInit, 200); }
-  }
-  var s = document.createElement('script');
-  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
-  s.onload = function() { initDashCharts(); };
-  s.onerror = function() {
-    // fallback CDN
-    var s2 = document.createElement('script');
-    s2.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
-    s2.onload = function() { initDashCharts(); };
-    document.head.appendChild(s2);
-  };
-  document.head.appendChild(s);
-})();
-</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initDashCharts()"></script>
 
 
 

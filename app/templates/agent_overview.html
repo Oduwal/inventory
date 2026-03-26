@@ -87,26 +87,7 @@ function initCharts(){
   });
 }
 </script>
-<script>
-(function() {
-  var attempts = 0;
-  function tryInit() {
-    if (typeof Chart !== 'undefined') { initCharts(); return; }
-    if (attempts++ < 20) { setTimeout(tryInit, 200); }
-  }
-  var s = document.createElement('script');
-  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
-  s.onload = function() { initCharts(); };
-  s.onerror = function() {
-    // fallback CDN
-    var s2 = document.createElement('script');
-    s2.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
-    s2.onload = function() { initCharts(); };
-    document.head.appendChild(s2);
-  };
-  document.head.appendChild(s);
-})();
-</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initCharts()"></script>
 <div class="chart-grid">
   <div class="card" style="border-top:3px solid #4f7cff;">
     <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
