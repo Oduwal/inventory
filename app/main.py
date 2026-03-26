@@ -2462,17 +2462,40 @@ async def delivery_create(
     # Link assignments if provided — no extra stock OUT needed (already deducted)
     for aid in (assignment_ids or []):
         asgn = db.execute(text(
-            "SELECT id, agent_id, transaction_out_id FROM agent_stock_assignments "
+            "SELECT id, agent_id, item_id, branch_id, qty_assigned, transaction_out_id, note, assigned_by "
+            "FROM agent_stock_assignments "
             "WHERE id = :aid AND returned = FALSE"
         ), {"aid": aid}).fetchone()
         if asgn and asgn[1] == target_agent_id:
-            db.execute(text(
-                "UPDATE agent_stock_assignments SET delivery_id = :did WHERE id = :aid"
-            ), {"did": d.id, "aid": aid})
-            if asgn[2]:
+            asgn_id, _, asgn_item_id, asgn_branch_id, asgn_qty, asgn_tx_id, asgn_note, asgn_by = asgn
+            # Find how many of this item the delivery actually uses
+            delivery_qty = 0
+            for iid, qty_val in zip(item_id, quantity):
+                if int(iid) == int(asgn_item_id):
+                    delivery_qty = int(qty_val) if qty_val else 0
+                    break
+            remainder = asgn_qty - delivery_qty
+            if remainder > 0 and delivery_qty > 0:
+                # Split: reduce original assignment to delivery_qty and link it
+                db.execute(text(
+                    "UPDATE agent_stock_assignments SET qty_assigned=:qty, delivery_id=:did WHERE id=:aid"
+                ), {"qty": delivery_qty, "did": d.id, "aid": asgn_id})
+                # Create new assignment for the remainder (stays for vetting)
+                db.execute(text(
+                    "INSERT INTO agent_stock_assignments "
+                    "(agent_id, item_id, branch_id, qty_assigned, note, assigned_by, assigned_at, returned, qty_returned) "
+                    "VALUES (:agent, :item, :branch, :qty, :note, :by, NOW(), FALSE, 0)"
+                ), {"agent": asgn[1], "item": asgn_item_id, "branch": asgn_branch_id,
+                    "qty": remainder, "note": (asgn_note or '') + f' (split from #{asgn_id})', "by": asgn_by})
+            else:
+                # Full assignment used or no delivery item match — link whole thing
+                db.execute(text(
+                    "UPDATE agent_stock_assignments SET delivery_id = :did WHERE id = :aid"
+                ), {"did": d.id, "aid": asgn_id})
+            if asgn_tx_id:
                 db.execute(text(
                     "UPDATE transactions SET delivery_id = :did WHERE id = :txid"
-                ), {"did": d.id, "txid": asgn[2]})
+                ), {"did": d.id, "txid": asgn_tx_id})
 
     db.commit()
     # Notify branch admins of new order
