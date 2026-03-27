@@ -2647,9 +2647,15 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
-    d_items = db.execute(
+    d_items_all = db.execute(
         select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)
     ).all()
+    # Find which delivery_items are vetting-only phantoms (from adjustment approval)
+    _vetting_di_ids = set(r[0] for r in db.execute(text(
+        "SELECT DISTINCT delivery_item_id FROM stock_return_vettings WHERE delivery_id=:did"
+    ), {"did": d.id}).fetchall())
+    # Hide items that have vetting records — those are phantom items for return tracking
+    d_items = [(di, it) for di, it in d_items_all if di.id not in _vetting_di_ids]
     col = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"]))) or 0
     cash_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind.in_(["COLLECTION","CASH_PAYMENT"]))) or 0
     transfer_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "TRANSFER_PAYMENT")) or 0
