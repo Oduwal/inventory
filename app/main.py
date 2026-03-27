@@ -2555,6 +2555,10 @@ async def delivery_create(
     notify_branch_admins(db, d.branch_id, "🆕 New Order Created",
         f"New delivery for {cust} created{' by supervisor' if is_supervisor(user) else ''}.",
         f"/deliveries/{d.id}", "info")
+    if is_admin(user) and target_agent_id and target_agent_id != user.id:
+        notify(db, target_agent_id, "📦 New Delivery Assigned",
+               f"A new delivery for {cust} has been assigned to you.",
+               f"/deliveries/{d.id}", "info")
     db.commit()
     return redirect(f"/deliveries/{d.id}")
 
@@ -3422,6 +3426,10 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
                   f"assignment_id={asgn_id} item={item.name if item else item_id} credited={qty_to_credit} remaining={remaining}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
+        notify(db, agent_id,
+            "✅ Assignment Shortfall Resolved" if remaining == 0 else "⚠ Partial Assignment Shortfall Resolved",
+            f"{item.name if item else 'Stock'}: {qty_to_credit} unit(s) credited back." + (f" {remaining} still outstanding." if remaining else ""),
+            "/my-deliveries", "success" if remaining == 0 else "warning")
         return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
                              "remaining_shortfall": remaining, "action": "returned"})
 
@@ -3436,6 +3444,10 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
                   f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={current_shortfall}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
+        notify(db, agent_id,
+            "📋 Assignment Written Off",
+            f"{item.name if item else 'Stock'}: {current_shortfall} missing unit(s) have been written off.",
+            "/my-deliveries", "info")
         return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
                              "qty_lost": current_shortfall, "remaining_shortfall": 0,
                              "action": "written_off"})
@@ -3606,6 +3618,12 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
                   f"delivery_id={delivery_id} item={item.name} credited={qty_to_credit} remaining={remaining_shortfall}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
+        _delivery = db.get(Delivery, delivery_id) if delivery_id else None
+        if _delivery and _delivery.agent_id:
+            notify(db, _delivery.agent_id,
+                "✅ Shortfall Resolved" if is_fully_resolved else "⚠ Partial Shortfall Resolved",
+                f"{item.name}: {qty_to_credit} unit(s) credited back." + (f" {remaining_shortfall} still outstanding." if remaining_shortfall else ""),
+                f"/deliveries/{delivery_id}", "success" if is_fully_resolved else "warning")
         return JSONResponse({
             "ok": True,
             "item_name": item.name,
@@ -3633,6 +3651,12 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
                   f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
+        _delivery = db.get(Delivery, delivery_id) if delivery_id else None
+        if _delivery and _delivery.agent_id:
+            notify(db, _delivery.agent_id,
+                "📋 Shortfall Written Off",
+                f"{item.name}: {qty_to_writeoff} missing unit(s) have been written off.",
+                f"/deliveries/{delivery_id}", "info")
         return JSONResponse({
             "ok": True,
             "item_name": item.name,
@@ -3971,6 +3995,11 @@ async def vetting_confirm(request: Request, db: Session = Depends(get_db)):
     audit_log(db, user.id, "CASH_VETTED",
               f"agent_id={agent_id} date={date_str} entries={len(entries)}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+    if entries:
+        notify(db, agent_id,
+            "✅ Cash Confirmed",
+            f"Admin has confirmed {len(entries)} cash entr{'y' if len(entries) == 1 else 'ies'} for {date_str}.",
+            "/cash", "success")
     return JSONResponse({"ok": True, "confirmed": len(entries)})
 
 
@@ -4906,6 +4935,15 @@ async def transfer_create(
         db.add(StockTransferItem(transfer_id=transfer.id, item_id=item_id, quantity=qty))
     # Stock is NOT deducted here — deducted when agent/admin marks as packed & sent
     db.commit()
+    notify_branch_admins(db, to_branch_id,
+        "📦 Incoming Stock Transfer",
+        f"A new stock transfer from {user.branch.name} is pending for your branch (transfer #{transfer.id}).",
+        f"/transfers/{transfer.id}", "info")
+    if del_agent_id:
+        notify(db, del_agent_id,
+            "📦 Transfer Assigned to You",
+            f"You have been assigned to send stock transfer #{transfer.id} to another branch.",
+            f"/transfers/{transfer.id}", "info")
     return redirect(f"/transfers/{transfer.id}")
 
 
@@ -5123,6 +5161,11 @@ async def transfer_delegate_receiver(
         return HTMLResponse("Forbidden — you are not the receiving branch", status_code=403)
     transfer.delegated_receiver_id = int(delegated_receiver_id) if delegated_receiver_id.isdigit() else None
     db.commit()
+    if transfer.delegated_receiver_id:
+        notify(db, transfer.delegated_receiver_id,
+            "📦 Transfer to Receive",
+            f"You have been assigned to receive stock transfer #{transfer_id}.",
+            f"/transfers/{transfer_id}", "info")
     return redirect(f"/transfers/{transfer_id}")
 
 

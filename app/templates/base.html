@@ -207,17 +207,37 @@
 
     /* Mobile */
     @media(max-width:860px){
-      .sidebar{position:relative;width:100%;height:auto;overflow:visible;
-               border-right:none;border-bottom:1px solid var(--border)}
-      .nav{flex-direction:row;flex-wrap:wrap;gap:4px}
-      .nav a{font-size:12px;padding:6px 10px}
-      .nav-section,.nav-divider{display:none}
+      body{overflow-x:hidden}
       .layout{flex-direction:column}
-      .content{margin-left:0;padding:16px 14px}
-      .topbar{flex-direction:column;align-items:flex-start;gap:10px}
+      .sidebar{
+        position:sticky;top:0;z-index:100;
+        width:100%;height:auto;
+        border-right:none;border-bottom:1px solid var(--border);
+        padding:10px 10px 6px;
+        background:rgba(8,15,30,.95);
+      }
+      .brand{display:none}
+      .userbox{display:none}
+      .nav{
+        flex-direction:row;flex-wrap:nowrap;gap:4px;
+        overflow-x:auto;-webkit-overflow-scrolling:touch;
+        padding-bottom:2px;scrollbar-width:none;
+      }
+      .nav::-webkit-scrollbar{display:none}
+      .nav a{font-size:12px;padding:6px 10px;white-space:nowrap;flex-shrink:0}
+      .nav-section,.nav-divider{display:none}
+      .content{margin-left:0;padding:14px 12px;overflow-x:hidden;min-width:0}
+      .topbar{flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:14px}
       .topbar > div{width:100%}
+      .title h2{font-size:18px}
       .inputs{flex-direction:column;align-items:stretch}
       .inputs > div{min-width:0;width:100%}
+      /* Tables scroll instead of cutting off */
+      table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+      /* Cards tighter on mobile */
+      .card{padding:14px 12px}
+      /* Buttons full-width where they stack */
+      .btnPrimary,.btnGhost,.btnDanger{font-size:13px;padding:9px 14px}
     }
   </style>
 </head>
