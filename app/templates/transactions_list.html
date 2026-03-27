@@ -4,11 +4,7 @@
 {% block page_subtitle %}All stock IN / OUT movements{% endblock %}
 {% set active = 'transactions' %}
 
-{% block top_right %}
-{% if user and user.role == "ADMIN" %}
-<a class="btnPrimary" href="/transactions/new">+ New Transaction</a>
-{% endif %}
-{% endblock %}
+{% block top_right %}{% endblock %}
 
 {% block content %}
 

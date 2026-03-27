@@ -17,7 +17,7 @@ self.addEventListener("fetch", e => {
     if (e.request.method !== "GET" || !e.request.url.startsWith("http")) return;
     e.respondWith(
         fetch(e.request).then(res => {
-            if (res.ok && e.request.destination === "document") {
+            if (res.ok && e.request.destination === "document" && !e.request.url.includes("/transactions")) {
                 const clone = res.clone();
                 caches.open(CACHE).then(c => c.put(e.request, clone));
             }

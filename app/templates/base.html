@@ -598,6 +598,13 @@ document.addEventListener('click', e => {
   }
 });
 
+// Track last time user typed — don't auto-reload while they're filling a form
+let _lastInputAt = 0;
+document.addEventListener('input',  () => { _lastInputAt = Date.now(); }, true);
+document.addEventListener('focusin', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) _lastInputAt = Date.now();
+}, true);
+
 // Poll every 5 seconds
 async function pollNotifications() {
   try {
@@ -614,7 +621,15 @@ async function pollNotifications() {
           hasNew = true;
         }
       });
-      if (hasNew) { playNotifSound(); updateBell(); }
+      if (hasNew) {
+        playNotifSound();
+        updateBell();
+        // Auto-reload if a notification links to the page currently open
+        const path = window.location.pathname;
+        const relevant = notifs.some(n => n.link && (n.link === path || path.startsWith(n.link + '/') || n.link.startsWith(path)));
+        const userIdle  = Date.now() - _lastInputAt > 2000;
+        if (relevant && userIdle) setTimeout(() => location.reload(), 1200);
+      }
     }
   } catch(e) {}
 }
