@@ -2513,18 +2513,27 @@ async def delivery_create(
         ), {"aid": aid}).fetchone()
         if asgn_row:
             assigned_item_ids.add(int(asgn_row[0]))
+    tx_item_ids = set()  # track items we've already created an OUT tx for
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
             # Create OUT transaction immediately (unless covered by an assignment)
             if int(iid) not in assigned_item_ids:
-                db.add(Transaction(
-                    branch_id=branch_id, item_id=int(iid), type="OUT", quantity=q,
-                    note=f"Delivery #{d.id} to {cust} — assigned to agent",
-                    reference=f"delivery-{d.id}",
-                    delivery_id=d.id,
-                ))
+                if int(iid) not in tx_item_ids:
+                    db.add(Transaction(
+                        branch_id=branch_id, item_id=int(iid), type="OUT", quantity=q,
+                        note=f"Delivery #{d.id} to {cust} — assigned to agent",
+                        reference=f"delivery-{d.id}",
+                        delivery_id=d.id,
+                    ))
+                    tx_item_ids.add(int(iid))
+                else:
+                    # Same item submitted twice — add quantity to existing pending transaction
+                    db.execute(text(
+                        "UPDATE transactions SET quantity = quantity + :q "
+                        "WHERE delivery_id = :did AND item_id = :iid AND type = 'OUT'"
+                    ), {"q": q, "did": d.id, "iid": int(iid)})
     # Link assignments if provided — no extra stock OUT needed (already deducted)
     for aid in (assignment_ids or []):
         asgn = db.execute(text(
