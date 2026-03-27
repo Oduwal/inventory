@@ -2068,18 +2068,22 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     delivery_ids = [d.id for d in deliveries]
     items_summary: dict[int, str] = {}
     if delivery_ids:
+        # Exclude phantom delivery_items that exist only for vetting (have a stock_return_vettings record)
+        _phantom_ids = set(r[0] for r in db.execute(text(
+            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
+        )).fetchall())
         lines = db.execute(
-            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
-        for did, iname, qty in lines:
+        for did, iname, qty, di_id in lines:
+            if di_id in _phantom_ids:
+                continue
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
-
-    cash_stmt = select(CashEntry).order_by(desc(CashEntry.created_at))
     if start_dt: cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt: cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
     cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
@@ -2195,14 +2199,19 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
+        _phantom_ids2 = set(r[0] for r in db.execute(text(
+            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
+        )).fetchall())
         lines = db.execute(
-            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
-        for did, iname, qty in lines:
+        for did, iname, qty, di_id in lines:
+            if di_id in _phantom_ids2:
+                continue
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
@@ -2606,14 +2615,19 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
+        _phantom_ids3 = set(r[0] for r in db.execute(text(
+            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
+        )).fetchall())
         lines = db.execute(
-            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
-        for did, iname, qty in lines:
+        for did, iname, qty, di_id in lines:
+            if di_id in _phantom_ids3:
+                continue
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 
