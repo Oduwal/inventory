@@ -12,7 +12,14 @@
 
 import os
 import json as _json
+import threading
 from datetime import datetime, date, timedelta
+
+try:
+    from pywebpush import webpush as _webpush, WebPushException as _WebPushException
+    _PYWEBPUSH_OK = True
+except ImportError:
+    _PYWEBPUSH_OK = False
 
 VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
@@ -77,14 +84,18 @@ app = FastAPI()
 
 
 # ── Notification helper ──────────────────────────────────────────────────────
-def _send_web_push(db, user_id: int, title: str, body: str, link: str):
-    """Send a web push to all registered devices for user."""
+def _send_web_push(user_id: int, title: str, body: str, link: str):
+    """Send a web push to all registered devices for user (runs in its own thread+session)."""
     _log = logging.getLogger("push")
+    if not _PYWEBPUSH_OK:
+        _log.warning("PUSH: pywebpush not installed — skipping")
+        return
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         _log.warning("PUSH: VAPID keys not set — skipping push for user %s", user_id)
         return
+    from .database import SessionLocal
+    db = SessionLocal()
     try:
-        from pywebpush import webpush, WebPushException
         subs = db.execute(text(
             "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = :uid"
         ), {"uid": user_id}).fetchall()
@@ -93,14 +104,14 @@ def _send_web_push(db, user_id: int, title: str, body: str, link: str):
             return
         for sub in subs:
             try:
-                webpush(
+                _webpush(
                     subscription_info={"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
                     data=_json.dumps({"title": title, "body": body, "link": link}),
                     vapid_private_key=VAPID_PRIVATE_KEY,
                     vapid_claims={"sub": "mailto:push@inventorykeeper.app"},
                 )
                 _log.info("PUSH: sent to user %s endpoint=...%s", user_id, sub.endpoint[-20:])
-            except WebPushException as e:
+            except _WebPushException as e:
                 status = e.response.status_code if e.response else "no-response"
                 _log.warning("PUSH: WebPushException user=%s status=%s err=%s", user_id, status, e)
                 err_str = str(e)
@@ -116,16 +127,20 @@ def _send_web_push(db, user_id: int, title: str, body: str, link: str):
             except Exception as ex:
                 _log.warning("PUSH: unexpected error user=%s: %s", user_id, ex)
     except Exception as e:
-        logging.getLogger("push").warning("PUSH: top-level error: %s", e)
+        _log.warning("PUSH: top-level error: %s", e)
+    finally:
+        db.close()
 
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
-    """Create a persistent notification for a user. Silently swallows errors."""
+    """Create a persistent notification and fire web push in a background thread."""
     try:
         db.execute(text(
             "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
             "VALUES (:uid, :title, :body, :link, :kind, NOW())"
         ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind})
-        _send_web_push(db, user_id, title, body, link)
+        threading.Thread(
+            target=_send_web_push, args=(user_id, title, body, link), daemon=True
+        ).start()
     except Exception as e:
         logging.getLogger("notifications").warning(f"Notify failed: {e}")
 
@@ -500,6 +515,7 @@ def ensure_schema() -> None:
             created_at TIMESTAMP DEFAULT NOW()
         )""")
         _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_push_endpoint ON push_subscriptions (endpoint)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_push_subscriptions_user_id ON push_subscriptions (user_id)")
         # Adjustment requests table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS adjustment_requests (
             id SERIAL PRIMARY KEY,
@@ -1146,30 +1162,6 @@ async def reset_data_execute(
     </div></body></html>
     """)
 
-
-@app.get("/debug/expenses", response_class=HTMLResponse)
-def debug_expenses(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not (is_supervisor(user) or is_admin(user)): return HTMLResponse("Forbidden", 403)
-    from sqlalchemy import text
-    rows = db.execute(text("""
-        SELECT ce.id, ce.kind, ce.amount, ce.branch_id, ce.agent_id,
-               b.name as branch_name, u.username, ce.note, ce.created_at
-        FROM cash_entries ce
-        LEFT JOIN branches b ON b.id = ce.branch_id
-        LEFT JOIN users u ON u.id = ce.agent_id
-        WHERE ce.kind IN ('EXPENSE','OFFICE_EXPENSE')
-        ORDER BY ce.created_at DESC LIMIT 50
-    """)).fetchall()
-    html = "<pre style='font-size:11px;font-family:monospace;padding:20px;background:#050c1a;color:#d8eaf8;'>"
-    html += f"{'ID':<5} {'KIND':<20} {'AMT':<10} {'BR':<5} {'AGENT':<15} {'NOTE':<50} DATE\n"
-    html += "-"*130 + "\n"
-    for r in rows:
-        html += f"{str(r[0]):<5} {str(r[1]):<20} {str(r[2]):<10} {str(r[3]):<5} {str(r[6] or ''):<15} {str(r[7] or ''):<50} {str(r[8])}\n"
-    html += "</pre>"
-    return HTMLResponse(html)
 
 
 @app.get("/supervisor", response_class=HTMLResponse)
@@ -2325,6 +2317,7 @@ def check_env(request: Request, db: Session = Depends(get_db)):
 @app.post("/parse-order/api", response_class=JSONResponse)
 async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     """Backend proxy — calls Groq API server-side to avoid CORS."""
+    limiter.check(request, max_requests=20, window_seconds=60)
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Not logged in"}, status_code=401)
@@ -2756,7 +2749,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     adj_items = []
     if pending_adj:
         adj_items = db.execute(
-            text("SELECT * FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
+            text("SELECT id, request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
             {"rid": pending_adj.id}
         ).fetchall()
     return tpl(request, "delivery_detail.html", {
@@ -2910,14 +2903,14 @@ async def review_adjustment(
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404)
     pending = db.execute(
-        text("SELECT * FROM adjustment_requests WHERE delivery_id=:did AND status='PENDING' ORDER BY created_at DESC LIMIT 1"),
+        text("SELECT id, delivery_id, requested_by, reason, status, reviewed_by, rejection_note, created_at, reviewed_at FROM adjustment_requests WHERE delivery_id=:did AND status='PENDING' ORDER BY created_at DESC LIMIT 1"),
         {"did": d.id}
     ).fetchone()
     if not pending:
         return redirect(f"/deliveries/{delivery_id}?error=No+pending+adjustment+request+found")
     if action == "approve":
         adj_items = db.execute(
-            text("SELECT * FROM adjustment_request_items WHERE request_id=:rid"), {"rid": pending.id}
+            text("SELECT id, request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item FROM adjustment_request_items WHERE request_id=:rid"), {"rid": pending.id}
         ).fetchall()
         for ai in adj_items:
             if ai.remove_item:
@@ -3179,6 +3172,10 @@ async def update_delivery_status(
 @app.get("/notifications/poll", response_class=JSONResponse)
 def notifications_poll(request: Request, after: int = 0, db: Session = Depends(get_db)):
     """Poll for unread notifications. Returns new ones since 'after' id."""
+    try:
+        limiter.check(request, max_requests=60, window_seconds=60)
+    except HTTPException:
+        return JSONResponse({"notifications": []})
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return JSONResponse({"notifications": []})
     user = user_or
@@ -3257,17 +3254,17 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/push/test", response_class=JSONResponse)
 def push_test(request: Request, db: Session = Depends(get_db)):
-    """Send a test push to the logged-in user. Visit this URL on your phone to verify push works."""
+    """Send a test push to the logged-in user."""
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
     user = user_or
-    sub_count = db.execute(text("SELECT COUNT(*) FROM push_subscriptions WHERE user_id=:uid"), {"uid": user.id}).scalar() or 0
     if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
-        return JSONResponse({"error": "VAPID keys not configured on server", "subscriptions": sub_count})
-    if sub_count == 0:
-        return JSONResponse({"error": "No push subscription found for your account. Allow notifications first and reload the app.", "subscriptions": 0})
-    _send_web_push(db, user.id, "🔔 Test Notification", "Push notifications are working!", "/")
-    return JSONResponse({"ok": True, "message": "Test push sent", "subscriptions": sub_count})
+        return JSONResponse({"error": "VAPID keys not configured on server"})
+    has_sub = db.execute(text("SELECT 1 FROM push_subscriptions WHERE user_id=:uid LIMIT 1"), {"uid": user.id}).first()
+    if not has_sub:
+        return JSONResponse({"error": "No push subscription found. Allow notifications first and reload."})
+    threading.Thread(target=_send_web_push, args=(user.id, "🔔 Test Notification", "Push notifications are working!", "/"), daemon=True).start()
+    return JSONResponse({"ok": True, "message": "Test push sent"})
 
 
 @app.post("/push/unsubscribe", response_class=JSONResponse)

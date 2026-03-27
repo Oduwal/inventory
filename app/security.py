@@ -55,6 +55,7 @@ class InMemoryRateLimiter:
     def __init__(self):
         self._store: dict[str, list[datetime]] = defaultdict(list)
         self._lock = Lock()
+        self._call_count = 0
 
     def is_allowed(self, ip: str, max_requests: int, window_seconds: int) -> bool:
         now = datetime.utcnow()
@@ -64,6 +65,13 @@ class InMemoryRateLimiter:
             if len(self._store[ip]) >= max_requests:
                 return False
             self._store[ip].append(now)
+            self._call_count += 1
+            # Purge stale IPs every 10 000 calls to prevent unbounded memory growth
+            if self._call_count % 10_000 == 0:
+                hour_ago = now - timedelta(hours=1)
+                self._store = defaultdict(list, {
+                    k: v for k, v in self._store.items() if v and v[-1] > hour_ago
+                })
             return True
 
     def check(self, request: Request, max_requests: int = 10, window_seconds: int = 60) -> None:
@@ -194,24 +202,17 @@ def verify_csrf_token(request: Request, form_token: Optional[str]) -> None:
 # [SEC-4] INPUT SANITIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SQL_PATTERNS = re.compile(
-    r"(--|;|/\*|\*/|xp_|UNION\s+SELECT|DROP\s+TABLE|INSERT\s+INTO|DELETE\s+FROM|"
-    r"SELECT\s+\*|ALTER\s+TABLE|EXEC\s*\(|EXECUTE\s*\()",
-    re.IGNORECASE,
-)
 _SCRIPT_PATTERN = re.compile(r"<[^>]+>", re.IGNORECASE)
 
 def sanitize_text(value: str, max_length: int = 400, field_name: str = "") -> str:
+    """Strip HTML tags, escape special chars, and truncate. SQL injection is
+    prevented by parameterized queries — a keyword blocklist would produce
+    false positives on legitimate note content."""
     if not value:
         return ""
     cleaned = value.strip()
     cleaned = _SCRIPT_PATTERN.sub("", cleaned)
     cleaned = html.escape(cleaned, quote=True)
-    if _SQL_PATTERNS.search(cleaned):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid characters detected in {'field: ' + field_name if field_name else 'input'}.",
-        )
     return cleaned[:max_length]
 
 def sanitize_username(value: str) -> str:
@@ -283,19 +284,25 @@ def _humanize_audit(action: str, detail: str) -> str:
 
 def audit_log(db, user_id: Optional[int], action: str, detail: str = "",
               ip: str = "") -> None:
-    """Write an audit entry. Silently swallows errors so it never breaks the main flow."""
+    """Write an audit entry using a separate DB session so it never commits
+    or rolls back the caller's transaction. Silently swallows errors."""
     try:
-        from .models import AuditLog  # imported here to avoid circular import
+        from .models import AuditLog       # avoid circular import
+        from .database import SessionLocal
         human_detail = _humanize_audit(action, detail)
-        entry = AuditLog(
-            user_id=user_id,
-            action=action[:100],
-            detail=human_detail[:500],
-            ip=ip[:45],
-            created_at=datetime.utcnow(),
-        )
-        db.add(entry)
-        db.commit()
+        _db = SessionLocal()
+        try:
+            entry = AuditLog(
+                user_id=user_id,
+                action=action[:100],
+                detail=human_detail[:500],
+                ip=ip[:45],
+                created_at=datetime.utcnow(),
+            )
+            _db.add(entry)
+            _db.commit()
+        finally:
+            _db.close()
     except Exception as e:
         logger.warning(f"Audit log failed: {e}")
 

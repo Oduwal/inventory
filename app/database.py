@@ -14,8 +14,8 @@ if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 else:
     # PostgreSQL (and other server-backed DBs) benefit from connection pooling.
-    engine_kwargs["pool_size"] = 10
-    engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_size"] = 20
+    engine_kwargs["max_overflow"] = 10
 
 engine = create_engine(
     DATABASE_URL,
