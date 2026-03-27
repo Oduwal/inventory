@@ -103,7 +103,10 @@ def _send_web_push(db, user_id: int, title: str, body: str, link: str):
             except WebPushException as e:
                 status = e.response.status_code if e.response else "no-response"
                 _log.warning("PUSH: WebPushException user=%s status=%s err=%s", user_id, status, e)
-                if e.response and e.response.status_code in (404, 410):
+                err_str = str(e)
+                is_gone = (e.response and e.response.status_code in (404, 410)) or \
+                          any(x in err_str for x in ("410", "404", "Gone", "unsubscribed", "expired", "Not Found"))
+                if is_gone:
                     try:
                         db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": sub.endpoint})
                         db.commit()

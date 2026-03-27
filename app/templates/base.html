@@ -208,8 +208,14 @@
     /* Mobile */
     @media(max-width:860px){
       body{overflow-x:hidden}
-      .sidebar{position:relative;width:100%;height:auto;overflow:visible;
-               border-right:none;border-bottom:1px solid var(--border)}
+      .sidebar{
+        position:sticky;top:0;z-index:200;
+        width:100%;height:auto;overflow:visible;
+        border-right:none;border-bottom:1px solid var(--border);
+        background:rgba(8,15,30,.97);
+        backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+      }
+      body.light-mode .sidebar{background:rgba(240,244,255,.97) !important}
       .nav{flex-direction:row;flex-wrap:wrap;gap:4px}
       .nav a{font-size:12px;padding:6px 10px}
       .nav-section,.nav-divider{display:none}
