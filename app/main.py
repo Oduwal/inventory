@@ -78,14 +78,19 @@ app = FastAPI()
 
 # ── Notification helper ──────────────────────────────────────────────────────
 def _send_web_push(db, user_id: int, title: str, body: str, link: str):
-    """Send a web push to all registered devices for user. Silently swallows errors."""
+    """Send a web push to all registered devices for user."""
+    _log = logging.getLogger("push")
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        _log.warning("PUSH: VAPID keys not set — skipping push for user %s", user_id)
         return
     try:
         from pywebpush import webpush, WebPushException
         subs = db.execute(text(
             "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = :uid"
         ), {"uid": user_id}).fetchall()
+        if not subs:
+            _log.info("PUSH: no subscriptions for user %s", user_id)
+            return
         for sub in subs:
             try:
                 webpush(
@@ -94,16 +99,21 @@ def _send_web_push(db, user_id: int, title: str, body: str, link: str):
                     vapid_private_key=VAPID_PRIVATE_KEY,
                     vapid_claims={"sub": "mailto:push@inventorykeeper.app"},
                 )
+                _log.info("PUSH: sent to user %s endpoint=...%s", user_id, sub.endpoint[-20:])
             except WebPushException as e:
+                status = e.response.status_code if e.response else "no-response"
+                _log.warning("PUSH: WebPushException user=%s status=%s err=%s", user_id, status, e)
                 if e.response and e.response.status_code in (404, 410):
                     try:
                         db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": sub.endpoint})
+                        db.commit()
+                        _log.info("PUSH: removed expired subscription for user %s", user_id)
                     except Exception:
                         pass
-            except Exception:
-                pass
+            except Exception as ex:
+                _log.warning("PUSH: unexpected error user=%s: %s", user_id, ex)
     except Exception as e:
-        logging.getLogger("push").warning(f"Web push failed: {e}")
+        logging.getLogger("push").warning("PUSH: top-level error: %s", e)
 
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Create a persistent notification for a user. Silently swallows errors."""
@@ -3231,6 +3241,21 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
     ), {"uid": user.id, "ep": endpoint, "p256dh": p256dh, "auth": auth})
     db.commit()
     return JSONResponse({"ok": True})
+
+
+@app.get("/push/test", response_class=JSONResponse)
+def push_test(request: Request, db: Session = Depends(get_db)):
+    """Send a test push to the logged-in user. Visit this URL on your phone to verify push works."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    sub_count = db.execute(text("SELECT COUNT(*) FROM push_subscriptions WHERE user_id=:uid"), {"uid": user.id}).scalar() or 0
+    if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
+        return JSONResponse({"error": "VAPID keys not configured on server", "subscriptions": sub_count})
+    if sub_count == 0:
+        return JSONResponse({"error": "No push subscription found for your account. Allow notifications first and reload the app.", "subscriptions": 0})
+    _send_web_push(db, user.id, "🔔 Test Notification", "Push notifications are working!", "/")
+    return JSONResponse({"ok": True, "message": "Test push sent", "subscriptions": sub_count})
 
 
 @app.post("/push/unsubscribe", response_class=JSONResponse)
