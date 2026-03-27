@@ -163,10 +163,8 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 # Automatically inject csrf_token into every TemplateResponse context
 # so base.html logout form always has it — no need to pass per-route.
-def tpl(request, name: str, context: dict):
-    """Render a Jinja2 template with auto-injected csrf_token.
-    Uses the Jinja2 env directly to avoid Starlette TemplateResponse signature changes.
-    """
+def tpl(request, name: str, context: dict, status_code: int = 200):
+    """Render a Jinja2 template with auto-injected csrf_token."""
     if "csrf_token" not in context:
         context["csrf_token"] = get_csrf_token(request)
     if "request" not in context:
@@ -174,7 +172,7 @@ def tpl(request, name: str, context: dict):
     tmpl = templates.env.get_template(name)
     html = tmpl.render(**context)
     from starlette.responses import HTMLResponse as _HR
-    return _HR(html)
+    return _HR(html, status_code=status_code)
 
 static_dir = os.path.join(BASE_DIR, "static")
 if os.path.isdir(static_dir):
