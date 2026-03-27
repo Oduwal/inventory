@@ -3618,19 +3618,9 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         .limit(100)
     ).scalars().all()
 
-    # Also flag OUT_FOR_DELIVERY for 24+ hours
-    overdue_cutoff = datetime.utcnow() - timedelta(hours=24)
-    overdue = db.execute(
-        select(Delivery)
-        .where(Delivery.branch_id == branch_id)
-        .where(Delivery.status == "OUT_FOR_DELIVERY")
-        .where(Delivery.created_at <= overdue_cutoff)
-        .order_by(Delivery.created_at.asc())
-    ).scalars().all()
-
     # Also include any delivery that has unresolved vetting records
     # (e.g. from adjustment-removed items where delivery is still OUT_FOR_DELIVERY)
-    existing_ids = {d.id for d in unsuccessful + overdue}
+    existing_ids = {d.id for d in unsuccessful}
     unresolved_delivery_ids = db.execute(text(
         "SELECT DISTINCT srv.delivery_id FROM stock_return_vettings srv "
         "JOIN deliveries d ON d.id = srv.delivery_id "
@@ -3646,9 +3636,9 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         extra_deliveries = []
 
     # Build return rows
-    all_return_deliveries = {d.id: d for d in unsuccessful + overdue + extra_deliveries}
+    all_return_deliveries = {d.id: d for d in unsuccessful + extra_deliveries}
     return_rows = []
-    for d in list(unsuccessful) + list(overdue) + list(extra_deliveries):
+    for d in list(unsuccessful) + list(extra_deliveries):
         if d.id in {r["delivery_id"] for r in return_rows}:
             continue
         d_items = db.execute(
@@ -3678,9 +3668,14 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
 
         agent_u = db.get(User, d.agent_id) if d.agent_id else None
         items_to_vet = []
+        # For active deliveries (OUT_FOR_DELIVERY), only show items WITH vetting records
+        # For failed/returned deliveries, show all items
+        only_vetted_items = d.status == "OUT_FOR_DELIVERY"
         for di, it in d_items:
             vet = vet_map.get(di.id)
             if vet is None:
+                if only_vetted_items:
+                    continue  # Skip items without vetting record on active deliveries
                 # Not vetted at all yet
                 status_flag = "unvetted"
                 shortfall   = di.quantity
@@ -3713,8 +3708,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         all_resolved = all(i["status"] == "resolved" for i in items_to_vet)
         has_shortfall = any(i["status"] == "shortfall" for i in items_to_vet)
 
-        # Skip only if completely resolved AND not an overdue OUT_FOR_DELIVERY
-        if all_resolved and d.status != "OUT_FOR_DELIVERY":
+        # Skip if completely resolved
+        if all_resolved:
             continue
 
         return_rows.append({
@@ -3722,7 +3717,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "delivery_id": d.id,
             "agent_name":  (agent_u.full_name or agent_u.username) if agent_u else "Unknown",
             "status":      d.status,
-            "is_overdue":  d.status == "OUT_FOR_DELIVERY",
+            "is_overdue":  False,
             "item_lines":  items_to_vet,
             "all_vetted":  all_resolved,
             "has_shortfall": has_shortfall,

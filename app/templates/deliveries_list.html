@@ -148,6 +148,8 @@
                         <span class="badge b-blue">{{ d.status }}</span>
                         {% elif d.status == "PENDING" %}
                         <span class="badge b-yellow">{{ d.status }}</span>
+                        {% elif d.status == "ADJUSTMENT_PENDING" %}
+                        <span class="badge b-purple">📝 ADJUSTMENT</span>
                         {% else %}
                         <span class="badge b-red">{{ d.status }}</span>
                         {% endif %}
