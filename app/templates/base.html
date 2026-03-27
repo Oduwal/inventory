@@ -640,19 +640,16 @@ async function pollNotifications() {
       if (!publicKey) return;
       const reg = await navigator.serviceWorker.ready;
       const existing = await reg.pushManager.getSubscription();
+      const storedKey = localStorage.getItem('push_vapid_key');
+      if (existing && storedKey === publicKey) {
+        // Same VAPID key and subscription exists — just ensure server has it
+        await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
+        return;
+      }
+      // VAPID key changed or no stored key — drop old and resubscribe
       if (existing) {
-        // Check if the stored subscription uses the current VAPID key
-        const oldKey = new Uint8Array(existing.options.applicationServerKey);
-        const newKey = _urlB64ToUint8(publicKey);
-        const keysMatch = oldKey.length === newKey.length && oldKey.every((b,i) => b === newKey[i]);
-        if (keysMatch) {
-          // Key matches — just make sure server has it
-          await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
-          return;
-        }
-        // VAPID key changed — drop old subscription and get a fresh one
         await existing.unsubscribe();
-        console.log('Push: old subscription removed (VAPID key changed)');
+        console.log('Push: old subscription cleared');
       }
       if (Notification.permission === 'denied') return;
       if (Notification.permission !== 'granted') {
@@ -661,6 +658,7 @@ async function pollNotifications() {
       }
       const sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:_urlB64ToUint8(publicKey)});
       await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+      localStorage.setItem('push_vapid_key', publicKey);
       console.log('Push: subscribed successfully');
     } catch(e) { console.log('Push subscribe error:', e); }
   })();
