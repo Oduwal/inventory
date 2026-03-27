@@ -2084,6 +2084,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
                 continue
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
+    cash_stmt = select(CashEntry).where(CashEntry.branch_id == agent.branch_id).order_by(desc(CashEntry.created_at))
     if start_dt: cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt: cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
     cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
