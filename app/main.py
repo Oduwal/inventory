@@ -3471,22 +3471,31 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
                              "remaining_shortfall": remaining, "action": "returned"})
 
     else:  # written_off
-        # Accept the loss — mark as returned (complete) but don't credit stock
-        db.execute(text(
-            "UPDATE agent_stock_assignments SET returned=TRUE, "
-            "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
-        ), {"uid": user.id, "aid": asgn_id})
+        qty_to_writeoff = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
+        new_total = qty_already_returned + qty_to_writeoff
+        remaining = max(0, qty_assigned - new_total)
+
+        if remaining == 0:
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
+                "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id})
+        else:
+            # Partial write-off — reduce shortfall but keep record open
+            db.execute(text(
+                "UPDATE agent_stock_assignments SET qty_returned=:qty WHERE id=:aid"
+            ), {"qty": new_total, "aid": asgn_id})
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
-                  f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={current_shortfall}",
+                  f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
         notify(db, agent_id,
-            "📋 Assignment Written Off",
-            f"{item.name if item else 'Stock'}: {current_shortfall} missing unit(s) have been written off.",
+            "📋 Assignment Written Off" if remaining == 0 else "📋 Partial Write-Off Recorded",
+            f"{item.name if item else 'Stock'}: {qty_to_writeoff} unit(s) written off." + (f" {remaining} still outstanding." if remaining else ""),
             "/my-deliveries", "info")
         return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
-                             "qty_lost": current_shortfall, "remaining_shortfall": 0,
+                             "qty_lost": qty_to_writeoff, "remaining_shortfall": remaining,
                              "action": "written_off"})
 
 
@@ -3672,34 +3681,38 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         })
 
     else:  # written_off
-        # Write-off means accepting the loss for the current shortfall (or entered qty).
-        # We do NOT increase qty_returned — that stays as "physically returned" only.
-        # The written_off_rows query uses (di.quantity - srv.qty_returned) to show qty_lost.
         qty_to_writeoff = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
+        new_total_returned = qty_already_returned + qty_to_writeoff
+        remaining_shortfall = max(0, di.quantity - new_total_returned)
+        is_fully_resolved = remaining_shortfall == 0
 
-        # Always resolve fully on write-off — the entered qty is what's being written off,
-        # the rest (qty_already_returned) was already physically returned.
-        db.execute(text(
-            "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-            "resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
-        ), {"uid": user.id, "vid": vet_id})
+        if is_fully_resolved:
+            db.execute(text(
+                "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
+                "qty_returned=:newqty, resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id})
+        else:
+            # Partial write-off — reduce shortfall but keep record open for further action
+            db.execute(text(
+                "UPDATE stock_return_vettings SET qty_returned=:newqty WHERE id=:vid"
+            ), {"newqty": new_total_returned, "vid": vet_id})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
-                  f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff}",
+                  f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
         db.commit()
         _delivery = db.get(Delivery, delivery_id) if delivery_id else None
         if _delivery and _delivery.agent_id:
             notify(db, _delivery.agent_id,
-                "📋 Shortfall Written Off",
-                f"{item.name}: {qty_to_writeoff} missing unit(s) have been written off.",
+                "📋 Shortfall Written Off" if is_fully_resolved else "📋 Partial Write-Off Recorded",
+                f"{item.name}: {qty_to_writeoff} unit(s) written off." + (f" {remaining_shortfall} still outstanding." if remaining_shortfall else ""),
                 f"/deliveries/{delivery_id}", "info")
         return JSONResponse({
             "ok": True,
             "item_name": item.name,
             "qty_lost": qty_to_writeoff,
-            "remaining_shortfall": 0,
-            "is_fully_resolved": True,
+            "remaining_shortfall": remaining_shortfall,
+            "is_fully_resolved": is_fully_resolved,
             "action": "written_off",
         })
 
