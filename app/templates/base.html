@@ -629,21 +629,34 @@ async function pollNotifications() {
   (async function subscribePush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
-      const reg = await navigator.serviceWorker.ready;
-      const existing = await reg.pushManager.getSubscription();
-      if (existing) {
-        // Re-register in case server lost the record
-        await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
-        return;
-      }
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') return;
       const kr = await fetch('/push/vapid-public-key');
       const {publicKey} = await kr.json();
       if (!publicKey) return;
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        // Check if the stored subscription uses the current VAPID key
+        const oldKey = new Uint8Array(existing.options.applicationServerKey);
+        const newKey = _urlB64ToUint8(publicKey);
+        const keysMatch = oldKey.length === newKey.length && oldKey.every((b,i) => b === newKey[i]);
+        if (keysMatch) {
+          // Key matches — just make sure server has it
+          await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
+          return;
+        }
+        // VAPID key changed — drop old subscription and get a fresh one
+        await existing.unsubscribe();
+        console.log('Push: old subscription removed (VAPID key changed)');
+      }
+      if (Notification.permission === 'denied') return;
+      if (Notification.permission !== 'granted') {
+        const result = await Notification.requestPermission();
+        if (result !== 'granted') return;
+      }
       const sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:_urlB64ToUint8(publicKey)});
       await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
-    } catch(e) { console.log('Push subscribe:', e); }
+      console.log('Push: subscribed successfully');
+    } catch(e) { console.log('Push subscribe error:', e); }
   })();
 })();
 {% endif %}
