@@ -94,7 +94,7 @@
               {% for it, stock in items %}
               <option value="{{ it.id }}" data-stock="{{ stock }}"
                 {% if stock <= 0 %}style="color:#f87171;" data-oos="1"{% endif %}>
-                {{ it.name }}{% if stock <= 0 %} — OUT OF STOCK{% endif %}
+                {{ it.name }} ({{ stock }} in stock){% if stock <= 0 %} — OUT OF STOCK{% endif %}
               </option>
               {% endfor %}
             </select>
@@ -197,7 +197,7 @@ function addNormalRow() {
         {% for it, stock in items %}
         <option value="{{ it.id }}" data-stock="{{ stock }}"
           {% if stock <= 0 %}style="color:#f87171;" data-oos="1"{% endif %}>
-          {{ it.name }}{% if stock <= 0 %} — OUT OF STOCK{% endif %}
+          {{ it.name }} ({{ stock }} in stock){% if stock <= 0 %} — OUT OF STOCK{% endif %}
         </option>
         {% endfor %}
       </select>
