@@ -33,11 +33,12 @@ self.addEventListener("push", e => {
     e.waitUntil(self.registration.showNotification(title, {
         body:             data.body || "",
         icon:             "/static/icon-192.png",
-        badge:            "/static/icon-192.png",
+        badge:            "/static/badge-96.png",
         data:             { link: data.link || "/" },
         tag:              "invkeeper-" + (data.link || "default").replace(/\//g, "-"),
         renotify:         true,
         requireInteraction: false,
+        vibrate:          [200, 100, 200],
     }));
 });
 
