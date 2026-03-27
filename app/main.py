@@ -11,7 +11,11 @@
 #   [FIX-8] /admin/reset-system converted to POST with confirmation token
 
 import os
+import json as _json
 from datetime import datetime, date, timedelta
+
+VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
@@ -73,6 +77,34 @@ app = FastAPI()
 
 
 # ── Notification helper ──────────────────────────────────────────────────────
+def _send_web_push(db, user_id: int, title: str, body: str, link: str):
+    """Send a web push to all registered devices for user. Silently swallows errors."""
+    if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+        return
+    try:
+        from pywebpush import webpush, WebPushException
+        subs = db.execute(text(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = :uid"
+        ), {"uid": user_id}).fetchall()
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info={"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                    data=_json.dumps({"title": title, "body": body, "link": link}),
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims={"sub": "mailto:push@inventorykeeper.app"},
+                )
+            except WebPushException as e:
+                if e.response and e.response.status_code in (404, 410):
+                    try:
+                        db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": sub.endpoint})
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+    except Exception as e:
+        logging.getLogger("push").warning(f"Web push failed: {e}")
+
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Create a persistent notification for a user. Silently swallows errors."""
     try:
@@ -80,8 +112,9 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
             "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
             "VALUES (:uid, :title, :body, :link, :kind, NOW())"
         ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind})
+        _send_web_push(db, user_id, title, body, link)
     except Exception as e:
-        import logging; logging.getLogger("notifications").warning(f"Notify failed: {e}")
+        logging.getLogger("notifications").warning(f"Notify failed: {e}")
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Notify all admins of a branch."""
@@ -444,6 +477,16 @@ def ensure_schema() -> None:
             created_at TIMESTAMP DEFAULT NOW()
         )""")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_notifications_user_unread ON notifications (user_id, read_at) WHERE read_at IS NULL")
+        # Web push subscriptions
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint TEXT NOT NULL,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_push_endpoint ON push_subscriptions (endpoint)")
         # Adjustment requests table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS adjustment_requests (
             id SERIAL PRIMARY KEY,
@@ -3153,6 +3196,49 @@ def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
         "SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read_at IS NULL"
     ), {"uid": user.id}).scalar() or 0
     return JSONResponse({"count": int(count)})
+
+
+# ────────────────────────────────────────────────
+#  WEB PUSH
+# ────────────────────────────────────────────────
+
+@app.get("/push/vapid-public-key", response_class=JSONResponse)
+def push_vapid_public_key():
+    return JSONResponse({"publicKey": VAPID_PUBLIC_KEY})
+
+
+@app.post("/push/subscribe", response_class=JSONResponse)
+async def push_subscribe(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False}, status_code=401)
+    user = user_or
+    body     = await request.json()
+    endpoint = body.get("endpoint", "")
+    keys     = body.get("keys", {})
+    p256dh   = keys.get("p256dh", "")
+    auth     = keys.get("auth", "")
+    if not endpoint or not p256dh or not auth:
+        return JSONResponse({"error": "invalid subscription"}, status_code=400)
+    # Upsert: delete old entry for this endpoint, then insert fresh
+    db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": endpoint})
+    db.execute(text(
+        "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
+        "VALUES (:uid, :ep, :p256dh, :auth, NOW())"
+    ), {"uid": user.id, "ep": endpoint, "p256dh": p256dh, "auth": auth})
+    db.commit()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/push/unsubscribe", response_class=JSONResponse)
+async def push_unsubscribe(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False}, status_code=401)
+    body     = await request.json()
+    endpoint = body.get("endpoint", "")
+    if endpoint:
+        db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": endpoint})
+        db.commit()
+    return JSONResponse({"ok": True})
 
 
 # ────────────────────────────────────────────────

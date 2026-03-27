@@ -451,6 +451,7 @@ function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferred
 function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa-dismissed','1');}
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
+function _urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=atob((b+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...s].map(c=>c.charCodeAt(0)));}
 </script>
 <style>
   #notif-panel { background: var(--bg) !important; }
@@ -616,6 +617,27 @@ async function pollNotifications() {
   } catch(e) {}
   pollNotifications();
   setInterval(pollNotifications, 3000);
+
+  // Web push — subscribe this device so notifications arrive when screen is off
+  (async function subscribePush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        // Re-register in case server lost the record
+        await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
+        return;
+      }
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return;
+      const kr = await fetch('/push/vapid-public-key');
+      const {publicKey} = await kr.json();
+      if (!publicKey) return;
+      const sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:_urlB64ToUint8(publicKey)});
+      await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+    } catch(e) { console.log('Push subscribe:', e); }
+  })();
 })();
 {% endif %}
 </script>
