@@ -754,9 +754,9 @@ async def login(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    # [FIX-3] Rate limiting — limiter.check() takes the request object directly
+    # [FIX-3] Rate limiting — 30 attempts per minute per IP (generous enough for shared networks)
     try:
-        limiter.check(request)
+        limiter.check(request, max_requests=30, window_seconds=60)
     except HTTPException:
         token = get_csrf_token(request)
         return tpl(request, "login.html", {
@@ -2375,9 +2375,10 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
     else:
         effective_branch_id = get_selected_branch_id(request, user) or 0
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == effective_branch_id).order_by(User.username.asc())).scalars().all()
-    items  = db.execute(select(Item).where(Item.branch_id == effective_branch_id).order_by(Item.name.asc())).scalars().all()
+    _items_with_stock = get_items_with_stock(db, branch_id=effective_branch_id)
+    items = [it for it, _ in _items_with_stock]
     csrf_token = get_csrf_token(request)
-    items_json = [{"id": i.id, "name": i.name, "category": i.category or "", "unit": i.unit or "pcs", "price": float(i.selling_price or 0)} for i in items]
+    items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": float(it.selling_price or 0), "stock": int(stk)} for it, stk in _items_with_stock]
     return tpl(request, "parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
         "agents": agents, "items": items, "items_json": items_json,

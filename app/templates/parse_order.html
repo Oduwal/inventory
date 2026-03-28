@@ -223,6 +223,8 @@ function renderOrders(orders) {
         <button type="button" onclick="removeOrder(${idx})" class="btnDanger" style="padding:4px 10px;font-size:11px;">✕ Remove</button>
       </div>
       ${unmatched.length ? `<div class="alert alert-danger" style="font-size:12px;margin-bottom:10px;">⚠️ Could not match: <strong>${unmatched.join(', ')}</strong></div>` : ''}
+      ${(order.items||[]).filter(i => i.matched && i.item_id && (ITEMS_BY_ID[i.item_id]?.stock ?? 1) <= 0).map(i => `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:8px;">🚫 <strong>${i.item_name}</strong> is out of stock — confirm availability before creating this order</div>`).join('')}
+      ${(order.items||[]).filter(i => i.matched && i.item_id && (ITEMS_BY_ID[i.item_id]?.stock ?? 99) > 0 && (ITEMS_BY_ID[i.item_id]?.stock ?? 99) < 5).map(i => `<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);color:#fbbf24;font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:8px;">⚠️ <strong>${i.item_name}</strong> is low — only ${ITEMS_BY_ID[i.item_id]?.stock} unit${ITEMS_BY_ID[i.item_id]?.stock !== 1 ? 's' : ''} left</div>`).join('')}
       <form method="post" action="/deliveries/new" id="form-${idx}" onsubmit="return confirmCreate(${idx})">
         <input type="hidden" name="csrf_token" value="${CSRF}" />
         ${agentField}
@@ -271,6 +273,30 @@ function renderOrders(orders) {
   document.getElementById('orders-wrap').scrollIntoView({ behavior:'smooth', block:'start' });
 }
 
+function stockWarn(wrap, itemId) {
+  // Remove any existing stock warning on this row
+  const old = wrap.querySelector('.stock-warn');
+  if (old) old.remove();
+  if (!itemId) return;
+  const item = ITEMS_BY_ID[itemId];
+  if (!item) return;
+  const stock = item.stock ?? null;
+  if (stock === null) return;
+  if (stock <= 0) {
+    const w = document.createElement('div');
+    w.className = 'stock-warn';
+    w.style.cssText = 'grid-column:1/-1;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);color:#f87171;font-size:11px;padding:4px 10px;border-radius:6px;';
+    w.textContent = `⚠ Out of stock — ${item.name} has 0 units available`;
+    wrap.appendChild(w);
+  } else if (stock < 5) {
+    const w = document.createElement('div');
+    w.className = 'stock-warn';
+    w.style.cssText = 'grid-column:1/-1;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);color:#fbbf24;font-size:11px;padding:4px 10px;border-radius:6px;';
+    w.textContent = `⚠ Low stock — only ${stock} unit${stock !== 1 ? 's' : ''} remaining for ${item.name}`;
+    wrap.appendChild(w);
+  }
+}
+
 function addItemRow(orderIdx, itemId, qty, amount) {
   const tpl = document.getElementById('item-row-tpl').content.cloneNode(true);
   const wrap = tpl.querySelector('.item-row-wrap');
@@ -289,13 +315,17 @@ function addItemRow(orderIdx, itemId, qty, amount) {
     const opt = sel.options[sel.selectedIndex];
     const price = opt ? parseFloat(opt.dataset.price||0) : 0;
     if (price > 0) aIn.value = (parseFloat(qIn.value)||1) * price;
+    stockWarn(wrap, sel.value ? parseInt(sel.value) : null);
   });
   qIn.addEventListener('input', () => {
     const opt = sel.options[sel.selectedIndex];
     const price = opt ? parseFloat(opt.dataset.price||0) : 0;
     if (price > 0) aIn.value = ((parseFloat(qIn.value)||1) * price).toFixed(2);
   });
-  document.getElementById(`items-${orderIdx}`).appendChild(tpl);
+  const container = document.getElementById(`items-${orderIdx}`);
+  container.appendChild(tpl);
+  // Show warning immediately if item was pre-filled
+  if (itemId) stockWarn(wrap, parseInt(itemId));
 }
 
 function removeOrder(idx) {
