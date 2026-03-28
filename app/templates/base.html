@@ -337,11 +337,19 @@
       <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
         <span class="nav-icon">📄</span>Reports
       </a>
+      {% if role == "ADMIN" %}
+      <a href="/merchant-remittance" data-active="{% if active == 'merchant_remittance' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🧾</span>Merchant Remittance
+      </a>
+      {% endif %}
       {% elif role == "SUPERVISOR" %}
       <div class="nav-divider"></div>
       <div class="nav-section">Finance</div>
       <a href="/reports" data-active="{% if active == 'reports' %}1{% else %}0{% endif %}">
         <span class="nav-icon">📄</span>Reports
+      </a>
+      <a href="/merchant-remittance" data-active="{% if active == 'merchant_remittance' %}1{% else %}0{% endif %}">
+        <span class="nav-icon">🧾</span>Merchant Remittance
       </a>
       {% endif %}
 

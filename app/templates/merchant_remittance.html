@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block title %}Merchant Remittance{% endblock %}
+{% block page_title %}Merchant Remittance{% endblock %}
+{% block page_subtitle %}Daily product delivery & collection summary by category{% endblock %}
+{% set active = 'merchant_remittance' %}
+
+{% block content %}
+<style>
+  /* ── Layout ─────────────────────────────────────────── */
+  .mr-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:20px; }
+  .mr-kpi-card { background:var(--panel2); border:1px solid var(--border2); padding:14px 16px; position:relative; }
+  .mr-kpi-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:var(--cyan); opacity:.35; }
+  .mr-kpi-card .lbl { font-family:var(--font-mono); font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; margin-bottom:6px; }
+  .mr-kpi-card .val { font-family:var(--font-mono); font-size:22px; font-weight:700; }
+
+  /* ── Category card ──────────────────────────────────── */
+  .cat-card { background:var(--panel2); border:1px solid var(--border2); margin-bottom:14px; }
+  .cat-header { display:flex; justify-content:space-between; align-items:center;
+                padding:12px 16px; border-bottom:1px solid var(--border2);
+                background:rgba(0,212,255,.04); }
+  .cat-name { font-family:var(--font-mono); font-size:13px; font-weight:700;
+              text-transform:uppercase; letter-spacing:.08em; color:var(--cyan); }
+  .cat-subtotal { font-family:var(--font-mono); font-size:13px; font-weight:700; color:#22c55e; }
+
+  /* ── Table ──────────────────────────────────────────── */
+  .mr-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .mr-table th { background:rgba(0,212,255,.04); color:var(--muted); font-family:var(--font-mono);
+                 font-size:9px; letter-spacing:.12em; text-transform:uppercase;
+                 padding:8px 16px; text-align:left; border-bottom:1px solid var(--border); }
+  .mr-table th.r { text-align:right; }
+  .mr-table td { padding:10px 16px; border-bottom:1px solid rgba(0,212,255,.04); }
+  .mr-table td.r { text-align:right; font-family:var(--font-mono); }
+  .mr-table tr:last-child td { border-bottom:none; }
+  .mr-table .item-name { font-weight:600; }
+  .mr-table .qty-pill { display:inline-block; background:rgba(0,212,255,.1);
+                        border:1px solid rgba(0,212,255,.25); padding:2px 9px;
+                        font-family:var(--font-mono); font-size:11px; color:var(--cyan); }
+
+  /* ── Grand total bar ────────────────────────────────── */
+  .grand-bar { display:flex; justify-content:space-between; align-items:center;
+               background:rgba(0,212,255,.06); border:1px solid rgba(0,212,255,.2);
+               border-left:3px solid var(--cyan); padding:16px 20px; margin-top:4px; }
+  .grand-bar .label { font-family:var(--font-mono); font-size:11px; color:var(--muted);
+                      text-transform:uppercase; letter-spacing:.08em; }
+  .grand-bar .amount { font-family:var(--font-mono); font-size:26px; font-weight:800; color:#22c55e; }
+
+  /* ── Filter bar ─────────────────────────────────────── */
+  .filter-bar { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+  #preview-area { display:none; margin-top:20px; }
+  .spinner { display:none; width:18px; height:18px; border:2px solid rgba(0,212,255,.2);
+             border-top-color:var(--cyan); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ── Print styles ───────────────────────────────────── */
+  @media print {
+    .card:first-child, .btn-row { display:none !important; }
+    #preview-area { display:block !important; }
+    body { background:#fff; color:#000; }
+    .cat-card { border:1px solid #ccc; page-break-inside:avoid; margin-bottom:12px; }
+    .cat-header { background:#f5f5f5 !important; }
+    .cat-name { color:#000 !important; }
+    .cat-subtotal { color:#155724 !important; }
+    .mr-table th { background:#f0f0f0 !important; color:#333 !important; }
+    .mr-table td { color:#000; }
+    .grand-bar { background:#e8f5e9 !important; border-color:#a5d6a7 !important; }
+    .grand-bar .amount { color:#155724 !important; }
+    .print-header { display:block !important; }
+    .mr-kpi-card { border:1px solid #ccc; background:#f9f9f9; }
+    .mr-kpi-card .val { color:#000 !important; }
+  }
+  .print-header { display:none; text-align:center; margin-bottom:16px; }
+  .print-header h2 { font-size:18px; font-weight:700; margin:0 0 4px; }
+  .print-header p  { font-size:12px; color:#555; margin:0; }
+</style>
+
+<!-- Print header (hidden on screen, shown on print) -->
+<div class="print-header" id="print-header">
+  <h2>Merchant Remittance Report</h2>
+  <p id="print-date-range"></p>
+</div>
+
+<!-- Filter Card -->
+<div class="card">
+  <div class="badge b-blue" style="margin-bottom:14px;">FILTER</div>
+  <!-- Quick presets -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <button class="btnGhost" onclick="setPreset('today')"      style="font-size:12px;padding:5px 12px;">Today</button>
+    <button class="btnGhost" onclick="setPreset('yesterday')"  style="font-size:12px;padding:5px 12px;">Yesterday</button>
+    <button class="btnGhost" onclick="setPreset('week')"       style="font-size:12px;padding:5px 12px;">This Week</button>
+    <button class="btnGhost" onclick="setPreset('month')"      style="font-size:12px;padding:5px 12px;">This Month</button>
+    <button class="btnGhost" onclick="setPreset('last_month')" style="font-size:12px;padding:5px 12px;">Last Month</button>
+  </div>
+  <div class="filter-bar">
+    <div>
+      <label>Start Date</label>
+      <input type="date" id="f_start" value="{{ today }}">
+    </div>
+    <div>
+      <label>End Date</label>
+      <input type="date" id="f_end" value="{{ today }}">
+    </div>
+    {% if user.role == "SUPERVISOR" %}
+    <div>
+      <label>Branch</label>
+      <select id="f_branch">
+        <option value="">All Branches</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div>
+      <button class="btnPrimary" onclick="loadData()" style="display:flex;align-items:center;gap:8px;">
+        <div class="spinner" id="spinner"></div>
+        Generate Report
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Preview Area -->
+<div id="preview-area">
+
+  <!-- KPI Strip -->
+  <div class="mr-kpi" id="kpi-strip"></div>
+
+  <!-- Category Cards -->
+  <div id="category-cards"></div>
+
+  <!-- Grand Total -->
+  <div class="grand-bar" id="grand-bar" style="display:none;">
+    <div>
+      <div class="label">Grand Total Collection</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px;" id="grand-qty-label"></div>
+    </div>
+    <div class="amount" id="grand-total-val"></div>
+  </div>
+
+  <!-- Action Buttons -->
+  <div class="btn-row" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center;">
+    <a id="csv-btn" class="btnPrimary" style="text-decoration:none;">⬇ Download CSV</a>
+    <button class="btnGhost" onclick="window.print()">🖨 Print</button>
+  </div>
+
+</div>
+
+<script>
+const fmtN = n => '₦' + parseFloat(n || 0).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtQ = n => parseInt(n || 0).toLocaleString();
+
+function setPreset(p) {
+  const today = new Date();
+  const fmt = d => d.toISOString().split('T')[0];
+  let s, e;
+  if (p === 'today')      { s = e = fmt(today); }
+  else if (p === 'yesterday') {
+    const y = new Date(today); y.setDate(y.getDate()-1); s = e = fmt(y);
+  } else if (p === 'week') {
+    const mon = new Date(today); mon.setDate(today.getDate() - ((today.getDay()+6)%7));
+    s = fmt(mon); e = fmt(today);
+  } else if (p === 'month') {
+    s = fmt(new Date(today.getFullYear(), today.getMonth(), 1)); e = fmt(today);
+  } else if (p === 'last_month') {
+    s = fmt(new Date(today.getFullYear(), today.getMonth()-1, 1));
+    e = fmt(new Date(today.getFullYear(), today.getMonth(), 0));
+  }
+  document.getElementById('f_start').value = s;
+  document.getElementById('f_end').value   = e;
+  loadData();
+}
+
+async function loadData() {
+  const start = document.getElementById('f_start').value;
+  const end   = document.getElementById('f_end').value;
+  if (!start || !end) { alert('Please select start and end dates.'); return; }
+
+  const branch = document.getElementById('f_branch')?.value || '';
+  const spinner = document.getElementById('spinner');
+  spinner.style.display = 'block';
+
+  const params = new URLSearchParams({start_date: start, end_date: end});
+  if (branch) params.set('branch_id', branch);
+
+  try {
+    const res  = await fetch('/merchant-remittance/data?' + params);
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    spinner.style.display = 'none';
+    document.getElementById('preview-area').style.display = 'block';
+
+    // Update print header
+    const fmt = d => { const [y,m,day] = d.split('-'); return `${day}/${m}/${y}`; };
+    document.getElementById('print-date-range').textContent =
+      `Period: ${fmt(data.start_date)} — ${fmt(data.end_date)}`;
+
+    // KPIs
+    document.getElementById('kpi-strip').innerHTML = `
+      <div class="mr-kpi-card">
+        <div class="lbl">Categories</div>
+        <div class="val" style="color:var(--cyan)">${data.category_count}</div>
+      </div>
+      <div class="mr-kpi-card">
+        <div class="lbl">Total Qty Delivered</div>
+        <div class="val" style="color:#4f7cff">${fmtQ(data.grand_qty)}</div>
+      </div>
+      <div class="mr-kpi-card">
+        <div class="lbl">Total Collection</div>
+        <div class="val" style="color:#22c55e">${fmtN(data.grand_total)}</div>
+      </div>
+    `;
+
+    // Category cards
+    const cards = document.getElementById('category-cards');
+    cards.innerHTML = '';
+    if (data.categories.length === 0) {
+      cards.innerHTML = '<div class="card" style="text-align:center;color:var(--muted);padding:30px;">No delivered orders found for this period.</div>';
+      document.getElementById('grand-bar').style.display = 'none';
+    } else {
+      data.categories.forEach(cat => {
+        const rows = cat.items.map(item => `
+          <tr>
+            <td class="item-name">${item.name}</td>
+            <td class="r"><span class="qty-pill">${fmtQ(item.qty)}</span></td>
+            <td class="r" style="font-weight:700;color:#22c55e">${fmtN(item.collection)}</td>
+            <td class="r" style="color:var(--muted);font-size:12px;">${item.deliveries}</td>
+          </tr>`).join('');
+
+        cards.innerHTML += `
+          <div class="cat-card">
+            <div class="cat-header">
+              <div class="cat-name">📦 ${cat.category}</div>
+              <div class="cat-subtotal">${fmtN(cat.subtotal_collection)}</div>
+            </div>
+            <div style="overflow-x:auto;">
+              <table class="mr-table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th class="r">Qty Delivered</th>
+                    <th class="r">Collection</th>
+                    <th class="r">Deliveries</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                  <tr style="background:rgba(0,212,255,.03);">
+                    <td style="font-weight:700;color:var(--muted);font-size:11px;font-family:var(--font-mono);">SUBTOTAL</td>
+                    <td class="r" style="font-weight:700">${fmtQ(cat.subtotal_qty)}</td>
+                    <td class="r" style="font-weight:800;color:#22c55e">${fmtN(cat.subtotal_collection)}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>`;
+      });
+
+      // Grand total bar
+      document.getElementById('grand-bar').style.display = 'flex';
+      document.getElementById('grand-total-val').textContent = fmtN(data.grand_total);
+      document.getElementById('grand-qty-label').textContent = `${fmtQ(data.grand_qty)} units across ${data.category_count} categor${data.category_count === 1 ? 'y' : 'ies'}`;
+    }
+
+    // CSV download link
+    const csvParams = new URLSearchParams({start_date: start, end_date: end});
+    if (branch) csvParams.set('branch_id', branch);
+    document.getElementById('csv-btn').href = '/merchant-remittance/csv?' + csvParams;
+
+    window.scrollTo({top: document.getElementById('preview-area').offsetTop - 20, behavior:'smooth'});
+  } catch(err) {
+    spinner.style.display = 'none';
+    alert('Failed to load report. Please try again.');
+  }
+}
+
+// Auto-load today on page open
+document.addEventListener('DOMContentLoaded', () => loadData());
+</script>
+{% endblock %}

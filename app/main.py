@@ -5321,3 +5321,161 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
     transfer.cancelled_at = datetime.utcnow()
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
+
+
+# ────────────────────────────────────────────────
+#  MERCHANT REMITTANCE
+# ────────────────────────────────────────────────
+
+def _merchant_remittance_query(db, sd, ed, bid):
+    """Return grouped rows: (category, item_name, total_qty, total_collection, delivery_count)."""
+    params = {"start": str(sd), "end": str(ed)}
+    branch_clause = "AND d.branch_id = :bid" if bid else ""
+    if bid:
+        params["bid"] = bid
+    return db.execute(text(f"""
+        SELECT
+            COALESCE(i.category, 'Uncategorized') AS category,
+            i.name                                 AS item_name,
+            SUM(di.quantity)                       AS total_qty,
+            SUM(di.line_amount)                    AS total_collection,
+            COUNT(DISTINCT d.id)                   AS delivery_count
+        FROM delivery_items di
+        JOIN deliveries d ON d.id = di.delivery_id
+        JOIN items      i ON i.id = di.item_id
+        WHERE d.status = 'DELIVERED'
+          AND DATE(COALESCE(d.delivered_at, d.created_at)) >= :start
+          AND DATE(COALESCE(d.delivered_at, d.created_at)) <= :end
+          {branch_clause}
+        GROUP BY COALESCE(i.category, 'Uncategorized'), i.name, i.id
+        ORDER BY COALESCE(i.category, 'Uncategorized'), i.name
+    """), params).fetchall()
+
+
+@app.get("/merchant-remittance", response_class=HTMLResponse)
+def merchant_remittance_page(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+    branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
+    today = date.today().isoformat()
+    return tpl(request, "merchant_remittance.html", {
+        "user": user, "branches": branches,
+        "today": today, "active": "merchant_remittance",
+    })
+
+
+@app.get("/merchant-remittance/data", response_class=JSONResponse)
+def merchant_remittance_data(
+    request: Request,
+    start_date: str = "",
+    end_date: str = "",
+    branch_id: int = 0,
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "not logged in"}, status_code=401)
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    sd = _parse_iso_date(start_date)
+    ed = _parse_iso_date(end_date)
+    if not sd or not ed:
+        return JSONResponse({"error": "start_date and end_date are required"}, status_code=400)
+
+    bid = user.branch_id if is_admin(user) else (branch_id or None)
+    rows = _merchant_remittance_query(db, sd, ed, bid)
+
+    categories: dict = {}
+    grand_qty = 0
+    grand_total = 0.0
+
+    for r in rows:
+        cat = r.category
+        if cat not in categories:
+            categories[cat] = {"category": cat, "items": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
+        qty = int(r.total_qty or 0)
+        amt = float(r.total_collection or 0)
+        categories[cat]["items"].append({
+            "name": r.item_name,
+            "qty": qty,
+            "collection": amt,
+            "deliveries": int(r.delivery_count or 0),
+        })
+        categories[cat]["subtotal_qty"] += qty
+        categories[cat]["subtotal_collection"] += amt
+        grand_qty += qty
+        grand_total += amt
+
+    return JSONResponse({
+        "categories": list(categories.values()),
+        "grand_qty": grand_qty,
+        "grand_total": round(grand_total, 2),
+        "category_count": len(categories),
+        "start_date": str(sd),
+        "end_date": str(ed),
+    })
+
+
+@app.get("/merchant-remittance/csv")
+def merchant_remittance_csv(
+    request: Request,
+    start_date: str = "",
+    end_date: str = "",
+    branch_id: int = 0,
+    db: Session = Depends(get_db),
+):
+    from fastapi.responses import Response as _Resp
+    import csv, io
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not (is_admin(user) or is_supervisor(user)):
+        return HTMLResponse("Forbidden", status_code=403)
+
+    sd = _parse_iso_date(start_date) or date.today()
+    ed = _parse_iso_date(end_date) or date.today()
+    bid = user.branch_id if is_admin(user) else (branch_id or None)
+    rows = _merchant_remittance_query(db, sd, ed, bid)
+
+    output = io.StringIO()
+    w = csv.writer(output)
+    w.writerow(["Category", "Item", "Qty Delivered", "Collection (NGN)", "Deliveries"])
+
+    current_cat = None
+    cat_qty = 0
+    cat_amt = 0.0
+    grand_qty = 0
+    grand_total = 0.0
+
+    for r in rows:
+        cat = r.category
+        if current_cat is not None and cat != current_cat:
+            w.writerow(["", f"  {current_cat} SUBTOTAL", cat_qty, round(cat_amt, 2), ""])
+            w.writerow([])
+            cat_qty = 0; cat_amt = 0.0
+        current_cat = cat
+        qty = int(r.total_qty or 0)
+        amt = float(r.total_collection or 0)
+        w.writerow([cat, r.item_name, qty, round(amt, 2), int(r.delivery_count or 0)])
+        cat_qty += qty; cat_amt += amt
+        grand_qty += qty; grand_total += amt
+
+    if current_cat is not None:
+        w.writerow(["", f"  {current_cat} SUBTOTAL", cat_qty, round(cat_amt, 2), ""])
+
+    w.writerow([])
+    w.writerow(["GRAND TOTAL", "", grand_qty, round(grand_total, 2), ""])
+
+    filename = f"merchant_remittance_{sd}_{ed}.csv"
+    return _Resp(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
