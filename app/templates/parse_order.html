@@ -70,8 +70,22 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
   <div class="item-row-wrap">
     <select name="item_id" required style="margin:0;">
       <option value="">— select item —</option>
-      {% for i in items %}
-      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}">{{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}</option>
+      {% for i, stock in items_with_stock %}
+      {% if stock <= 0 %}
+      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="0"
+        style="color:#555;background:#0d1117;">
+        {{ i.name }}{% if i.category %} ({{ i.category }}){% endif %} — OUT OF STOCK
+      </option>
+      {% elif stock < 5 %}
+      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="{{ stock }}"
+        style="color:#ca8a04;">
+        {{ i.name }}{% if i.category %} ({{ i.category }}){% endif %} ({{ stock }} left)
+      </option>
+      {% else %}
+      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="{{ stock }}">
+        {{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}
+      </option>
+      {% endif %}
       {% endfor %}
     </select>
     <input type="number" name="quantity" min="1" value="1" style="margin:0;" placeholder="Qty" />
@@ -245,6 +259,18 @@ function renderOrders(orders) {
 
     container.appendChild(card);
 
+    // Flag create button if any matched item is out of stock
+    const hasOOS = (order.items || []).some(i => i.matched && i.item_id && (ITEMS_BY_ID[i.item_id]?.stock ?? 1) <= 0);
+    if (hasOOS) {
+      const submitBtn = card.querySelector('button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.style.background = 'rgba(239,68,68,.2)';
+        submitBtn.style.border = '1px solid rgba(239,68,68,.4)';
+        submitBtn.style.color = '#f87171';
+        submitBtn.textContent = `⛔ Cannot Create — Out of Stock`;
+      }
+    }
+
     // Add item rows — distribute total_price if given
     const itemsToAdd = (order.items || []).filter(i => i.matched && i.item_id);
     if (itemsToAdd.length === 0) {
@@ -335,7 +361,22 @@ function removeOrder(idx) {
   if (remaining === 0) document.getElementById('orders-wrap').style.display = 'none';
 }
 
+function hasOutOfStock(orderIdx) {
+  const container = document.getElementById(`items-${orderIdx}`);
+  if (!container) return false;
+  for (const sel of container.querySelectorAll('select[name="item_id"]')) {
+    if (!sel.value) continue;
+    const item = ITEMS_BY_ID[parseInt(sel.value)];
+    if (item && (item.stock ?? 1) <= 0) return true;
+  }
+  return false;
+}
+
 function confirmCreate(idx) {
+  if (hasOutOfStock(idx)) {
+    alert(`⛔ Order ${idx+1} contains out-of-stock items.\nRemove or replace them before creating.`);
+    return false;
+  }
   return confirm(`Create Order ${idx+1}? It will be saved and assigned.`);
 }
 
@@ -421,6 +462,24 @@ async function createAllOrders() {
     const itemSelects = form.querySelectorAll('select[name="item_id"]');
     const hasItem = Array.from(itemSelects).some(s => s.value);
     if (!hasItem) { failed++; continue; }
+    // Block orders containing out-of-stock items
+    const formIdx = form.id.replace('form-', '');
+    if (hasOutOfStock(formIdx)) {
+      failed++;
+      const card = form.closest('.order-card');
+      if (card) {
+        card.style.border = '1px solid rgba(239,68,68,.5)';
+        const existing = card.querySelector('.oos-block-msg');
+        if (!existing) {
+          const msg = document.createElement('div');
+          msg.className = 'oos-block-msg';
+          msg.style.cssText = 'background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:10px;';
+          msg.textContent = '⛔ Blocked — remove out-of-stock items before this order can be created.';
+          card.querySelector('.order-card-header').insertAdjacentElement('afterend', msg);
+        }
+      }
+      continue;
+    }
 
     // Submit via fetch (not page navigation)
     try {
