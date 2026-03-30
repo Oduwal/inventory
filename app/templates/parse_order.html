@@ -23,10 +23,21 @@
 .order-card { border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:14px; background:rgba(255,255,255,.03); }
 .order-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px; }
 .item-row-wrap { display:grid; grid-template-columns:1fr 80px 110px 32px; gap:8px; align-items:center; margin-bottom:8px; }
+
+/* Step 1 sticks to top while orders scroll under */
+.step1-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg, #070f1d);
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+}
 </style>
 
-<!-- Step 1: Paste -->
-<div class="card" style="margin-bottom:20px;">
+<!-- Step 1: Paste (sticky) -->
+<div class="step1-sticky">
+<div class="card" style="margin-bottom:0;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
     <span class="badge b-green">💬 Step 1 — Paste WhatsApp Chat</span>
     {% if user and user.role == "SUPERVISOR" %}
@@ -49,6 +60,7 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
     <span style="display:inline-block;animation:spin 1s linear infinite;">⚙️</span> AI is reading the messages...
   </div>
 </div>
+</div><!-- end step1-sticky -->
 
 <!-- Step 2: Order cards -->
 <div id="orders-wrap" style="display:none;">
