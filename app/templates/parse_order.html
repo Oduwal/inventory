@@ -80,7 +80,7 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
 <!-- Hidden item row template -->
 <template id="item-row-tpl">
   <div class="item-row-wrap">
-    <select name="item_id" required style="margin:0;">
+    <select name="item_id" required style="margin:0;background:#0d1117;color:var(--text);">
       <option value="">— select item —</option>
       {% for i, stock in items_with_stock %}
       {% if stock <= 0 %}

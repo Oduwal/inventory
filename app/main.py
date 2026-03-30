@@ -2366,7 +2366,7 @@ def check_env(request: Request, db: Session = Depends(get_db)):
 @app.post("/parse-order/api", response_class=JSONResponse)
 async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     """Backend proxy — calls Groq API server-side to avoid CORS."""
-    limiter.check(request, max_requests=20, window_seconds=60)
+    limiter.check(request, max_requests=60, window_seconds=60)
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return JSONResponse({"error": "Not logged in"}, status_code=401)
@@ -2396,25 +2396,33 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                     "model": "gemini-2.5-flash",
                     "max_tokens": 8192,
                     "temperature": 0.1,
+                    "thinking": {"type": "disabled"},
                     "messages": [
                         {"role": "system", "content": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."},
                         {"role": "user", "content": prompt}
                     ],
                 }
             )
+        raw_text = resp.text
+        logger.info(f"Gemini raw response (first 500): {raw_text[:500]}")
         data = resp.json()
         if isinstance(data, list):
             data = data[0] if data else {}
         if not isinstance(data, dict):
-            return JSONResponse({"error": f"Unexpected response: {str(data)[:200]}"}, status_code=500)
+            return JSONResponse({"error": f"Unexpected response: {str(data)[:300]}"}, status_code=500)
         choices = data.get("choices") or []
         text = ""
         if choices and isinstance(choices, list):
-            text = (choices[0].get("message") or {}).get("content", "")
+            msg = choices[0].get("message") or {}
+            text = msg.get("content") or ""
+            # Gemini sometimes puts content in parts
+            if not text:
+                parts = msg.get("parts") or []
+                text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
         if not text:
             err = data.get("error", "Empty response from Gemini")
             error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            return JSONResponse({"error": error_msg}, status_code=500)
+            return JSONResponse({"error": f"{error_msg} | raw: {raw_text[:200]}"}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
