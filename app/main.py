@@ -2317,12 +2317,19 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
             "in_transit": sum(1 for d in rows if d.status == "OUT_FOR_DELIVERY"),
             "failed": sum(1 for d in rows if d.status in ("FAILED", "RETURNED")),
         }
+    # Agent name lookup for display in table
+    all_agent_ids = {d.agent_id for d in rows if d.agent_id}
+    agent_names: dict[int, str] = {}
+    if all_agent_ids:
+        for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
+            agent_names[u.id] = u.full_name or u.username
     return tpl(request, "deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
         "branches": branches, "selected_branch_id": branch_id,
         "branch_id": filter_branch, "start_date": start_date, "end_date": end_date,
         "user": user, "active": "deliveries", "sup_kpis": sup_kpis,
+        "agent_names": agent_names,
     })
 
 
@@ -2809,6 +2816,54 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
         "pending_adj": pending_adj, "adj_items": adj_items,
     })
+
+
+@app.post("/deliveries/bulk-assign")
+async def deliveries_bulk_assign(
+    request: Request,
+    agent_id: int = Form(...),
+    delivery_ids: list[int] = Form(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    branch_id = get_selected_branch_id(request, user)
+    agent = db.get(User, agent_id)
+    if not agent or agent.role != "AGENT" or agent.branch_id != branch_id:
+        return redirect("/deliveries?error=Invalid+agent")
+    assigned = 0
+    for did in delivery_ids:
+        d = db.get(Delivery, did)
+        if not d or d.branch_id != branch_id or d.status == "DELIVERED":
+            continue
+        old_agent_id = d.agent_id
+        d.agent_id = agent_id
+        # Create OUT transactions for items that don't have one yet
+        # (covers orders created by supervisor with no OUT tx)
+        items_without_tx = db.execute(text("""
+            SELECT di.item_id, di.quantity FROM delivery_items di
+            WHERE di.delivery_id = :did
+              AND NOT EXISTS (
+                SELECT 1 FROM transactions t
+                WHERE t.delivery_id = :did AND t.item_id = di.item_id AND t.type = 'OUT'
+              )
+        """), {"did": did}).fetchall()
+        for item_id_row, qty in items_without_tx:
+            db.add(Transaction(
+                branch_id=branch_id, item_id=item_id_row, type="OUT", quantity=qty,
+                note=f"Delivery #{did} to {d.customer_name} — assigned to agent",
+                reference=f"delivery-{did}", delivery_id=did,
+            ))
+        notify(db, agent_id, "📦 New Delivery Assigned",
+               f"Delivery #{d.id} for {d.customer_name} has been assigned to you.",
+               f"/deliveries/{d.id}", "info")
+        assigned += 1
+    db.commit()
+    return redirect(f"/deliveries?success={assigned}+order(s)+assigned+to+{agent.full_name or agent.username}")
 
 
 @app.post("/deliveries/{delivery_id}/assign-agent")

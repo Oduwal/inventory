@@ -12,6 +12,35 @@
 
 {% block content %}
 
+{% if user.role == "ADMIN" and agents %}
+<div class="card" style="margin-bottom:16px;border-left:3px solid var(--cyan);">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <span class="badge b-blue">👤 BULK ASSIGN TO AGENT</span>
+    <span id="selected-count" class="muted small">0 orders selected</span>
+  </div>
+  <form method="post" action="/deliveries/bulk-assign" id="bulk-assign-form" onsubmit="return validateBulkAssign()">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="flex:1;min-width:200px;">
+        <label>Select Agent</label>
+        <select name="agent_id" id="bulk-agent" required style="margin-top:4px;">
+          <option value="">— choose agent —</option>
+          {% for a in agents %}
+          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btnGhost" onclick="selectAllPending()" style="font-size:12px;padding:8px 14px;">☑ Select All Pending</button>
+        <button type="button" class="btnGhost" onclick="clearSelection()" style="font-size:12px;padding:8px 14px;">☐ Clear</button>
+        <button type="submit" class="btnPrimary" id="assign-btn" disabled style="opacity:.4;">✓ Assign Selected</button>
+      </div>
+    </div>
+    <div id="bulk-delivery-inputs"></div>
+  </form>
+</div>
+{% endif %}
+
 {% if sup_kpis %}
 <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px;">
   <div class="card" style="border-top:3px solid #4f7cff;padding:14px 16px;">
@@ -107,6 +136,7 @@
         <table>
             <thead>
                 <tr>
+                    {% if user.role == "ADMIN" and agents %}<th style="width:32px;"></th>{% endif %}
                     <th>ID</th>
                     <th>Customer</th>
                     <th>Phone</th>
@@ -122,12 +152,21 @@
             <tbody>
                 {% if rows and rows|length > 0 %}
                 {% for d in rows %}
-                <tr>
+                <tr id="row-{{ d.id }}" {% if d.status not in ("DELIVERED","FAILED","RETURNED") and user.role == "ADMIN" and agents %}class="assignable-row" style="cursor:pointer;" onclick="toggleRow({{ d.id }}, this)"{% endif %}>
+                    {% if user.role == "ADMIN" and agents %}
+                    <td onclick="event.stopPropagation()">
+                      {% if d.status not in ("DELIVERED","FAILED","RETURNED") %}
+                      <input type="checkbox" class="delivery-chk" data-id="{{ d.id }}"
+                        onchange="onCheckChange()"
+                        style="width:16px;height:16px;cursor:pointer;accent-color:var(--cyan);">
+                      {% endif %}
+                    </td>
+                    {% endif %}
                     <td>#{{ d.id }}</td>
                     <td>{{ d.customer_name or "-" }}</td>
                     <td>{{ d.customer_phone or "-" }}</td>
                     <td>{{ d.address or "-" }}</td>
-                    <td>{{ d.agent_id }}</td>
+                    <td>{{ agent_names.get(d.agent_id, d.agent_id) if d.agent_id else "—" }}</td>
 
                     <td style="max-width:340px;">
                         {% set s = items_summary.get(d.id, "") %}
@@ -173,4 +212,51 @@
         </table>
     </div>
 </div>
+
+{% if user.role == "ADMIN" and agents %}
+<script>
+function getChecked() {
+  return Array.from(document.querySelectorAll('.delivery-chk:checked')).map(c => parseInt(c.dataset.id));
+}
+function onCheckChange() {
+  const ids = getChecked();
+  document.getElementById('selected-count').textContent = ids.length + ' order' + (ids.length !== 1 ? 's' : '') + ' selected';
+  const btn = document.getElementById('assign-btn');
+  btn.disabled = ids.length === 0;
+  btn.style.opacity = ids.length === 0 ? '.4' : '1';
+}
+function toggleRow(id, row) {
+  const chk = row.querySelector('.delivery-chk');
+  if (!chk) return;
+  chk.checked = !chk.checked;
+  row.style.background = chk.checked ? 'rgba(0,212,255,.06)' : '';
+  onCheckChange();
+}
+function selectAllPending() {
+  document.querySelectorAll('.delivery-chk').forEach(c => { c.checked = true; });
+  document.querySelectorAll('.assignable-row').forEach(r => { r.style.background = 'rgba(0,212,255,.06)'; });
+  onCheckChange();
+}
+function clearSelection() {
+  document.querySelectorAll('.delivery-chk').forEach(c => { c.checked = false; });
+  document.querySelectorAll('.assignable-row').forEach(r => { r.style.background = ''; });
+  onCheckChange();
+}
+function validateBulkAssign() {
+  const ids = getChecked();
+  const sel = document.getElementById('bulk-agent');
+  if (!sel.value) { alert('Please select an agent first.'); return false; }
+  if (ids.length === 0) { alert('Please select at least one order.'); return false; }
+  const container = document.getElementById('bulk-delivery-inputs');
+  container.innerHTML = '';
+  ids.forEach(id => {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'delivery_ids'; inp.value = id;
+    container.appendChild(inp);
+  });
+  const agentName = sel.options[sel.selectedIndex].text;
+  return confirm(`Assign ${ids.length} order(s) to ${agentName}?`);
+}
+</script>
+{% endif %}
 {% endblock %}
