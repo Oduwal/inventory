@@ -4428,7 +4428,10 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             .join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id.in_(delivery_ids))
         ).all():
             q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
-            items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la if la > 0 else q * sp})
+            # Skip items removed by adjustment (line_amount == 0 means customer refused/returned)
+            if la == 0 and q > 0:
+                continue
+            items_by_delivery.setdefault(int(did), []).append({"name": str(iname), "qty": q, "amount": la})
     _ce_branch = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
     # Get agent IDs to include in cash queries
     # If a specific agent is selected, only show that agent's data
@@ -4588,8 +4591,11 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all():
-            q = float(qty or 0); la = float(line_amt or 0); spp = float(sp or 0)
-            items_by_delivery.setdefault(int(did), []).append((str(iname), q, la if la > 0 else q * spp))
+            q = float(qty or 0); la = float(line_amt or 0)
+            # Skip items removed by adjustment (line_amount == 0 means customer refused/returned)
+            if la == 0 and q > 0:
+                continue
+            items_by_delivery.setdefault(int(did), []).append((str(iname), q, la))
     _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
     agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
     agent_coll_exp_txt = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
@@ -4619,11 +4625,14 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
         if op > 0:
             balance = op - exp; total_op_cash_balance += max(balance, 0)
             if balance < 0: expenses_from_collections += abs(balance)
-            agent_section_lines += [f"  {aname}:", f"    Operating cash given : {_ngn(op)}", f"    Expenses spent       : {_ngn(exp)}",
-                                    f"    {'Balance to return' if balance >= 0 else 'Overspent (from coll)'}: {_ngn(abs(balance))}"]
+            # Only show agent in section if they still have a balance to return
+            if balance > 0:
+                agent_section_lines += [f"  {aname}:", f"    Operating cash given : {_ngn(op)}", f"    Expenses spent       : {_ngn(exp)}",
+                                        f"    Balance to return    : {_ngn(balance)}"]
         else:
             expenses_from_collections += exp
-            agent_section_lines += [f"  {aname}:", f"    Expenses (no op cash, deducted from collection): {_ngn(exp)}"]
+            if exp > 0:
+                agent_section_lines += [f"  {aname}:", f"    Expenses (no op cash, deducted from collection): {_ngn(exp)}"]
     if is_agent(user):
         lines += ["Operating Cash & Expenses:"] + (agent_section_lines or ["  None"])
         if total_op_cash_given > 0:

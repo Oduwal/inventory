@@ -215,6 +215,8 @@ function setPreset(preset) {
     data.agent_op_summary.forEach(a => {
       const hasCollExp = (a.coll_expenses || 0) > 0;
       const opExp      = (a.op_expenses || 0);
+      // Skip agents who have fully returned their op cash balance (nothing outstanding)
+      if (a.has_op_cash && a.balance <= 0 && !hasCollExp) return;
       if (a.has_op_cash) {
         const balColor = a.balance >= 0 ? '#22c55e' : '#ef4444';
         const balLabel = a.balance >= 0 ? 'Balance to return' : 'Overspent';

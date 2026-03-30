@@ -91,7 +91,6 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
     <span style="font-size:20px;">📤</span><div class="kv">₦{{ "{:,.0f}".format(total_expenses) }}</div>
     <div class="kl">Agent Expenses <span style="opacity:.6;font-size:9px;">▼ details</span></div>
   </div>
-  <div class="kpi kpi-t"><span style="font-size:20px;">↩️</span><div class="kv">₦{{ "{:,.0f}".format(total_return_op_cash) }}</div><div class="kl">Op. Cash Returned</div></div>
   <div class="kpi {% if operating_balance >= 0 %}kpi-g{% else %}kpi-r{% endif %}"><span style="font-size:20px;">⚖️</span><div class="kv">₦{{ "{:,.0f}".format(operating_balance) }}</div><div class="kl">Op. Balance</div></div>
   {% if user and user.role == "ADMIN" %}
   <div class="kpi kpi-a" style="cursor:pointer;" onclick="showDrawer('office')">
