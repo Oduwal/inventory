@@ -2403,9 +2403,15 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                 }
             )
         data = resp.json()
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not isinstance(data, dict):
+            return JSONResponse({"error": f"Unexpected response: {str(data)[:200]}"}, status_code=500)
+        choices = data.get("choices") or []
+        text = ""
+        if choices and isinstance(choices, list):
+            text = (choices[0].get("message") or {}).get("content", "")
         if not text:
-            error_msg = data.get("error", {}).get("message", "Empty response from Gemini")
+            err = data.get("error", "Empty response from Gemini")
+            error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             return JSONResponse({"error": error_msg}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
