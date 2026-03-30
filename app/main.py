@@ -2387,41 +2387,31 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
+                headers={"Content-Type": "application/json"},
                 json={
-                    "model": "gemini-2.5-flash-preview-05-20",
-                    "max_tokens": 8192,
-                    "temperature": 0.1,
-                    "messages": [
-                        {"role": "system", "content": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."},
-                        {"role": "user", "content": prompt}
-                    ],
+                    "system_instruction": {
+                        "parts": [{"text": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."}]
+                    },
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "maxOutputTokens": 8192,
+                    }
                 }
             )
         raw_text = resp.text
-        logging.getLogger("parse").info(f"Gemini raw response (first 500): {raw_text[:500]}")
         data = resp.json()
-        if isinstance(data, list):
-            data = data[0] if data else {}
         if not isinstance(data, dict):
-            return JSONResponse({"error": f"Unexpected response: {str(data)[:300]}"}, status_code=500)
-        choices = data.get("choices") or []
-        text = ""
-        if choices and isinstance(choices, list):
-            msg = choices[0].get("message") or {}
-            text = msg.get("content") or ""
-            # Gemini sometimes puts content in parts
-            if not text:
-                parts = msg.get("parts") or []
-                text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-        if not text:
-            err = data.get("error", "Empty response from Gemini")
+            return JSONResponse({"error": f"Unexpected response: {raw_text[:300]}"}, status_code=500)
+        if "error" in data:
+            err = data["error"]
             error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             return JSONResponse({"error": f"{error_msg} | raw: {raw_text[:200]}"}, status_code=500)
+        try:
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError):
+            return JSONResponse({"error": f"Could not read Gemini response | raw: {raw_text[:300]}"}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
