@@ -221,10 +221,11 @@ CRITICAL RULES:
 1. Each customer = one object in the array. If 5 customers, return 5 objects.
 2. Every product mentioned for each customer goes in that customer items array.
 3. item_id must be the exact number from the catalog above. If no match, set matched:false and item_id:null.
-4. quantity must be a positive whole number.
-5. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
-6. unit_price: use catalog price if available. If only total_price is given and multiple items, set unit_price to 0 — the app will divide it.
-7. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
+4. quantity must be a positive whole number. If no quantity is stated, default to 1.
+5. QUANTITY FORMAT — a number after a pipe "|" or at the end of the line applies as quantity to ALL items listed on that line. Example: "balm and capsule | 2" means balm qty=2 AND capsule qty=2. Example: "item A x3, item B" means A qty=3, B qty=1.
+6. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
+7. unit_price: use catalog price if available. If only total_price is given and multiple items, set unit_price to 0 — the app will divide it.
+8. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
   try {
     const res = await fetch('/parse-order/api', {
