@@ -2403,6 +2403,8 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                 }
             )
         data = resp.json()
+        if isinstance(data, list):
+            data = data[0] if data else {}
         if not isinstance(data, dict):
             return JSONResponse({"error": f"Unexpected response: {str(data)[:200]}"}, status_code=500)
         choices = data.get("choices") or []
