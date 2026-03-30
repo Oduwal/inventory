@@ -2385,7 +2385,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "GROQ_API_KEY not set in Railway environment variables."}, status_code=500)
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={

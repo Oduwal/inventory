@@ -118,6 +118,14 @@ const CSRF = {{ csrf_token | tojson }};
 const AGENTS = [{% for a in agents %}{"id":{{ a.id }},"name":{{ (a.full_name or a.username) | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
 const TODAY = "{{ today }}";
 
+function repairJson(s) {
+  // Remove trailing commas before ] or }
+  s = s.replace(/,\s*([\]}])/g, '$1');
+  // Remove single-line comments
+  s = s.replace(/\/\/[^\n]*/g, '');
+  return s;
+}
+
 function extractFirstArray(str) {
   const start = str.indexOf('[');
   const objStart = str.indexOf('{');
@@ -126,14 +134,23 @@ function extractFirstArray(str) {
     const obj = extractFirstObject(str);
     return obj ? [obj] : null;
   }
-  let depth = 0;
+  let depth = 0, inStr = false, esc = false;
   for (let i = start; i < str.length; i++) {
-    if (str[i] === '[') depth++;
-    else if (str[i] === ']') {
+    const c = str[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '[') depth++;
+    else if (c === ']') {
       depth--;
       if (depth === 0) {
-        try { return JSON.parse(str.slice(start, i + 1)); }
-        catch(e) { return null; }
+        const slice = str.slice(start, i + 1);
+        try { return JSON.parse(slice); }
+        catch(e) {
+          try { return JSON.parse(repairJson(slice)); }
+          catch(e2) { return null; }
+        }
       }
     }
   }
@@ -143,14 +160,23 @@ function extractFirstArray(str) {
 function extractFirstObject(str) {
   const start = str.indexOf('{');
   if (start === -1) return null;
-  let depth = 0;
+  let depth = 0, inStr = false, esc = false;
   for (let i = start; i < str.length; i++) {
-    if (str[i] === '{') depth++;
-    else if (str[i] === '}') {
+    const c = str[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\' && inStr) { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') depth++;
+    else if (c === '}') {
       depth--;
       if (depth === 0) {
-        try { return JSON.parse(str.slice(start, i + 1)); }
-        catch(e) { return null; }
+        const slice = str.slice(start, i + 1);
+        try { return JSON.parse(slice); }
+        catch(e) {
+          try { return JSON.parse(repairJson(slice)); }
+          catch(e2) { return null; }
+        }
       }
     }
   }
@@ -211,7 +237,8 @@ CRITICAL RULES:
     let raw = (data.text || '').trim().replace(/```json/gi,'').replace(/```/g,'').trim();
     const orders = extractFirstArray(raw);
     if (!orders || orders.length === 0) {
-      showError('Could not extract orders. Got: ' + raw.substring(0, 300));
+      console.error('Parse failed. Raw response:', raw);
+      showError('Could not extract orders. Response was: ' + (raw ? raw.substring(0, 500) : '(empty)'));
       return;
     }
     renderOrders(orders);
