@@ -80,8 +80,8 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
 <!-- Hidden item row template -->
 <template id="item-row-tpl">
   <div class="item-row-wrap">
-    <select name="item_id" required style="margin:0;background:#0d1117;color:var(--text);">
-      <option value="">— select item —</option>
+    <select name="item_id" required style="margin:0;background:#0d1117;color:var(--text);color-scheme:dark;">
+      <option value="" style="background:#0d1117;color:var(--text);">— select item —</option>
       {% for i, stock in items_with_stock %}
       {% if stock <= 0 %}
       <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="0"
@@ -90,11 +90,11 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
       </option>
       {% elif stock < 5 %}
       <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="{{ stock }}"
-        style="color:#ca8a04;">
+        style="color:#ca8a04;background:#0d1117;">
         {{ i.name }}{% if i.category %} ({{ i.category }}){% endif %} ({{ stock }} left)
       </option>
       {% else %}
-      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="{{ stock }}">
+      <option value="{{ i.id }}" data-price="{{ i.selling_price or 0 }}" data-stock="{{ stock }}" style="background:#0d1117;color:var(--text);">
         {{ i.name }}{% if i.category %} ({{ i.category }}){% endif %}
       </option>
       {% endif %}

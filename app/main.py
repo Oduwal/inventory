@@ -2404,7 +2404,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                 }
             )
         raw_text = resp.text
-        logger.info(f"Gemini raw response (first 500): {raw_text[:500]}")
+        logging.getLogger("parse").info(f"Gemini raw response (first 500): {raw_text[:500]}")
         data = resp.json()
         if isinstance(data, list):
             data = data[0] if data else {}
