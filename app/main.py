@@ -2393,7 +2393,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "gemini-2.5-flash-lite-preview-06-17",
+                    "model": "gemini-2.5-flash-preview-05-20",
                     "max_tokens": 8192,
                     "temperature": 0.1,
                     "messages": [
