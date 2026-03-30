@@ -2393,7 +2393,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "compound-beta",
                     "max_tokens": 32000,
                     "temperature": 0.1,
                     "messages": [
