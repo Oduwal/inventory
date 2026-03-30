@@ -2556,6 +2556,10 @@ async def delivery_create(
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
+            # Supervisor-created orders: no OUT transaction — stock only leaves when
+            # the branch admin assigns the delivery to an agent.
+            if is_supervisor(user):
+                continue
             # Create OUT transaction immediately (unless covered by an assignment)
             if int(iid) not in assigned_item_ids:
                 if int(iid) not in tx_item_ids:
