@@ -2380,20 +2380,20 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
     if not prompt:
         return JSONResponse({"error": "No prompt provided"}, status_code=400)
 
-    api_key = os.getenv("GROQ_API_KEY", "")
+    api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
-        return JSONResponse({"error": "GROQ_API_KEY not set in Railway environment variables."}, status_code=500)
+        return JSONResponse({"error": "GEMINI_API_KEY not set in Railway environment variables."}, status_code=500)
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.3-70b-versatile",
+                    "model": "gemini-2.0-flash",
                     "max_tokens": 8192,
                     "temperature": 0.1,
                     "messages": [
@@ -2405,7 +2405,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
         data = resp.json()
         text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not text:
-            error_msg = data.get("error", {}).get("message", "Empty response from Groq")
+            error_msg = data.get("error", {}).get("message", "Empty response from Gemini")
             return JSONResponse({"error": error_msg}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
