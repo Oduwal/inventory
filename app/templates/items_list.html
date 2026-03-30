@@ -9,6 +9,21 @@
   {% if user and user.role == "ADMIN" %}
   <a class="btnPrimary" href="/items/new">+ New Item</a>
   <a class="btnGhost" href="/items/import">⬆ Import</a>
+  {% if has_test_stock %}
+  <form method="post" action="/admin/test-stock-remove" onsubmit="return confirm('Remove all test stock? This will delete the 100-unit top-up transactions.')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);color:#f87171;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">
+      🗑 Remove Test Stock
+    </button>
+  </form>
+  {% else %}
+  <form method="post" action="/admin/test-stock-topup" onsubmit="return confirm('Set ALL items to 100 units for testing?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" style="background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.4);color:#fbbf24;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">
+      🧪 Test: Set All to 100
+    </button>
+  </form>
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}

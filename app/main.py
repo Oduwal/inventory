@@ -1112,6 +1112,44 @@ def reset_data_form(request: Request, db: Session = Depends(get_db)):
     """)
 
 
+@app.post("/admin/test-stock-topup")
+async def test_stock_topup(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    """TEMPORARY — sets every item to 100 units for testing. Remove when done."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    branch_id = get_selected_branch_id(request, user)
+    # Add IN transactions of 100 for every item in this branch tagged as TEST-STOCK
+    items = db.execute(select(Item).where(Item.branch_id == branch_id)).scalars().all()
+    for item in items:
+        db.add(Transaction(
+            branch_id=branch_id,
+            item_id=item.id,
+            type="IN",
+            quantity=100,
+            reference="TEST-STOCK",
+            note="Temporary test stock top-up",
+        ))
+    db.commit()
+    return redirect("/items")
+
+
+@app.post("/admin/test-stock-remove")
+async def test_stock_remove(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+    """TEMPORARY — removes all TEST-STOCK transactions."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    branch_id = get_selected_branch_id(request, user)
+    db.execute(text("DELETE FROM transactions WHERE reference='TEST-STOCK' AND branch_id=:bid"), {"bid": branch_id})
+    db.commit()
+    return redirect("/items")
+
+
 @app.post("/admin/reset-data", response_class=HTMLResponse)
 async def reset_data_execute(
     request: Request,
@@ -1446,9 +1484,15 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
         "WHERE branch_id = :bid AND resolved = FALSE GROUP BY item_id"
     ), {"bid": branch_id}).fetchall() if branch_id else []
     faulty_counts = {r[0]: int(r[1]) for r in faulty_counts_raw}
+    has_test_stock = bool(
+        db.execute(text(
+            "SELECT 1 FROM transactions WHERE reference='TEST-STOCK' AND branch_id=:bid LIMIT 1"
+        ), {"bid": branch_id}).first()
+    ) if branch_id else False
     return tpl(request, "items_list.html", {
         "request": request, "rows": rows, "q": q, "user": user, "active": "items", "faulty_counts": faulty_counts,
         "view": view, "branches": branches, "branch_filter": branch_filter,
+        "has_test_stock": has_test_stock,
     })
 
 
