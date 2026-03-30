@@ -3950,10 +3950,15 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
 
         agent_u = db.get(User, d.agent_id) if d.agent_id else None
         items_to_vet = []
-        # For active deliveries (OUT_FOR_DELIVERY), only show items WITH vetting records
-        # For failed/returned deliveries, show all items
-        only_vetted_items = d.status == "OUT_FOR_DELIVERY"
+        # Only show items WITH a vetting record for active and delivered deliveries.
+        # For FAILED/RETURNED the agent brought everything back so all items need vetting.
+        only_vetted_items = d.status in ("OUT_FOR_DELIVERY", "DELIVERED")
         for di, it in d_items:
+            # For DELIVERED deliveries, skip items with line_amount > 0 — those were
+            # successfully sold to the customer. Only line_amount == 0 items were refused
+            # via adjustment approval and actually need stock-return vetting.
+            if d.status == "DELIVERED" and float(di.line_amount or 0) > 0:
+                continue
             vet = vet_map.get(di.id)
             if vet is None:
                 if only_vetted_items:
