@@ -2387,7 +2387,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                 },
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 4000,
+                    "max_tokens": 32000,
                     "temperature": 0.1,
                     "messages": [
                         {"role": "system", "content": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."},
