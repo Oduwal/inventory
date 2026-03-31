@@ -202,7 +202,7 @@ app.add_middleware(
     secret_key=SESSION_SECRET,
     https_only=HTTPS_ONLY,
     same_site="lax",
-    max_age=28800,  # [SEC] 8-hour session expiry
+    max_age=43200,  # [SEC] 12-hour session expiry
 )
 app.add_middleware(SecurityHeadersMiddleware)  # [SEC-8] Security headers
 
@@ -5456,7 +5456,7 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
 # ────────────────────────────────────────────────
 
 def _merchant_remittance_query(db, sd, ed, bid):
-    """Return grouped rows: (category, item_name, total_qty, total_collection, delivery_count)."""
+    """Return individual delivery-item rows with customer name."""
     params = {"start": str(sd), "end": str(ed)}
     branch_clause = "AND d.branch_id = :bid" if bid else ""
     if bid:
@@ -5465,18 +5465,20 @@ def _merchant_remittance_query(db, sd, ed, bid):
         SELECT
             COALESCE(i.category, 'Uncategorized') AS category,
             i.name                                 AS item_name,
-            SUM(di.quantity)                       AS total_qty,
-            SUM(di.line_amount)                    AS total_collection,
-            COUNT(DISTINCT d.id)                   AS delivery_count
+            di.quantity                            AS qty,
+            di.line_amount                         AS collection,
+            d.customer_name                        AS customer_name,
+            d.id                                   AS delivery_id,
+            DATE(COALESCE(d.delivered_at, d.created_at)) AS delivered_date
         FROM delivery_items di
         JOIN deliveries d ON d.id = di.delivery_id
         JOIN items      i ON i.id = di.item_id
         WHERE d.status = 'DELIVERED'
+          AND di.line_amount > 0
           AND DATE(COALESCE(d.delivered_at, d.created_at)) >= :start
           AND DATE(COALESCE(d.delivered_at, d.created_at)) <= :end
           {branch_clause}
-        GROUP BY COALESCE(i.category, 'Uncategorized'), i.name, i.id
-        ORDER BY COALESCE(i.category, 'Uncategorized'), i.name
+        ORDER BY COALESCE(i.category, 'Uncategorized'), i.name, d.customer_name
     """), params).fetchall()
 
 
@@ -5526,14 +5528,15 @@ def merchant_remittance_data(
     for r in rows:
         cat = r.category
         if cat not in categories:
-            categories[cat] = {"category": cat, "items": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
-        qty = int(r.total_qty or 0)
-        amt = float(r.total_collection or 0)
-        categories[cat]["items"].append({
-            "name": r.item_name,
+            categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
+        qty = int(r.qty or 0)
+        amt = float(r.collection or 0)
+        categories[cat]["rows"].append({
+            "item": r.item_name,
+            "customer": r.customer_name or "—",
             "qty": qty,
             "collection": amt,
-            "deliveries": int(r.delivery_count or 0),
+            "delivery_id": r.delivery_id,
         })
         categories[cat]["subtotal_qty"] += qty
         categories[cat]["subtotal_collection"] += amt
