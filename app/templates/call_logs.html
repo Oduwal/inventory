@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Call Logs{% endblock %}
+{% block page_title %}AI Call Logs{% endblock %}
+{% block page_subtitle %}Outbound customer calls via Bland.ai{% endblock %}
+{% set active = 'call_logs' %}
+
+{% block content %}
+<style>
+  .cl-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .cl-table th {
+    background:rgba(79,124,255,.06); color:var(--muted);
+    font-family:var(--font-mono); font-size:9px; letter-spacing:.12em;
+    text-transform:uppercase; padding:10px 14px; text-align:left;
+    border-bottom:1px solid var(--border);
+  }
+  .cl-table td { padding:10px 14px; border-bottom:1px solid rgba(255,255,255,.03); vertical-align:middle; }
+  .cl-table tr:last-child td { border-bottom:none; }
+  .cl-table tr:hover td { background:rgba(255,255,255,.02); }
+  .badge-status { display:inline-block; padding:2px 9px; font-size:10px;
+                  font-family:var(--font-mono); font-weight:700; border-radius:4px; }
+  .s-initiated  { background:rgba(34,197,94,.12);  color:#22c55e; }
+  .s-failed     { background:rgba(239,68,68,.12);  color:#f87171; }
+  .s-pending    { background:rgba(251,191,36,.12); color:#fbbf24; }
+  .t-OUT_FOR_DELIVERY { color:#4f7cff; }
+  .t-DELIVERED        { color:#22c55e; }
+  .t-FAILED           { color:#f87171; }
+  .t-RETURNED         { color:#f59e0b; }
+  .err-cell { font-size:11px; color:#f87171; max-width:200px;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pager { display:flex; gap:8px; align-items:center; justify-content:center; margin-top:20px; }
+</style>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+    <div>
+      <div class="badge b-blue">BLAND.AI CALLS</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px;">{{ total }} total call{{ 's' if total != 1 else '' }}</div>
+    </div>
+  </div>
+
+  {% if rows %}
+  <div style="overflow-x:auto;">
+    <table class="cl-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Customer</th>
+          <th>Phone</th>
+          <th>Trigger</th>
+          <th>Call Status</th>
+          <th>Call ID</th>
+          <th>Error</th>
+          <th>Date &amp; Time</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td style="font-family:var(--font-mono);color:var(--muted);font-size:11px;">
+            <a href="/deliveries/{{ r.delivery_id }}" style="color:var(--cyan);text-decoration:none;">#{{ r.delivery_id }}</a>
+          </td>
+          <td style="font-weight:600;">{{ r.customer_name or '—' }}</td>
+          <td style="font-family:var(--font-mono);font-size:12px;">{{ r.phone or '—' }}</td>
+          <td>
+            <span class="badge-status t-{{ r.trigger_status }}" style="font-size:10px;">
+              {{ r.trigger_status.replace('_', ' ') }}
+            </span>
+          </td>
+          <td>
+            <span class="badge-status s-{{ r.call_status }}">{{ r.call_status }}</span>
+          </td>
+          <td style="font-family:var(--font-mono);font-size:11px;color:var(--muted);">
+            {{ r.call_id[:20] ~ '…' if r.call_id and r.call_id|length > 20 else (r.call_id or '—') }}
+          </td>
+          <td class="err-cell" title="{{ r.error_msg or '' }}">{{ r.error_msg or '—' }}</td>
+          <td style="font-size:12px;color:var(--muted);white-space:nowrap;">
+            {{ r.created_at.strftime('%d %b %Y %H:%M') if r.created_at else '—' }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}
+    <a href="?page={{ page - 1 }}" class="btnGhost" style="font-size:12px;padding:5px 14px;">← Prev</a>
+    {% endif %}
+    <span style="font-size:12px;color:var(--muted);">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}
+    <a href="?page={{ page + 1 }}" class="btnGhost" style="font-size:12px;padding:5px 14px;">Next →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div style="text-align:center;padding:40px;color:var(--muted);">
+    <div style="font-size:32px;margin-bottom:10px;">📞</div>
+    <div>No calls have been made yet.</div>
+    <div style="font-size:12px;margin-top:6px;">Calls are triggered automatically when delivery status changes.</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

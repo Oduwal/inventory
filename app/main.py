@@ -79,6 +79,7 @@ from .security import (
     SecurityHeadersMiddleware,
     validate_upload,
 )
+from .calling_service import trigger_call
 
 app = FastAPI()
 
@@ -591,6 +592,20 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_amount NUMERIC(12,2) NULL DEFAULT 0")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_kind VARCHAR(30) NULL")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_note VARCHAR(400) NULL")
+        # Call logs table (Bland.ai integration)
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS call_logs (
+            id              """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            delivery_id     INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            call_id         VARCHAR(120) DEFAULT '',
+            phone           VARCHAR(40) DEFAULT '',
+            trigger_status  VARCHAR(30) DEFAULT '',
+            call_status     VARCHAR(30) DEFAULT '',
+            error_msg       TEXT DEFAULT '',
+            duration        INTEGER DEFAULT 0,
+            created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_delivery_id ON call_logs (delivery_id)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_created_at ON call_logs (created_at)")
 
 
 def seed_admin_if_missing() -> None:
@@ -1058,6 +1073,36 @@ async def confirm_cash_entry(request: Request, db: Session = Depends(get_db)):
         ), {"eid": entry_id})
     db.commit()
     return JSONResponse({"ok": True})
+
+
+@app.get("/call-logs", response_class=HTMLResponse)
+def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 1):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse): return user_or
+    user = user_or
+    if not is_admin(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    per_page = 50
+    offset = (page - 1) * per_page
+    branch_id = get_selected_branch_id(request, user)
+    rows = db.execute(text("""
+        SELECT cl.id, cl.delivery_id, cl.call_id, cl.phone, cl.trigger_status,
+               cl.call_status, cl.error_msg, cl.duration, cl.created_at,
+               d.customer_name, d.branch_id
+        FROM call_logs cl
+        JOIN deliveries d ON d.id = cl.delivery_id
+        WHERE d.branch_id = :bid
+        ORDER BY cl.created_at DESC
+        LIMIT :lim OFFSET :off
+    """), {"bid": branch_id, "lim": per_page, "off": offset}).fetchall()
+    total = db.scalar(text(
+        "SELECT COUNT(*) FROM call_logs cl JOIN deliveries d ON d.id=cl.delivery_id WHERE d.branch_id=:bid"
+    ), {"bid": branch_id}) or 0
+    pages = max(1, (total + per_page - 1) // per_page)
+    return tpl(request, "call_logs.html", {
+        "request": request, "user": user, "active": "call_logs",
+        "rows": rows, "page": page, "pages": pages, "total": total,
+    })
 
 
 @app.get("/admin/audit-log", response_class=HTMLResponse)
@@ -3199,6 +3244,15 @@ async def update_delivery_status(
         return redirect(f"/deliveries/{delivery_id}?error=This+order+is+{d.status.lower()}+and+cannot+be+updated")
     if d.status == "ADJUSTMENT_PENDING" and status_clean == "DELIVERED":
         return redirect(f"/deliveries/{delivery_id}?error=Cannot+mark+delivered+while+adjustment+request+is+pending+admin+approval")
+    # Helper: build item summary string for AI call script
+    def _items_summary() -> str:
+        rows = db.execute(
+            select(Item.name, DeliveryItem.quantity)
+            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+            .where(DeliveryItem.delivery_id == d.id, DeliveryItem.line_amount > 0)
+        ).all()
+        return ", ".join(f"{r.name} x{r.quantity}" for r in rows) if rows else "your order"
+
     if status_clean == "DELIVERED":
         try:
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
@@ -3237,6 +3291,7 @@ async def update_delivery_status(
                     ))
 
             db.commit()
+            trigger_call(d.id, d.customer_phone, "DELIVERED", d.customer_name, _items_summary())
         except ValueError as e:
             d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
             csrf_token2 = get_csrf_token(request)
@@ -3274,6 +3329,7 @@ async def update_delivery_status(
                 f"Delivery #{delivery_id} {status_clean.lower()} — {item_name} assigned stock must be vetted.",
                 f"/vetting", "warning")
     db.commit()
+    trigger_call(d.id, d.customer_phone, status_clean, d.customer_name, _items_summary())
     return redirect(f"/deliveries/{delivery_id}")
 
 
