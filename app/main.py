@@ -2396,7 +2396,8 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
                     "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                     "generationConfig": {
                         "temperature": 0.1,
-                        "maxOutputTokens": 8192,
+                        "maxOutputTokens": 32768,
+                        "thinkingConfig": {"thinkingBudget": 0},
                     }
                 }
             )
@@ -2409,7 +2410,9 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
             error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             return JSONResponse({"error": f"{error_msg} | raw: {raw_text[:200]}"}, status_code=500)
         try:
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            parts = data["candidates"][0]["content"]["parts"]
+            # Skip thinking parts (thought=True), join all real text parts
+            text = "".join(p["text"] for p in parts if p.get("text") and not p.get("thought"))
         except (KeyError, IndexError):
             return JSONResponse({"error": f"Could not read Gemini response | raw: {raw_text[:300]}"}, status_code=500)
         return JSONResponse({"text": text})
