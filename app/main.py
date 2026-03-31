@@ -2714,7 +2714,7 @@ async def delivery_create(
     # 2. Trigger the call immediately (NOW INCLUDES ADDRESS)
     trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address)
 
-     return redirect(f"/deliveries/{d.id}")
+    return redirect(f"/deliveries/{d.id}")
 
 
 
