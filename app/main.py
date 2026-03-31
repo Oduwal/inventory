@@ -5591,9 +5591,26 @@ def merchant_remittance_csv(
     bid = user.branch_id if is_admin(user) else (branch_id or None)
     rows = _merchant_remittance_query(db, sd, ed, bid)
 
+    # Merge rows into deliveries (one per delivery per category)
+    delivery_map: dict = {}
+    categories_order: list = []
+    for r in rows:
+        cat = r.category
+        did = r.delivery_id
+        key = (cat, did)
+        if key not in delivery_map:
+            delivery_map[key] = {
+                "category": cat, "customer": r.customer_name or "—",
+                "items": [], "qty": 0, "collection": 0.0,
+            }
+            categories_order.append(key)
+        delivery_map[key]["items"].append(f"{r.item_name} x{int(r.qty or 0)}")
+        delivery_map[key]["qty"] += int(r.qty or 0)
+        delivery_map[key]["collection"] += float(r.collection or 0)
+
     output = io.StringIO()
     w = csv.writer(output)
-    w.writerow(["Category", "Item", "Qty Delivered", "Collection (NGN)", "Deliveries"])
+    w.writerow(["Category", "Customer", "Items", "Qty", "Collection (NGN)"])
 
     current_cat = None
     cat_qty = 0
@@ -5601,24 +5618,23 @@ def merchant_remittance_csv(
     grand_qty = 0
     grand_total = 0.0
 
-    for r in rows:
-        cat = r.category
+    for key in categories_order:
+        d = delivery_map[key]
+        cat = d["category"]
         if current_cat is not None and cat != current_cat:
-            w.writerow(["", f"  {current_cat} SUBTOTAL", cat_qty, round(cat_amt, 2), ""])
+            w.writerow(["", f"  {current_cat} SUBTOTAL", "", cat_qty, round(cat_amt, 2)])
             w.writerow([])
             cat_qty = 0; cat_amt = 0.0
         current_cat = cat
-        qty = int(r.total_qty or 0)
-        amt = float(r.total_collection or 0)
-        w.writerow([cat, r.item_name, qty, round(amt, 2), int(r.delivery_count or 0)])
-        cat_qty += qty; cat_amt += amt
-        grand_qty += qty; grand_total += amt
+        w.writerow([cat, d["customer"], ", ".join(d["items"]), d["qty"], round(d["collection"], 2)])
+        cat_qty += d["qty"]; cat_amt += d["collection"]
+        grand_qty += d["qty"]; grand_total += d["collection"]
 
     if current_cat is not None:
-        w.writerow(["", f"  {current_cat} SUBTOTAL", cat_qty, round(cat_amt, 2), ""])
+        w.writerow(["", f"  {current_cat} SUBTOTAL", "", cat_qty, round(cat_amt, 2)])
 
     w.writerow([])
-    w.writerow(["GRAND TOTAL", "", grand_qty, round(grand_total, 2), ""])
+    w.writerow(["GRAND TOTAL", "", "", grand_qty, round(grand_total, 2)])
 
     filename = f"merchant_remittance_{sd}_{ed}.csv"
     return _Resp(

@@ -53,9 +53,18 @@
 
   /* ── Print styles ───────────────────────────────────── */
   @media print {
-    .card:first-child, .btn-row { display:none !important; }
+    /* Hide everything in base layout */
+    nav, aside, header, footer, .sidebar, .topbar, .nav, .top-bar,
+    #sidebar, #topbar, #nav, .page-header, .btn-row,
+    .card:first-child { display:none !important; }
+
+    /* Reset layout so content fills the page */
+    body, html { background:#fff !important; color:#000 !important; margin:0 !important; padding:0 !important; }
+    .sidebar, .nav, .topbar { display:none !important; }
+    .content { margin-left:0 !important; padding:16px !important; width:100% !important; }
+    .page-header { display:none !important; }
+
     #preview-area { display:block !important; }
-    body { background:#fff; color:#000; }
     .cat-card { border:1px solid #ccc; page-break-inside:avoid; margin-bottom:12px; }
     .cat-header { background:#f5f5f5 !important; }
     .cat-name { color:#000 !important; }
