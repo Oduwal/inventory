@@ -16,59 +16,75 @@ VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID", "")
 
 # ── Scripts per status ───────────────────────────────────────────
 SCRIPTS: dict[str, str] = {
+    "PENDING": (
+        "You are a polite and professional customer service agent working for a Nigerian logistics company named {business_name}. "
+        "You are calling a customer named {customer_name} regarding their recent order. "
+        "The order contains the following items: {items}. "
+        "The delivery address currently on file is: {address}. "
+        "INSTRUCTIONS: "
+        "1. Greet the customer warmly (e.g., 'Good day'). "
+        "2. Inform them you are calling from {business_name} to confirm their order of {items} has been received by the branch. "
+        "3. If the delivery address is exactly 'MISSING_ADDRESS', you MUST politely ask the customer to provide their full delivery address so you can process the dispatch. "
+        "4. If the delivery address is NOT 'MISSING_ADDRESS', read the address to them and ask if it is correct. "
+        "5. Answer any quick questions they have politely, and end the call."
+    ),
     "OUT_FOR_DELIVERY": (
         "Hello, may I speak with {customer_name}? "
         "This is a message from {business_name}. "
-        "Your order of {items} is currently on its way to you. "
-        "Our delivery agent will arrive at your location shortly. "
-        "Please make sure someone is available to receive it. "
+        "Your order of {items} is currently on its way to your address at {address}. "
+        "Our delivery agent will arrive shortly. Please make sure someone is available to receive it. "
         "Thank you and have a great day!"
     ),
     "DELIVERED": (
         "Hello, may I speak with {customer_name}? "
         "This is {business_name} calling to confirm that your order of {items} "
-        "has been successfully delivered. "
-        "We hope you are satisfied with your purchase. "
-        "Thank you for choosing us!"
+        "has been successfully delivered to {address}. "
+        "We hope you are satisfied with your purchase. Thank you for choosing us!"
     ),
     "FAILED": (
         "Hello, may I speak with {customer_name}? "
-        "This is {business_name}. We attempted to deliver your order of {items} today "
+        "This is {business_name}. We attempted to deliver your order of {items} to {address} today "
         "but unfortunately we were unable to complete the delivery. "
-        "Please contact us so we can reschedule your delivery at a convenient time. "
-        "We apologise for the inconvenience."
+        "Please contact us so we can reschedule."
     ),
     "RETURNED": (
         "Hello, may I speak with {customer_name}? "
         "This is {business_name}. We are calling to let you know that your order of {items} "
-        "has been returned to our office. "
-        "Please reach out to us to arrange a new delivery or discuss your options. "
-        "Thank you."
+        "has been returned to our office. Please reach out to us."
     ),
 }
 
-
-def _build_script(status: str, customer_name: str, items: str) -> str:
-    business_name = os.getenv("BUSINESS_NAME", "our store")
+def _build_script(status: str, customer_name: str, items: str, address: str = "") -> str:
+    business_name = os.getenv("BUSINESS_NAME", "our logistics company")
     template = SCRIPTS.get(status, "Hello {customer_name}, this is {business_name} calling about your order.")
+    
+    # Flag empty addresses so the AI knows to ask for it
+    display_address = address if address and address.strip() else "MISSING_ADDRESS"
+    
     return template.format(
         customer_name=customer_name or "valued customer",
         business_name=business_name,
         items=items or "your order",
+        address=display_address
     )
 
-
-def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str) -> None:
+def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
     """Runs in a background thread — makes the Vapi API call and logs the result."""
+    # NOTE: Ensure you changed BLAND_API_KEY to VAPI_API_KEY in your imports at the top!
     if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
 
-    # Generate the initial message using your existing templates
-    script = _build_script(status, customer_name, items)
-    business_name = os.getenv("BUSINESS_NAME", "our logistics company")
+    script = _build_script(status, customer_name, items, address)
+    business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
+    
+    # Ensure this is your actual live Railway app URL
+    YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://inventory-production-d41e.up.railway.app")
 
     try:
+        # ==========================================
+        # THIS IS WHERE YOUR NEW CODE GOES
+        # ==========================================
         resp = httpx.post(
             "https://api.vapi.ai/call/phone",
             headers={
@@ -94,16 +110,27 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                     },
                     "voice": {
                         "provider": "11labs",
-                        "voiceId": "burt" # You can change this to any Vapi supported voice
-                    }
+                        "voiceId": "burt"
+                    },
+                    # Tell the AI to summarize the call focusing on logistics details
+                    "serverMessages": ["end-of-call-report"],
+                    "clientMessages": ["transcript", "hang", "function-call"],
+                    "endCallFunctionEnabled": True
+                },
+                # Vapi will send the summary to this endpoint when the call hangs up
+                "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
+                # Pass the delivery_id so the webhook knows which order to update
+                "metadata": {
+                    "delivery_id": delivery_id
                 }
             },
             timeout=15,
         )
+        # ==========================================
+        
         data = resp.json()
         call_id = data.get("id") or ""
         
-        # Vapi returns 201 Created for a successful call initiation
         call_status = "initiated" if resp.status_code in (200, 201) else "failed"
         error_msg = "" if resp.status_code in (200, 201) else str(data.get("message", data))[:300]
         logger.info("Vapi call for delivery #%s: call_id=%s status=%s", delivery_id, call_id, call_status)
@@ -116,42 +143,10 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     # Persist log to DB using your existing logging function
     _save_call_log(delivery_id, call_id, phone, status, call_status, error_msg)
 
-
-def _save_call_log(delivery_id: int, call_id: str, phone: str, trigger_status: str,
-                   call_status: str, error_msg: str) -> None:
-    try:
-        from .database import SessionLocal
-        db = SessionLocal()
-        try:
-            db.execute(
-                __import__("sqlalchemy").text(
-                    "INSERT INTO call_logs "
-                    "(delivery_id, call_id, phone, trigger_status, call_status, error_msg, created_at) "
-                    "VALUES (:did, :cid, :phone, :ts, :cs, :err, :now)"
-                ),
-                {
-                    "did": delivery_id,
-                    "cid": call_id,
-                    "phone": phone,
-                    "ts": trigger_status,
-                    "cs": call_status,
-                    "err": error_msg,
-                    "now": datetime.utcnow(),
-                },
-            )
-            db.commit()
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error("Failed to save call log for delivery #%s: %s", delivery_id, e)
-
+# ... keep _save_call_log exactly as it is ...
 
 def trigger_call(delivery_id: int, phone: str | None, status: str,
-                 customer_name: str, items: str) -> None:
-    """
-    Public entry point — called from main.py on status change.
-    Fires in a background daemon thread so it never blocks the request.
-    """
+                 customer_name: str, items: str, address: str | None = None) -> None:
     if not phone or not phone.strip():
         logger.info("No phone for delivery #%s — skipping call", delivery_id)
         return
@@ -159,6 +154,6 @@ def trigger_call(delivery_id: int, phone: str | None, status: str,
         return
     threading.Thread(
         target=_do_call,
-        args=(delivery_id, phone.strip(), status, customer_name, items),
+        args=(delivery_id, phone.strip(), status, customer_name, items, address or ""),
         daemon=True,
     ).start()

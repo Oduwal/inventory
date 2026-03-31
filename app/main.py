@@ -2679,12 +2679,42 @@ async def delivery_create(
     notify_branch_admins(db, d.branch_id, "🆕 New Order Created",
         f"New delivery for {cust} created{' by supervisor' if is_supervisor(user) else ''}.",
         f"/deliveries/{d.id}", "info")
+    # ... existing code ...
     if is_admin(user) and target_agent_id and target_agent_id != user.id:
         notify(db, target_agent_id, "📦 New Delivery Assigned",
                f"A new delivery for {cust} has been assigned to you.",
                f"/deliveries/{d.id}", "info")
     db.commit()
-    return redirect(f"/deliveries/{d.id}")
+
+    # ==========================================
+    # ADD THIS NEW BLOCK TO TRIGGER THE CALL
+    # ==========================================
+    # 1. Build a readable list of items for the AI to speak
+    call_items = []
+    for iid, qty in zip(item_id, quantity):
+        if int(qty) > 0:
+            it = db.get(Item, int(iid))
+            if it:
+                call_items.append(f"{it.name} x{qty}")
+    items_summary = ", ".join(call_items) if call_items else "your order"
+
+    # 2. Trigger the call immediately
+    # We pass "PENDING" as the status since it's a brand new order
+    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary)
+    # ==========================================
+# 1. Build a readable list of items for the AI to speak
+    call_items = []
+    for iid, qty in zip(item_id, quantity):
+        if int(qty) > 0:
+            it = db.get(Item, int(iid))
+            if it:
+                call_items.append(f"{it.name} x{qty}")
+    items_summary = ", ".join(call_items) if call_items else "your order"
+
+    # 2. Trigger the call immediately (NOW INCLUDES ADDRESS)
+    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address)
+
+     return redirect(f"/deliveries/{d.id}")
 
 
 
@@ -5698,3 +5728,54 @@ def merchant_remittance_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+from fastapi import Request
+import json
+
+@app.post("/api/call-webhook")
+async def call_webhook(request: Request, db: Session = Depends(get_db)):
+    """Receives the end-of-call report from Vapi/Bland and updates the delivery."""
+    try:
+        payload = await request.json()
+        
+        # Vapi wraps its data in a 'message' object for end-of-call reports
+        message = payload.get("message", {})
+        if message.get("type") != "end-of-call-report":
+            return JSONResponse({"status": "ignored"})
+
+        call_data = message.get("call", {})
+        
+        # Extract the delivery_id we passed in the metadata earlier
+        metadata = call_data.get("metadata", {})
+        delivery_id = metadata.get("delivery_id")
+        
+        if not delivery_id:
+            return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
+
+        # Get the AI's summary of the call
+        summary = message.get("summary", "No summary provided by AI.")
+
+        # Find the delivery in the database
+        d = db.get(Delivery, int(delivery_id))
+        if d:
+            # Append the AI's summary to the existing delivery note
+            existing_note = d.note or ""
+            new_note = f"\n[AI Call Update]: {summary}"
+            d.note = (existing_note + new_note).strip()
+            
+            # If the customer said they are not available, you could even auto-change the status!
+            # if "reschedule" in summary.lower() or "not available" in summary.lower():
+            #     d.status = "FAILED"
+            
+            db.commit()
+            
+            # Notify the agent that the customer changed their details
+            if d.agent_id:
+                notify(db, d.agent_id, "📞 Customer Call Update",
+                       f"The AI spoke to {d.customer_name}. Update: {summary}",
+                       f"/deliveries/{d.id}", "warning")
+
+        return JSONResponse({"status": "success"})
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
