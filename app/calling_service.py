@@ -11,8 +11,8 @@ import httpx
 
 logger = logging.getLogger("calling")
 
-BLAND_API_KEY = os.getenv("BLAND_API_KEY", "")
-BLAND_BASE_URL = "https://api.bland.ai/v1"
+VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")
+VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID", "")
 
 # ── Scripts per status ───────────────────────────────────────────
 SCRIPTS: dict[str, str] = {
@@ -59,41 +59,61 @@ def _build_script(status: str, customer_name: str, items: str) -> str:
 
 
 def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str) -> None:
-    """Runs in a background thread — makes the Bland.ai API call and logs the result."""
-    if not BLAND_API_KEY:
-        logger.warning("BLAND_API_KEY not set — skipping call for delivery #%s", delivery_id)
+    """Runs in a background thread — makes the Vapi API call and logs the result."""
+    if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
+        logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
 
+    # Generate the initial message using your existing templates
     script = _build_script(status, customer_name, items)
+    business_name = os.getenv("BUSINESS_NAME", "our logistics company")
 
     try:
         resp = httpx.post(
-            f"{BLAND_BASE_URL}/calls",
-            headers={"authorization": BLAND_API_KEY, "Content-Type": "application/json"},
+            "https://api.vapi.ai/call/phone",
+            headers={
+                "Authorization": f"Bearer {VAPI_API_KEY}", 
+                "Content-Type": "application/json"
+            },
             json={
-                "phone_number": phone,
-                "task": script,
-                "voice": "maya",
-                "wait_for_greeting": True,
-                "record": True,
-                "max_duration": 2,          # minutes
-                "answered_by_enabled": True,
-                "metadata": {"delivery_id": delivery_id, "status": status},
+                "phoneNumberId": VAPI_PHONE_NUMBER_ID,
+                "customer": {
+                    "number": phone
+                },
+                "assistant": {
+                    "firstMessage": script,
+                    "model": {
+                        "provider": "openai",
+                        "model": "gpt-3.5-turbo",
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": f"You are a helpful customer service AI for {business_name}. You are calling to provide a delivery update. The exact update is: '{script}'. Be polite, concise, and answer any simple questions the customer has about this update."
+                            }
+                        ]
+                    },
+                    "voice": {
+                        "provider": "11labs",
+                        "voiceId": "burt" # You can change this to any Vapi supported voice
+                    }
+                }
             },
             timeout=15,
         )
         data = resp.json()
-        call_id = data.get("call_id") or data.get("id") or ""
-        call_status = "initiated" if resp.status_code == 200 else "failed"
-        error_msg = "" if resp.status_code == 200 else str(data.get("error", data))[:300]
-        logger.info("Bland.ai call for delivery #%s: call_id=%s status=%s", delivery_id, call_id, call_status)
+        call_id = data.get("id") or ""
+        
+        # Vapi returns 201 Created for a successful call initiation
+        call_status = "initiated" if resp.status_code in (200, 201) else "failed"
+        error_msg = "" if resp.status_code in (200, 201) else str(data.get("message", data))[:300]
+        logger.info("Vapi call for delivery #%s: call_id=%s status=%s", delivery_id, call_id, call_status)
     except Exception as e:
         call_id = ""
         call_status = "failed"
         error_msg = str(e)[:300]
-        logger.error("Bland.ai call error for delivery #%s: %s", delivery_id, e)
+        logger.error("Vapi call error for delivery #%s: %s", delivery_id, e)
 
-    # Persist log to DB
+    # Persist log to DB using your existing logging function
     _save_call_log(delivery_id, call_id, phone, status, call_status, error_msg)
 
 
