@@ -5456,7 +5456,7 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
 # ────────────────────────────────────────────────
 
 def _merchant_remittance_query(db, sd, ed, bid):
-    """Return individual delivery-item rows with customer name."""
+    """Return per-delivery-item rows grouped by category for remittance report."""
     params = {"start": str(sd), "end": str(ed)}
     branch_clause = "AND d.branch_id = :bid" if bid else ""
     if bid:
@@ -5464,12 +5464,11 @@ def _merchant_remittance_query(db, sd, ed, bid):
     return db.execute(text(f"""
         SELECT
             COALESCE(i.category, 'Uncategorized') AS category,
+            d.id                                   AS delivery_id,
+            d.customer_name                        AS customer_name,
             i.name                                 AS item_name,
             di.quantity                            AS qty,
-            di.line_amount                         AS collection,
-            d.customer_name                        AS customer_name,
-            d.id                                   AS delivery_id,
-            DATE(COALESCE(d.delivered_at, d.created_at)) AS delivered_date
+            di.line_amount                         AS collection
         FROM delivery_items di
         JOIN deliveries d ON d.id = di.delivery_id
         JOIN items      i ON i.id = di.item_id
@@ -5478,7 +5477,7 @@ def _merchant_remittance_query(db, sd, ed, bid):
           AND DATE(COALESCE(d.delivered_at, d.created_at)) >= :start
           AND DATE(COALESCE(d.delivered_at, d.created_at)) <= :end
           {branch_clause}
-        ORDER BY COALESCE(i.category, 'Uncategorized'), i.name, d.customer_name
+        ORDER BY COALESCE(i.category, 'Uncategorized'), d.customer_name, d.id, i.name
     """), params).fetchall()
 
 
@@ -5521,27 +5520,44 @@ def merchant_remittance_data(
     bid = user.branch_id if is_admin(user) else (branch_id or None)
     rows = _merchant_remittance_query(db, sd, ed, bid)
 
+    # Build: category -> list of deliveries (one row per delivery, items merged)
     categories: dict = {}
+    # delivery_map: (cat, delivery_id) -> delivery row dict
+    delivery_map: dict = {}
     grand_qty = 0
     grand_total = 0.0
 
     for r in rows:
         cat = r.category
-        if cat not in categories:
-            categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
+        did = r.delivery_id
         qty = int(r.qty or 0)
         amt = float(r.collection or 0)
-        categories[cat]["rows"].append({
-            "item": r.item_name,
-            "customer": r.customer_name or "—",
-            "qty": qty,
-            "collection": amt,
-            "delivery_id": r.delivery_id,
-        })
+
+        if cat not in categories:
+            categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
+
+        key = (cat, did)
+        if key not in delivery_map:
+            delivery_map[key] = {
+                "customer": r.customer_name or "—",
+                "delivery_id": did,
+                "items": [],
+                "qty": 0,
+                "collection": 0.0,
+            }
+            categories[cat]["rows"].append(delivery_map[key])
+
+        delivery_map[key]["items"].append(f"{r.item_name} ×{qty}")
+        delivery_map[key]["qty"] += qty
+        delivery_map[key]["collection"] += amt
         categories[cat]["subtotal_qty"] += qty
         categories[cat]["subtotal_collection"] += amt
         grand_qty += qty
         grand_total += amt
+
+    # Convert items list to string
+    for d in delivery_map.values():
+        d["items"] = ", ".join(d["items"])
 
     return JSONResponse({
         "categories": list(categories.values()),
