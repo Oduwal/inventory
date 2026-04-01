@@ -164,7 +164,13 @@
                     {% endif %}
                     <td>#{{ d.id }}</td>
                     <td>{{ d.customer_name or "-" }}</td>
-                    <td>{{ d.customer_phone or "-" }}</td>
+                    <td>
+                      {% if d.customer_phone %}
+                        <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff; text-decoration:underline;">{{ d.customer_phone }}</a>
+                      {% else %}
+                        -
+                      {% endif %}
+                    </td>
                     <td>{{ d.address or "-" }}</td>
                     <td>{{ agent_names.get(d.agent_id, d.agent_id) if d.agent_id else "—" }}</td>
 

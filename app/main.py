@@ -5758,32 +5758,50 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
             existing_note = d.note or ""
             d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
             
-            # Trigger WhatsApp fallback if call failed
+            # Trigger fallback logic if call failed
             if ended_reason in [
-    "voicemail", 
-    "customer-hung-up", 
-    "customer-ended-call", 
-    "customer-did-not-answer", 
-    "failed", 
-    "assistant-error", 
-    "customer-busy"
-]:
-                try:
-                    from .whatsapp_service import send_whatsapp_fallback
+                "voicemail", "customer-hung-up", "customer-ended-call", 
+                "customer-did-not-answer", "failed", "assistant-error", "customer-busy"
+            ]:
+                backup_numbers = metadata.get("backup_numbers", [])
+                
+                # Check if we have more numbers to try first
+                if len(backup_numbers) > 0:
+                    next_number = backup_numbers[0]
+                    remaining_backups = backup_numbers[1:]
                     
-                    # Fetch the item names for the WhatsApp message
-                    items_query = db.execute(
-                        select(Item.name, DeliveryItem.quantity)
-                        .join(DeliveryItem, DeliveryItem.item_id == Item.id)
-                        .where(DeliveryItem.delivery_id == d.id)
-                    ).all()
-                    items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
+                    d.note += f"\n[System]: Call to {call_data.get('customer', {}).get('number')} failed. Trying backup number: {next_number}..."
+                    db.commit()
+                    
+                    # Launch the backup call using the metadata we saved
+                    from .calling_service import _do_call
+                    import threading
+                    threading.Thread(target=_do_call, args=(
+                        d.id, next_number, remaining_backups,
+                        metadata.get("status", "PENDING"),
+                        metadata.get("customer_name", d.customer_name),
+                        metadata.get("items", "your order"),
+                        metadata.get("address", d.address or "")
+                    ), daemon=True).start()
+                    
+                else:
+                    # No backups left! Send the WhatsApp message
+                    try:
+                        from .whatsapp_service import send_whatsapp_fallback
+                        
+                        # Fetch the item names for the WhatsApp message
+                        items_query = db.execute(
+                            select(Item.name, DeliveryItem.quantity)
+                            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+                            .where(DeliveryItem.delivery_id == d.id)
+                        ).all()
+                        items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
 
-                    send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
-                    d.note += "\n[System]: WhatsApp Fallback message triggered."
-                except Exception as wa_err:
-                    import logging
-                    logging.getLogger("webhook").error(f"WhatsApp fallback error: {wa_err}")
+                        send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
+                        d.note += "\n[System]: All numbers failed. WhatsApp Fallback message triggered."
+                    except Exception as wa_err:
+                        import logging
+                        logging.getLogger("webhook").error(f"WhatsApp fallback error: {wa_err}")
 
             db.commit()
             

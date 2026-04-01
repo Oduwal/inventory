@@ -25,7 +25,13 @@
     <div style="display:flex;flex-direction:column;gap:6px;">
       <div style="display:flex;gap:8px;align-items:center;">
         <span style="color:var(--muted);font-size:12px;min-width:60px;">Phone</span>
-        <span style="font-size:13px;">{{ d.customer_phone or "—" }}</span>
+        <span style="font-size:13px;">
+          {% if d.customer_phone %}
+            <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff; text-decoration:underline;">{{ d.customer_phone }}</a>
+          {% else %}
+            —
+          {% endif %}
+        </span>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <span style="color:var(--muted);font-size:12px;min-width:60px;">Address</span>

@@ -55,7 +55,7 @@ def _build_script(status: str, customer_name: str, items: str, address: str) -> 
         address=display_address
     )
 
-def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
+def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, customer_name: str, items: str, address: str) -> None:
     if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
@@ -68,23 +68,12 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     display_name = customer_name or "valued customer"
     display_address = address if address and address.strip() else "your saved address"
 
-    # ==============================================================
-    # 2. RANDOMLY SELECT AN AGENT FOR THIS CALL
-    # ==============================================================
     agent = random.choice(AVAILABLE_AGENTS)
     agent_name = agent["name"]
     agent_voice_id = agent["voiceId"]
 
-    # ==============================================================
-    # 3. CONVERSATIONAL PROMPT SETTINGS
-    # ==============================================================
-    # The AI only says this to start, forcing the user to speak first.
     first_message = f"Hello? Is this {display_name}?"
     
-    # This is the AI's "Brain". It knows the details but won't dump them all at once.
-    # ==============================================================
-    # THE COMPANY KNOWLEDGE BASE
-    # ==============================================================
     company_knowledge = (
         "COMPANY KNOWLEDGE BASE: "
         "- Business Name: Atomic Logistics. "
@@ -95,12 +84,8 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         "- Support: If they have a major complaint, tell them to message our WhatsApp support line."
     )
 
-    # Fix the robotic status string so the AI can pronounce it smoothly
     spoken_status = status.replace('_', ' ').lower()
 
-    # ==============================================================
-    # THE AI'S BRAIN (System Prompt)
-    # ==============================================================
     system_prompt = (
         f"You are {agent_name}, a friendly, patient, and highly professional dispatch coordinator for {business_name}. "
         f"You are calling to update the customer on their order: {items}. "
@@ -116,9 +101,6 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         f"\n7. STRICT GOODBYE RULE: If the customer says 'No', you MUST recite exactly: 'Thank you. Do have a nice day. Bye.' You MUST generate this full spoken sentence FIRST before triggering the hang-up function. NEVER just say 'goodbye'."
     )
 
-    # ==============================================================
-    # THE NOTE-TAKING INSTRUCTIONS
-    # ==============================================================
     summary_prompt = (
         "You are an expert executive assistant. Summarize this phone call accurately in 1 to 2 sentences. "
         "You MUST include: 1. Did the customer confirm they will be available to receive the delivery? "
@@ -151,7 +133,14 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                     "clientMessages": ["transcript", "hang", "function-call"],
                     "endCallFunctionEnabled": True
                 },
-                "metadata": {"delivery_id": delivery_id}
+                "metadata": {
+                    "delivery_id": delivery_id,
+                    "backup_numbers": backup_numbers,
+                    "status": status,
+                    "customer_name": customer_name,
+                    "items": items,
+                    "address": address
+                }
             },
             timeout=15,
         )
@@ -170,7 +159,6 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         call_status = "failed"
         error_msg = str(e)[:300]
 
-    # Save to database
     try:
         from .database import SessionLocal
         db = SessionLocal()
@@ -190,4 +178,12 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
 
 def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "") -> None:
     if not phone or not phone.strip(): return
-    threading.Thread(target=_do_call, args=(delivery_id, phone.strip(), status, customer_name, items, address), daemon=True).start()
+    
+    # Safely split numbers separated by comma, slash, or space
+    raw_numbers = [p.strip() for p in phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
+    if not raw_numbers: return
+    
+    primary = raw_numbers[0]
+    backups = raw_numbers[1:]
+    
+    threading.Thread(target=_do_call, args=(delivery_id, primary, backups, status, customer_name, items, address), daemon=True).start()
