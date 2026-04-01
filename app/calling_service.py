@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import random
 from datetime import datetime
 import httpx
 
@@ -8,6 +9,20 @@ logger = logging.getLogger("calling")
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")
 VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID", "")
+
+# ==============================================================
+# 1. THE AGENT ROSTER (Add as many as you want!)
+# ==============================================================
+AVAILABLE_AGENTS = [
+    {"name": "Olabisi", "voiceId": "eOHsvebhdtt0XFeHVMQY"}, # Deep, professional male
+    {"name": "Flourish", "voiceId": "3AKbojRHFojiSeAMRPt3"}, # Polite, clear female
+    {"name": "Tobi",  "voiceId": "D9xwB6HNBJ9h4YvQFWuE"}  # Energetic, young male
+    {"name": "Tolani",  "voiceId": "JMwQvjJt08OhYlPBWeyc"}
+    {"name": "Taiwo",  "voiceId": "RAVWJW17BPoSIf05iXxf"}
+    {"name": "Chineye",  "voiceId": "PSIwmc50KeuW20kehlBE"}
+    {"name": "Samuel",  "voiceId": "ddDFRErfhdc2asyySOG5"}
+]
+# Note: You can replace these Voice IDs with your custom ElevenLabs ones!
 
 def format_nigerian_phone(phone: str) -> str:
     """Automatically cleans and formats phone numbers to E.164 (+234...)."""
@@ -18,41 +33,6 @@ def format_nigerian_phone(phone: str) -> str:
     if clean.startswith("+"): return clean
     return clean
 
-SCRIPTS: dict[str, str] = {
-    "PENDING": (
-        "Good day! Am I speaking with {customer_name}? "
-        "I am calling from {business_name}. Your order of {items} has been received at our branch. "
-        "The delivery address on file is: {address}. "
-        "If you have any specific instructions or want to change the time, just let me know and I will note it for the dispatch rider."
-    ),
-    "OUT_FOR_DELIVERY": (
-        "Good day! Am I speaking with {customer_name}? "
-        "I am calling from {business_name}. Your order of {items} is currently out for delivery and heading to {address}. "
-        "Our dispatch rider will arrive shortly. "
-        "If you want me to tell the rider to come at a specific time today, please tell me now and I will take the message."
-    ),
-    "DELIVERED": (
-        "Hello {customer_name}, this is {business_name}. "
-        "We are just calling to confirm your order of {items} was successfully delivered. Thank you for your patronage!"
-    ),
-    "FAILED": (
-        "Hello {customer_name}, this is {business_name}. "
-        "We attempted to deliver your order of {items} today to {address} but were unsuccessful. "
-        "When would you like us to reschedule this delivery?"
-    ),
-}
-
-def _build_script(status: str, customer_name: str, items: str, address: str) -> str:
-    business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
-    template = SCRIPTS.get(status, "Hello {customer_name}, this is {business_name} calling.")
-    display_address = address if address and address.strip() else "an unconfirmed address"
-    return template.format(
-        customer_name=customer_name or "valued customer",
-        business_name=business_name,
-        items=items or "your order",
-        address=display_address
-    )
-
 def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
     if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
@@ -61,11 +41,36 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     formatted_phone = format_nigerian_phone(phone)
     if not formatted_phone: return
 
-    script = _build_script(status, customer_name, items, address)
     business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
-    
-    # .rstrip('/') prevents the double-slash error (//api/call-webhook)
     YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://inventory-production-d41e.up.railway.app").rstrip('/')
+    display_name = customer_name or "valued customer"
+    display_address = address if address and address.strip() else "your saved address"
+
+    # ==============================================================
+    # 2. RANDOMLY SELECT AN AGENT FOR THIS CALL
+    # ==============================================================
+    agent = random.choice(AVAILABLE_AGENTS)
+    agent_name = agent["name"]
+    agent_voice_id = agent["voiceId"]
+
+    # ==============================================================
+    # 3. CONVERSATIONAL PROMPT SETTINGS
+    # ==============================================================
+    # The AI only says this to start, forcing the user to speak first.
+    first_message = f"Hello? Is this {display_name}?"
+    
+    # This is the AI's "Brain". It knows the details but won't dump them all at once.
+    system_prompt = (
+        f"You are {agent_name}, a highly professional, human-like dispatch coordinator for {business_name}. "
+        f"You are calling to update them on their order: {items}. "
+        f"Delivery Status: {status}. Delivery Address: {display_address}. "
+        f"CRITICAL CONVERSATION RULES: "
+        f"1. When the customer confirms their name, introduce yourself naturally: 'Hi, I'm {agent_name} from {business_name}...' and state the reason for your call. "
+        f"2. Keep your responses EXTREMELY short (1 to 2 sentences max). "
+        f"3. Speak casually, use conversational filler words like 'hmm' or 'ah', and PAUSE frequently so the customer can interrupt you. "
+        f"4. Do NOT read the entire address or item list unless they ask for it. "
+        f"5. If they want to reschedule or change the address, say: 'I have noted that down, and I will immediately pass the message to the dispatch rider.' "
+    )
 
     try:
         resp = httpx.post(
@@ -75,20 +80,20 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                 "phoneNumberId": VAPI_PHONE_NUMBER_ID,
                 "customer": {"number": formatted_phone},
                 "assistant": {
-                    "firstMessage": script,
+                    "firstMessage": first_message,
                     "model": {
                         "provider": "openai",
                         "model": "gpt-3.5-turbo",
-                        "messages": [{
-                            "role": "system",
-                            "content": f"You are a smart, polite customer service assistant for {business_name}. "
-                                       f"You are calling regarding this exact update: '{script}'. "
-                                       "CRITICAL INSTRUCTION: If the customer asks you to reschedule, change the time, or update the address, DO NOT say you cannot communicate with the agent. "
-                                       "Instead, reply with: 'I have noted that down, and I will immediately pass the message to the dispatch rider.' "
-                                       "Answer simple questions and let them lead the conversation."
-                        }]
+                        "messages": [{"role": "system", "content": system_prompt}],
+                        "temperature": 0.7 # Makes the AI sound less robotic and more natural
                     },
-                    "voice": {"provider": "11labs", "voiceId": "burt"},
+                    "voice": {
+                        "provider": "11labs", 
+                        "voiceId": agent_voice_id,
+                        "elevenLabsConfig": {
+                            "modelId": "eleven_multilingual_v2" # Helps adapt to local accents better
+                        }
+                    },
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
@@ -113,6 +118,7 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         call_status = "failed"
         error_msg = str(e)[:300]
 
+    # Save to database
     try:
         from .database import SessionLocal
         db = SessionLocal()
@@ -131,5 +137,5 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         logger.error(f"Failed to save log: {e}")
 
 def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "") -> None:
-    if not phone or not phone.strip() or status not in SCRIPTS: return
+    if not phone or not phone.strip(): return
     threading.Thread(target=_do_call, args=(delivery_id, phone.strip(), status, customer_name, items, address), daemon=True).start()
