@@ -67,6 +67,28 @@ def _build_script(status: str, customer_name: str, items: str, address: str = ""
         items=items or "your order",
         address=display_address
     )
+def format_nigerian_phone(phone: str) -> str:
+    """Automatically cleans and formats phone numbers to E.164 (+234...)."""
+    if not phone:
+        return ""
+        
+    # 1. Strip out spaces, dashes, and brackets
+    clean = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").strip()
+    
+    # 2. If it starts with 0 and is 11 digits (e.g., 08012345678), change to +234...
+    if clean.startswith("0") and len(clean) == 11:
+        return "+234" + clean[1:]
+        
+    # 3. If they typed 234 without the plus (e.g., 2348012345678)
+    if clean.startswith("234") and len(clean) == 13:
+        return "+" + clean
+        
+    # 4. If it already starts with a plus, assume it's perfectly fine
+    if clean.startswith("+"):
+        return clean
+        
+    # Fallback: Just return what they typed and hope for the best
+    return clean
 
 def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
     """Runs in a background thread — makes the Vapi API call and logs the result."""
@@ -74,10 +96,16 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
 
+    # ==========================================
+    # CLEAN THE PHONE NUMBER FIRST
+    # ==========================================
+    formatted_phone = format_nigerian_phone(phone)
+    if not formatted_phone:
+        logger.warning("Empty phone number for delivery #%s — skipping", delivery_id)
+        return
+
     script = _build_script(status, customer_name, items, address)
     business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
-    
-    # Ensure this is your actual live Railway app URL
     YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://inventory-production-d41e.up.railway.app")
 
     try:
@@ -90,9 +118,10 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
             json={
                 "phoneNumberId": VAPI_PHONE_NUMBER_ID,
                 "customer": {
-                    "number": phone
+                    "number": formatted_phone  # <--- USE THE CLEAN NUMBER HERE
                 },
                 "assistant": {
+                    # ... rest of your Vapi assistant code stays exactly the same ...
                     "firstMessage": script,
                     "model": {
                         "provider": "openai",
@@ -108,14 +137,15 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                         "provider": "11labs",
                         "voiceId": "burt"
                     },
-                    # Tell the AI to summarize the call focusing on logistics details
+                    # ==========================================
+                    # MOVED: serverUrl MUST be inside the assistant block
+                    # ==========================================
+                    "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
                     "endCallFunctionEnabled": True
                 },
-                # Vapi will send the summary to this endpoint when the call hangs up
-                "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
-                # Pass the delivery_id so the webhook knows which order to update
+                # metadata stays outside at the root level
                 "metadata": {
                     "delivery_id": delivery_id
                 }
