@@ -11,12 +11,18 @@ const client = new Client({
     puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
 });
 
-// Generate QR Code for the Admin to scan in the terminal
+// Generate QR Code for the Admin to scan
 client.on('qr', (qr) => {
     console.log('\n=========================================================');
-    console.log('SCAN THIS QR CODE WITH YOUR WHATSAPP TO LINK THE BOT:');
-    console.log('=========================================================\n');
+    console.log('🤖 SCAN THIS QR CODE TO LINK THE BOT:');
+    
+    // Print the terminal version
     qrcode.generate(qr, { small: true });
+    
+    // Print a clickable web link for a perfect image
+    console.log('\n⚠️ IF THE TERMINAL CODE ABOVE DOES NOT SCAN, CLICK THIS LINK FOR A PERFECT IMAGE:');
+    console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
+    console.log('=========================================================\n');
 });
 
 client.on('ready', () => {
