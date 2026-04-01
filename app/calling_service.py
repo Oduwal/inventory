@@ -16,13 +16,14 @@ VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID", "")
 AVAILABLE_AGENTS = [
     {"name": "Olabisi", "voiceId": "eOHsvebhdtt0XFeHVMQY"}, # Deep, professional male
     {"name": "Flourish", "voiceId": "3AKbojRHFojiSeAMRPt3"}, # Polite, clear female
-    {"name": "Tobi",  "voiceId": "D9xwB6HNBJ9h4YvQFWuE"}  # Energetic, young male
-    {"name": "Tolani",  "voiceId": "JMwQvjJt08OhYlPBWeyc"}
-    {"name": "Taiwo",  "voiceId": "RAVWJW17BPoSIf05iXxf"}
-    {"name": "Chineye",  "voiceId": "PSIwmc50KeuW20kehlBE"}
-    {"name": "Samuel",  "voiceId": "ddDFRErfhdc2asyySOG5"}
+    {"name": "Tobi",  "voiceId": "D9xwB6HNBJ9h4YvQFWuE"},  # Energetic, young male
+    {"name": "Tolani",  "voiceId": "JMwQvjJt08OhYlPBWeyc"},
+    {"name": "Taiwo",  "voiceId": "RAVWJW17BPoSIf05iXxf"},
+    {"name": "Chineye",  "voiceId": "PSIwmc50KeuW20kehlBE"},
+    {"name": "Samuel",  "voiceId": "ddDFRErfhdc2asyySOG5"},
+    {"name": "John",  "voiceId": "3mwVS2Cu52S8MzAVx66c"}
 ]
-# Note: You can replace these Voice IDs with your custom ElevenLabs ones!
+# Note: You can replace these Voice IDs ywith your custom ElevenLabs ones!
 
 def format_nigerian_phone(phone: str) -> str:
     """Automatically cleans and formats phone numbers to E.164 (+234...)."""
