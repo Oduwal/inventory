@@ -112,6 +112,7 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                     "voice": {
                         "provider": "11labs", 
                         "voiceId": agent_voice_id,
+                        "model": "eleven_multilingual_v2" 
                     },
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
