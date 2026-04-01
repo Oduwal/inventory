@@ -10,6 +10,7 @@ from sqlalchemy import (
     Numeric,
     CheckConstraint,
     Index,
+    Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -113,7 +114,12 @@ class Delivery(Base):
     customer_phone: Mapped[str | None]   = mapped_column(String(40), nullable=True)
     address:        Mapped[str | None]   = mapped_column(String(300), nullable=True)
     status:         Mapped[str]          = mapped_column(String(25), default="PENDING", nullable=False)
-    note:           Mapped[str | None]   = mapped_column(String(400), nullable=True)
+    
+    # =========================================================
+    # UPGRADED COLUMN: Changed from String(400) to Text
+    # =========================================================
+    note:           Mapped[str | None]   = mapped_column(Text, nullable=True)
+    
     delivery_date:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at:     Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     delivered_at:   Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -125,8 +131,6 @@ class Delivery(Base):
     )
     cash_entries: Mapped[list["CashEntry"]]    = relationship(back_populates="delivery")
 
-    # Note: ADJUSTMENT_PENDING is enforced via DDL migration at startup (main.py)
-    # because ALTER CONSTRAINT is used to add it after initial table creation.
     __table_args__ = (
         CheckConstraint(
             "status IN ('PENDING','OUT_FOR_DELIVERY','DELIVERED','FAILED','RETURNED','ADJUSTMENT_PENDING')",
