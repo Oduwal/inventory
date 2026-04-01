@@ -84,32 +84,44 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     # This is the AI's "Brain". It knows the details but won't dump them all at once.
     # ==============================================================
     # THE COMPANY KNOWLEDGE BASE
-    # Edit this text to include real details about your business!
     # ==============================================================
     company_knowledge = (
         "COMPANY KNOWLEDGE BASE: "
         "- Business Name: Atomic Logistics. "
         "- Operating Hours: 8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays. "
         "- Delivery Zones: We currently deliver across all areas in Lagos, Benin, and Abuja. "
+        "- Rescheduling: Customers can reschedule a delivery to the next day for free. "
         "- Payment: We accept bank transfers and cash on delivery. "
         "- Support: If they have a major complaint, tell them to message our WhatsApp support line."
     )
+
+    # Fix the robotic status string so the AI can pronounce it smoothly
+    spoken_status = status.replace('_', ' ').lower()
 
     # ==============================================================
     # THE AI'S BRAIN (System Prompt)
     # ==============================================================
     system_prompt = (
-        f"You are {agent_name}, a highly professional dispatch coordinator for {business_name}. "
-        f"You are calling to update them on their order: {items}. "
-        f"Delivery Status: {status}. Delivery Address: {display_address}. "
+        f"You are {agent_name}, a friendly, patient, and highly professional dispatch coordinator for {business_name}. "
+        f"You are calling to update the customer on their order: {items}. "
+        f"Delivery Status: {spoken_status}. Delivery Address: {display_address}. "
         f"{company_knowledge} "
-        f"CRITICAL RULES: "
-        f"1. When they answer, introduce yourself: 'Hi, I'm {agent_name} from {business_name}...' and state that their order is out for delivery. "
-        f"2. Ask: 'Will you be available at the address to receive it today?' and WAIT for their answer. "
-        f"3. Answer any questions they have confidently using the COMPANY KNOWLEDGE BASE. "
-        f"4. Keep all responses very short, conversational, and natural (1 to 2 sentences max). "
-        f"5. HOW TO END THE CALL: When the main topic is resolved, YOU MUST ASK: 'Is there anything else I can help you with today?'. "
-        f"6. If the customer asks another question, answer it. If the customer says 'No' or indicates they are done, say 'Thank you for choosing Atomic Logistics. Have a great day!', and then immediately trigger the hang up function."
+        f"\n\nCRITICAL CONVERSATION RULES: "
+        f"\n1. NEVER rush the customer. You must act like a real, patient human having a real conversation. "
+        f"\n2. When they answer and confirm their name, say: 'Hi, I'm {agent_name} from {business_name}. I am calling because your order is currently {spoken_status}. Will you be available at the address to receive it?' then STOP TALKING and listen. "
+        f"\n3. If they interrupt you, STOP TALKING immediately, listen to them, and acknowledge what they said. "
+        f"\n4. Answer any questions they have confidently using the COMPANY KNOWLEDGE BASE. "
+        f"\n5. DO NOT HANG UP THE PHONE until you have asked 'Is there anything else I can help you with today?' AND the customer explicitly says no or goodbye. Only then should you say 'Have a great day!' and end the call."
+    )
+
+    # ==============================================================
+    # THE NOTE-TAKING INSTRUCTIONS
+    # ==============================================================
+    summary_prompt = (
+        "You are an expert executive assistant. Summarize this phone call accurately in 1 to 2 sentences. "
+        "You MUST include: 1. Did the customer confirm they will be available to receive the delivery? "
+        "2. Did they ask to reschedule or change the address? 3. Any specific questions or complaints they had. "
+        "Write this clearly so the human dispatch team knows exactly what to do next."
     )
 
     try:
@@ -122,8 +134,8 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                 "assistant": {
                     "firstMessage": first_message,
                     "model": {
-                        "provider": "openai",
-                        "model": "gpt-3.5-turbo",
+                        "provider": "google",
+                        "model": "gemini-2.5-flash", 
                         "messages": [{"role": "system", "content": system_prompt}],
                         "temperature": 0.7 
                     },
@@ -131,12 +143,10 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                         "provider": "11labs", 
                         "voiceId": agent_voice_id
                     },
+                    "summaryPrompt": summary_prompt, 
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
-                    
-                    # We turned this back to TRUE so the AI can hang up, 
-                    # but only AFTER it follows Rule #5 and #6.
                     "endCallFunctionEnabled": True
                 },
                 "metadata": {"delivery_id": delivery_id}
