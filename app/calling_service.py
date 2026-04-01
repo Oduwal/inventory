@@ -82,16 +82,34 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     first_message = f"Hello? Is this {display_name}?"
     
     # This is the AI's "Brain". It knows the details but won't dump them all at once.
+    # ==============================================================
+    # THE COMPANY KNOWLEDGE BASE
+    # Edit this text to include real details about your business!
+    # ==============================================================
+    company_knowledge = (
+        "COMPANY KNOWLEDGE BASE: "
+        "- Business Name: Atomic Logistics. "
+        "- Operating Hours: 8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays. "
+        "- Delivery Zones: We currently deliver across all areas in Lagos, Benin, and Abuja. "
+        "- Payment: We accept bank transfers and cash on delivery. "
+        "- Support: If they have a major complaint, tell them to message our WhatsApp support line."
+    )
+
+    # ==============================================================
+    # THE AI'S BRAIN (System Prompt)
+    # ==============================================================
     system_prompt = (
-        f"You are {agent_name}, a highly professional, human-like dispatch coordinator for {business_name}. "
+        f"You are {agent_name}, a highly professional dispatch coordinator for {business_name}. "
         f"You are calling to update them on their order: {items}. "
         f"Delivery Status: {status}. Delivery Address: {display_address}. "
-        f"CRITICAL CONVERSATION RULES: "
-        f"1. When the customer confirms their name, introduce yourself naturally: 'Hi, I'm {agent_name} from {business_name}...' and state the reason for your call. "
-        f"2. Keep your responses EXTREMELY short (1 to 2 sentences max). "
-        f"3. Speak casually, use conversational filler words like 'hmm' or 'ah', and PAUSE frequently so the customer can interrupt you. "
-        f"4. Do NOT read the entire address or item list unless they ask for it. "
-        f"5. If they want to reschedule or change the address, say: 'I have noted that down, and I will immediately pass the message to the dispatch rider.' "
+        f"{company_knowledge} "
+        f"CRITICAL RULES: "
+        f"1. When they answer, introduce yourself: 'Hi, I'm {agent_name} from {business_name}...' and state that their order is out for delivery. "
+        f"2. Ask: 'Will you be available at the address to receive it today?' and WAIT for their answer. "
+        f"3. Answer any questions they have confidently using the COMPANY KNOWLEDGE BASE. "
+        f"4. Keep all responses very short, conversational, and natural (1 to 2 sentences max). "
+        f"5. HOW TO END THE CALL: When the main topic is resolved, YOU MUST ASK: 'Is there anything else I can help you with today?'. "
+        f"6. If the customer asks another question, answer it. If the customer says 'No' or indicates they are done, say 'Thank you for choosing Atomic Logistics. Have a great day!', and then immediately trigger the hang up function."
     )
 
     try:
@@ -107,15 +125,18 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
                         "provider": "openai",
                         "model": "gpt-3.5-turbo",
                         "messages": [{"role": "system", "content": system_prompt}],
-                        "temperature": 0.7 # Makes the AI sound less robotic and more natural
+                        "temperature": 0.7 
                     },
                     "voice": {
                         "provider": "11labs", 
-                        "voiceId": agent_voice_id,
+                        "voiceId": agent_voice_id
                     },
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
+                    
+                    # We turned this back to TRUE so the AI can hang up, 
+                    # but only AFTER it follows Rule #5 and #6.
                     "endCallFunctionEnabled": True
                 },
                 "metadata": {"delivery_id": delivery_id}
