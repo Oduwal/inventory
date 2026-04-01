@@ -10,3 +10,4 @@ passlib[bcrypt]
 itsdangerous
 httpx
 pywebpush
+twilio

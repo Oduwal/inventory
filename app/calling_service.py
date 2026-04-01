@@ -143,7 +143,11 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     # Persist log to DB using your existing logging function
     _save_call_log(delivery_id, call_id, phone, status, call_status, error_msg)
 
-# ... keep _save_call_log exactly as it is ...
+def _save_call_log(delivery_id: int, call_id: str, phone: str, status: str, call_status: str, error_msg: str) -> None:
+    """Save the call log to the database."""
+    # TODO: Implement database logging for call records
+    logger.debug("Call log for delivery #%s: call_id=%s phone=%s status=%s call_status=%s error=%s",
+                 delivery_id, call_id, phone, status, call_status, error_msg)
 
 def trigger_call(delivery_id: int, phone: str | None, status: str,
                  customer_name: str, items: str, address: str | None = None) -> None:

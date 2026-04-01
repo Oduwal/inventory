@@ -5730,52 +5730,95 @@ def merchant_remittance_csv(
     )
 
 from fastapi import Request
-import json
+from .whatsapp_service import send_whatsapp_fallback # Import the new service
+from .calling_service import _build_script
 
 @app.post("/api/call-webhook")
 async def call_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receives the end-of-call report from Vapi/Bland and updates the delivery."""
     try:
         payload = await request.json()
-        
-        # Vapi wraps its data in a 'message' object for end-of-call reports
         message = payload.get("message", {})
         if message.get("type") != "end-of-call-report":
             return JSONResponse({"status": "ignored"})
 
         call_data = message.get("call", {})
-        
-        # Extract the delivery_id we passed in the metadata earlier
         metadata = call_data.get("metadata", {})
         delivery_id = metadata.get("delivery_id")
         
         if not delivery_id:
             return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
 
-        # Get the AI's summary of the call
         summary = message.get("summary", "No summary provided by AI.")
+        call_status = call_data.get("status", "")
+        ended_reason = call_data.get("endedReason", "")
 
-        # Find the delivery in the database
         d = db.get(Delivery, int(delivery_id))
         if d:
-            # Append the AI's summary to the existing delivery note
             existing_note = d.note or ""
-            new_note = f"\n[AI Call Update]: {summary}"
-            d.note = (existing_note + new_note).strip()
+            d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
             
-            # If the customer said they are not available, you could even auto-change the status!
-            # if "reschedule" in summary.lower() or "not available" in summary.lower():
-            #     d.status = "FAILED"
+            # ==========================================
+            # TRIGGER WHATSAPP IF CALL FAILED/VOICEMAIL
+            # ==========================================
+            if ended_reason in ["voicemail", "customer-hung-up", "failed"]:
+                # Get item names to pass to the WhatsApp message
+                items_query = db.execute(
+                    select(Item.name, DeliveryItem.quantity)
+                    .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+                    .where(DeliveryItem.delivery_id == d.id)
+                ).all()
+                items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
+                
+                send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
+                d.note += "\n[System]: WhatsApp Fallback message sent."
             
             db.commit()
-            
-            # Notify the agent that the customer changed their details
-            if d.agent_id:
-                notify(db, d.agent_id, "📞 Customer Call Update",
-                       f"The AI spoke to {d.customer_name}. Update: {summary}",
-                       f"/deliveries/{d.id}", "warning")
 
         return JSONResponse({"status": "success"})
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+    
+    @app.post("/api/whatsapp-reply")
+    async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
+        """Receives replies from customers via Twilio WhatsApp."""
+        form_data = await request.form()
+    
+    sender = form_data.get("From", "").replace("whatsapp:", "")
+    body = form_data.get("Body", "").strip()
+    
+    # Find the most recent active delivery for this phone number
+    # Twilio sends the number in E.164 format (+234...)
+    d = db.execute(
+        select(Delivery)
+        .where(Delivery.customer_phone == sender)
+        .where(Delivery.status.in_(["PENDING", "OUT_FOR_DELIVERY"]))
+        .order_by(Delivery.created_at.desc())
+    ).scalars().first()
+
+    if d:
+        existing_note = d.note or ""
+        
+        if body == "1":
+            d.note = (existing_note + "\n[WhatsApp]: Customer confirmed available today.").strip()
+            # If you want to automatically push it to the rider:
+            # d.status = "OUT_FOR_DELIVERY"
+            notify_msg = f"{d.customer_name} confirmed via WhatsApp they are available."
+            
+        elif body == "2":
+            d.note = (existing_note + "\n[WhatsApp]: Customer requested reschedule for tomorrow.").strip()
+            d.status = "FAILED" # Or a new RESCHEDULED status if you add one
+            notify_msg = f"{d.customer_name} requested a reschedule via WhatsApp."
+            
+        else:
+            d.note = (existing_note + f"\n[WhatsApp Reply]: {body}").strip()
+            notify_msg = f"{d.customer_name} replied on WhatsApp: {body}"
+            
+        db.commit()
+        
+        # Notify the branch admin or assigned agent
+        if d.agent_id:
+            notify(db, d.agent_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
+        else:
+            notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
+
+    return PlainTextResponse("OK", status_code=200)
