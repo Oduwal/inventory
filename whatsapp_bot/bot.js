@@ -13,7 +13,9 @@ const client = new Client({
 
 // Generate QR Code for the Admin to scan in the terminal
 client.on('qr', (qr) => {
+    console.log('\n=========================================================');
     console.log('SCAN THIS QR CODE WITH YOUR WHATSAPP TO LINK THE BOT:');
+    console.log('=========================================================\n');
     qrcode.generate(qr, { small: true });
 });
 
@@ -39,7 +41,7 @@ app.post('/send-group-feedback', async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.toString() });
     }
-});
+}); // <-- This is the closing tag that was likely missing!
 
 client.initialize();
 
