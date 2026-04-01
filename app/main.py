@@ -5759,7 +5759,15 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
             d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
             
             # Trigger WhatsApp fallback if call failed
-            if ended_reason in ["voicemail", "customer-hung-up", "failed"]:
+            if ended_reason in [
+    "voicemail", 
+    "customer-hung-up", 
+    "customer-ended-call", 
+    "customer-did-not-answer", 
+    "failed", 
+    "assistant-error", 
+    "customer-busy"
+]:
                 try:
                     from .whatsapp_service import send_whatsapp_fallback
                     
