@@ -90,7 +90,7 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         "- Business Name: Atomic Logistics. "
         "- Operating Hours: 8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays. "
         "- Delivery Zones: We currently deliver across all areas in Lagos, Benin, and Abuja. "
-        "- Rescheduling: Customers can reschedule a delivery to the next day for free. "
+        "- Rescheduling: Customers can reschedule a delivery to the next day. "
         "- Payment: We accept bank transfers and cash on delivery. "
         "- Support: If they have a major complaint, tell them to message our WhatsApp support line."
     )
@@ -111,7 +111,8 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
         f"\n2. When they answer and confirm their name, say: 'Hi, I'm {agent_name} from {business_name}. I am calling because your order is currently {spoken_status}. Will you be available at the address to receive it?' then STOP TALKING and listen. "
         f"\n3. If they interrupt you, STOP TALKING immediately, listen to them, and acknowledge what they said. "
         f"\n4. Answer any questions they have confidently using the COMPANY KNOWLEDGE BASE. "
-        f"\n5. DO NOT HANG UP THE PHONE until you have asked 'Is there anything else I can help you with today?' AND the customer explicitly says no or goodbye. Only then should you say 'Have a great day!' and end the call."
+        f"\n5. HOW TO END THE CALL: When the main topic is resolved, YOU MUST ASK: 'Is there anything else I can help you with today?'. "
+        f"\n6. If the customer says 'No', you MUST SPEAK a polite goodbye out loud (e.g., 'Thank you for choosing Atomic Logistics. Have a wonderful day!'). You MUST generate this spoken sentence FIRST. Only trigger the hang-up function AFTER you have spoken your goodbye message."
     )
 
     # ==============================================================
