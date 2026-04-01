@@ -5751,16 +5751,14 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
             return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
 
         summary = message.get("summary", "No summary provided by AI.")
-        ended_reason = call_data.get("endedReason", "")  # Vapi tells us WHY the call ended
+        ended_reason = call_data.get("endedReason", "")
 
         d = db.get(Delivery, int(delivery_id))
         if d:
             existing_note = d.note or ""
             d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
             
-            # ========================================================
-            # WHATSAPP FALLBACK LOGIC
-            # ========================================================
+            # Trigger WhatsApp fallback if call failed
             if ended_reason in ["voicemail", "customer-hung-up", "failed"]:
                 try:
                     from .whatsapp_service import send_whatsapp_fallback
@@ -5773,19 +5771,16 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                     ).all()
                     items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
 
-                    # Trigger the Twilio WhatsApp message
                     send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
                     d.note += "\n[System]: WhatsApp Fallback message triggered."
                 except Exception as wa_err:
                     import logging
                     logging.getLogger("webhook").error(f"WhatsApp fallback error: {wa_err}")
-            # ========================================================
 
             db.commit()
             
             # Notify the assigned agent
             if d.agent_id:
-                from .main import notify 
                 notify(db, d.agent_id, "📞 Customer Call Update",
                        f"The AI spoke to {d.customer_name}. Update: {summary}",
                        f"/deliveries/{d.id}", "warning")
@@ -5795,32 +5790,12 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         import logging
         logging.getLogger("webhook").error(f"Webhook error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
-            
-            # ==========================================
-            # TRIGGER WHATSAPP IF CALL FAILED/VOICEMAIL
-            # ==========================================
-            if ended_reason in ["voicemail", "customer-hung-up", "failed"]:
-                # Get item names to pass to the WhatsApp message
-                items_query = db.execute(
-                    select(Item.name, DeliveryItem.quantity)
-                    .join(DeliveryItem, DeliveryItem.item_id == Item.id)
-                    .where(DeliveryItem.delivery_id == d.id)
-                ).all()
-                items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
-                
-                send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
-                d.note += "\n[System]: WhatsApp Fallback message sent."
-            
-            db.commit()
 
-        return JSONResponse({"status": "success"})
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-    
-    @app.post("/api/whatsapp-reply")
-    async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
-        """Receives replies from customers via Twilio WhatsApp."""
-        form_data = await request.form()
+
+@app.post("/api/whatsapp-reply")
+async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
+    """Receives replies from customers via Twilio WhatsApp."""
+    form_data = await request.form()
     
     sender = form_data.get("From", "").replace("whatsapp:", "")
     body = form_data.get("Body", "").strip()
@@ -5839,13 +5814,11 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         
         if body == "1":
             d.note = (existing_note + "\n[WhatsApp]: Customer confirmed available today.").strip()
-            # If you want to automatically push it to the rider:
-            # d.status = "OUT_FOR_DELIVERY"
             notify_msg = f"{d.customer_name} confirmed via WhatsApp they are available."
             
         elif body == "2":
             d.note = (existing_note + "\n[WhatsApp]: Customer requested reschedule for tomorrow.").strip()
-            d.status = "FAILED" # Or a new RESCHEDULED status if you add one
+            d.status = "FAILED"
             notify_msg = f"{d.customer_name} requested a reschedule via WhatsApp."
             
         else:
@@ -5861,44 +5834,3 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
             notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
     return PlainTextResponse("OK", status_code=200)
-
-# ==============================================================
-# VAPI WEBHOOK ENDPOINT (PASTE AT THE VERY BOTTOM OF main.py)
-# ==============================================================
-@app.post("/api/call-webhook")
-async def call_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receives the end-of-call report from Vapi and updates the delivery notes."""
-    try:
-        payload = await request.json()
-        message = payload.get("message", {})
-        
-        if message.get("type") != "end-of-call-report":
-            return JSONResponse({"status": "ignored"})
-
-        call_data = message.get("call", {})
-        metadata = call_data.get("metadata", {})
-        delivery_id = metadata.get("delivery_id")
-        
-        if not delivery_id:
-            return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
-
-        summary = message.get("summary", "No summary provided by AI.")
-
-        d = db.get(Delivery, int(delivery_id))
-        if d:
-            existing_note = d.note or ""
-            d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
-            db.commit()
-            
-            # Notify the assigned agent that the customer left a message
-            if d.agent_id:
-                from .main import notify # Ensure notify is accessible
-                notify(db, d.agent_id, "📞 Customer Call Update",
-                       f"The AI spoke to {d.customer_name}. Update: {summary}",
-                       f"/deliveries/{d.id}", "warning")
-
-        return JSONResponse({"status": "success"})
-    except Exception as e:
-        import logging
-        logging.getLogger("webhook").error(f"Webhook error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
