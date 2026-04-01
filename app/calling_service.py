@@ -33,6 +33,27 @@ def format_nigerian_phone(phone: str) -> str:
     if clean.startswith("234") and len(clean) == 13: return "+" + clean
     if clean.startswith("+"): return clean
     return clean
+# ==============================================================
+# RESTORED HELPER FUNCTION (Prevents main.py from crashing)
+# ==============================================================
+SCRIPTS: dict[str, str] = {
+    "PENDING": "Your order of {items} has been received.",
+    "OUT_FOR_DELIVERY": "Your order of {items} is currently out for delivery to {address}.",
+    "DELIVERED": "Your order of {items} was successfully delivered.",
+    "FAILED": "We attempted to deliver your order of {items} to {address} but were unsuccessful."
+}
+
+def _build_script(status: str, customer_name: str, items: str, address: str) -> str:
+    """Provides a basic script preview for the main dashboard."""
+    business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
+    template = SCRIPTS.get(status, "Hello {customer_name}, this is {business_name} calling.")
+    display_address = address if address and address.strip() else "an unconfirmed address"
+    return template.format(
+        customer_name=customer_name or "valued customer",
+        business_name=business_name,
+        items=items or "your order",
+        address=display_address
+    )
 
 def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
     if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
