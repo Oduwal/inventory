@@ -70,7 +70,6 @@ def _build_script(status: str, customer_name: str, items: str, address: str = ""
 
 def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, items: str, address: str) -> None:
     """Runs in a background thread — makes the Vapi API call and logs the result."""
-    # NOTE: Ensure you changed BLAND_API_KEY to VAPI_API_KEY in your imports at the top!
     if not VAPI_API_KEY or not VAPI_PHONE_NUMBER_ID:
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
@@ -82,9 +81,6 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
     YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://inventory-production-d41e.up.railway.app")
 
     try:
-        # ==========================================
-        # THIS IS WHERE YOUR NEW CODE GOES
-        # ==========================================
         resp = httpx.post(
             "https://api.vapi.ai/call/phone",
             headers={
@@ -126,21 +122,35 @@ def _do_call(delivery_id: int, phone: str, status: str, customer_name: str, item
             },
             timeout=15,
         )
+        
         # ==========================================
-        
-        data = resp.json()
+        # NEW SAFER PARSING LOGIC
+        # ==========================================
+        try:
+            data = resp.json()
+        except Exception:
+            # If Vapi returns plain text (like an unauthorized or gateway error)
+            data = {"message": f"RAW ERROR: {resp.text}"}
+            
         call_id = data.get("id") or ""
-        
         call_status = "initiated" if resp.status_code in (200, 201) else "failed"
-        error_msg = "" if resp.status_code in (200, 201) else str(data.get("message", data))[:300]
-        logger.info("Vapi call for delivery #%s: call_id=%s status=%s", delivery_id, call_id, call_status)
+        
+        # Capture the real error message safely
+        if resp.status_code in (200, 201):
+            error_msg = ""
+            logger.info("Vapi call for delivery #%s: call_id=%s status=%s", delivery_id, call_id, call_status)
+        else:
+            error_msg = str(data.get("message", data))[:300]
+            logger.error("Vapi rejected call #%s (Status %s): %s", delivery_id, resp.status_code, error_msg)
+        # ==========================================
+            
     except Exception as e:
         call_id = ""
         call_status = "failed"
         error_msg = str(e)[:300]
         logger.error("Vapi call error for delivery #%s: %s", delivery_id, e)
 
-    # Persist log to DB using your existing logging function
+    # Persist log to DB
     _save_call_log(delivery_id, call_id, phone, status, call_status, error_msg)
 
 def _save_call_log(delivery_id: int, call_id: str, phone: str, status: str, call_status: str, error_msg: str) -> None:
