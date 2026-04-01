@@ -21,3 +21,6 @@ inventory.db
 # OS junk
 .DS_Store
 Thumbs.db
+# Node.js and Bot Session files
+whatsapp_bot/node_modules/
+whatsapp_bot/.wwebjs_auth/

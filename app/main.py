@@ -5860,3 +5860,45 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
             notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
     return PlainTextResponse("OK", status_code=200)
+
+import httpx
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import JSONResponse
+
+@app.post("/api/agent-feedback")
+async def send_agent_feedback(
+    delivery_id: int = Form(...),
+    group_name: str = Form(...), # You can hardcode this or fetch it from your DB
+    issue_type: str = Form(...)
+):
+    # 1. Fetch the delivery from the database (Using your existing DB logic)
+    db = SessionLocal()
+    delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
+    db.close()
+    
+    if not delivery:
+        return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+
+    # 2. Format the feedback message
+    message = (
+        f"🚨 *Agent Feedback Alert*\n"
+        f"Order #{delivery.id} - {delivery.customer_name}\n"
+        f"Status Issue: {issue_type}\n"
+        f"Agent Note: The customer is currently unreachable or unavailable. Please advise."
+    )
+
+    # 3. Send the command to your Clawbot (running on port 3000)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:3000/send-group-feedback", 
+                json={"groupName": group_name, "message": message},
+                timeout=10
+            )
+            data = resp.json()
+            if data.get("success"):
+                return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
+            else:
+                return JSONResponse({"status": "error", "message": data.get("error")})
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": f"Clawbot is offline: {str(e)}"})

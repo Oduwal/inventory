@@ -17,7 +17,6 @@
 <div class="alert alert-danger">⚠ {{ error or request.query_params.get('error')|replace('+',' ') }}</div>
 {% endif %}
 
-<!-- Customer & Status grid -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div class="card">
     <div class="badge b-blue" style="margin-bottom:14px;">CUSTOMER</div>
@@ -44,6 +43,12 @@
       </div>
       {% endif %}
     </div>
+
+    <div style="margin-top: 16px;">
+      <button onclick="sendSellerFeedback({{ d.id }}, 'The Awesome Sellers Group')" class="btnGhost" style="color: #f59e0b; border-color: #f59e0b; width: 100%; justify-content: center;">
+          📣 Notify Seller Group
+      </button>
+    </div>
   </div>
 
   <div class="card">
@@ -61,7 +66,6 @@
       Delivery Date: <strong style="color:var(--text);">{{ (d.delivery_date or d.created_at).strftime('%d %b %Y') }}</strong>
     </div>
 
-    <!-- Status update — intercepts DELIVERED to show payment modal -->
     <form method="post" action="/deliveries/{{ d.id }}/status" id="status-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
       <div style="display:flex;gap:10px;align-items:flex-end;">
@@ -79,7 +83,6 @@
       </div>
     </form>
 
-    <!-- Payment breakdown modal (shown when DELIVERED selected) -->
     <div id="collect-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
       <div style="background:#0d1829;border:1px solid rgba(34,197,94,.3);border-radius:16px;width:100%;max-width:440px;padding:24px;margin:20px;box-shadow:0 24px 60px rgba(0,0,0,.6);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
@@ -158,7 +161,6 @@
   </div>
 </div>
 
-<!-- Assign Agent — shown to admin/supervisor when order is not yet delivered -->
 {% if agents and d.status != "DELIVERED" %}
 <div class="card" style="margin-bottom:16px;border-top:3px solid #f59e0b;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
@@ -194,7 +196,6 @@
 </div>
 {% endif %}
 
-<!-- Items table -->
 <div class="card" style="margin-bottom:16px;">
   <div class="badge b-purple" style="margin-bottom:14px;">ORDER ITEMS</div>
   <table>
@@ -227,14 +228,12 @@
   </table>
 </div>
 
-<!-- Adjustment pending banner for agent -->
 {% if d.status == "ADJUSTMENT_PENDING" and user.role == "AGENT" %}
 <div class="alert alert-danger" style="margin-bottom:16px;">
   ⏳ Your adjustment request is pending admin approval. You cannot mark this delivery as delivered until it is reviewed.
 </div>
 {% endif %}
 
-<!-- Pending adjustment review card — admin only -->
 {% if pending_adj and user.role == "ADMIN" %}
 <div class="card" style="margin-bottom:16px;border-top:3px solid #f59e0b;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
@@ -246,7 +245,6 @@
     Reason: <strong style="color:var(--text);">{{ pending_adj.reason }}</strong>
   </div>
   {% endif %}
-  <!-- Item changes table -->
   <table style="margin-bottom:16px;">
     <thead>
       <tr>
@@ -277,7 +275,6 @@
       {% endfor %}
     </tbody>
   </table>
-  <!-- Approve / Reject forms -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
     <form method="post" action="/deliveries/{{ d.id }}/review-adjustment">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
@@ -298,7 +295,6 @@
 </div>
 {% endif %}
 
-<!-- Request adjustment — agent only, only when OUT_FOR_DELIVERY -->
 {% if user.role == "AGENT" and d.status == "OUT_FOR_DELIVERY" %}
 <div class="card" style="margin-bottom:16px;border-top:3px solid #7fa8ff;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -382,7 +378,6 @@
 </div>
 {% endif %}
 
-<!-- Finance summary -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div class="card" style="border-top:3px solid #22c55e;">
     <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Total Collected</div>
@@ -395,11 +390,37 @@
     {% endif %}
   </div>
 </div>
+
 <script>
 function addRejectionNote(form) {
   const note = prompt('Reason for rejection (optional):') || '';
   form.querySelector('[id^="rej-note-"]').value = note;
   return true;
+}
+
+async function sendSellerFeedback(deliveryId, groupName) {
+    if(!confirm("Alert the seller group that this customer is unreachable?")) return;
+
+    const formData = new FormData();
+    formData.append("delivery_id", deliveryId);
+    formData.append("group_name", groupName);
+    formData.append("issue_type", "Customer Not Picking");
+
+    try {
+        const response = await fetch('/api/agent-feedback', {
+            method: 'POST',
+            body: formData
+        });
+        const result = await response.json();
+        
+        if(result.status === "success") {
+            alert("✅ Message successfully dropped in the WhatsApp group!");
+        } else {
+            alert("❌ Failed to send: " + result.message);
+        }
+    } catch (e) {
+        alert("❌ System Error.");
+    }
 }
 </script>
 {% endblock %}
