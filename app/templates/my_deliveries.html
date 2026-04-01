@@ -51,7 +51,13 @@
       <tr>
         <td><span style="color:var(--muted);">#{{ d.id }}</span></td>
         <td style="font-weight:700;">{{ d.customer_name }}</td>
-        <td style="color:var(--muted);">{{ d.customer_phone or "—" }}</td>
+        <td style="color:var(--muted);">
+          {% if d.customer_phone %}
+            <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff; text-decoration:underline;">{{ d.customer_phone }}</a>
+          {% else %}
+            —
+          {% endif %}
+        </td>
         <td style="max-width:220px;font-size:12px;color:var(--muted);">
           {% set s = items_summary.get(d.id, "") %}
           {% if s %}{{ s }}{% else %}—{% endif %}
