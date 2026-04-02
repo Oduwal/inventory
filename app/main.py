@@ -5891,7 +5891,7 @@ async def send_agent_feedback(
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://localhost:3000/send-group-feedback", 
+                "http://adventurous-flow.railway.internal:3000/send-group-feedback", 
                 json={"groupName": group_name, "message": message},
                 timeout=10
             )
