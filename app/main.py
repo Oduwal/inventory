@@ -364,6 +364,10 @@ def ensure_schema() -> None:
     is_sqlite = DATABASE_URL.startswith("sqlite")
 
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        # Enable WAL mode on SQLite so concurrent reads from FastAPI and the
+        # Node bot webhook writer don't block each other.
+        if is_sqlite:
+            _ddl(conn, "PRAGMA journal_mode=WAL")
 
         _ddl(conn, """
             CREATE TABLE IF NOT EXISTS branches (
@@ -617,6 +621,18 @@ def ensure_schema() -> None:
             created_at   TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_comments_delivery_id ON wa_comments (delivery_id)")
+        # Structured Gemini classification stored as JSON per inbound comment
+        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS classification TEXT DEFAULT NULL")
+
+        # Durable mapping of every bot-sent WhatsApp message_id → delivery order_id.
+        # This table survives bot restarts; Python does O(1) lookup to route replies.
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS whatsapp_outbound_map (
+            message_id  TEXT PRIMARY KEY,
+            order_id    INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            body        TEXT NOT NULL DEFAULT '',
+            created_at  TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_outbound_order ON whatsapp_outbound_map (order_id)")
 
 
 def seed_admin_if_missing() -> None:
@@ -5885,10 +5901,109 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     return PlainTextResponse("OK", status_code=200)
 
 import httpx
+import asyncio
 from fastapi import APIRouter, Request, Form, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+# ─────────────────────────────────────────────────────────────────
+# SSE CONNECTION MANAGER
+# Each delivery page that is open holds an asyncio.Queue here.
+# When a new WA comment arrives we put an event into every queue.
+# ─────────────────────────────────────────────────────────────────
+_sse_queues: dict[int, list[asyncio.Queue]] = {}   # delivery_id → [queue, ...]
+
+def _sse_broadcast(delivery_id: int, html_fragment: str):
+    """Push an SSE event to all open browser tabs for this delivery."""
+    for q in _sse_queues.get(delivery_id, []):
+        try:
+            q.put_nowait(html_fragment)
+        except asyncio.QueueFull:
+            pass
+
+@app.get("/api/stream/{delivery_id}")
+async def sse_stream(delivery_id: int, request: Request):
+    """
+    Server-Sent Events endpoint.  The delivery detail page connects here
+    and receives new wa_comments HTML fragments in real time.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    _sse_queues.setdefault(delivery_id, []).append(q)
+
+    async def generator():
+        try:
+            yield "retry: 5000\n\n"   # tell browser to reconnect after 5s
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    html = await asyncio.wait_for(q.get(), timeout=25)
+                    yield f"event: wa_comment\ndata: {html}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"   # keep-alive comment
+        finally:
+            lst = _sse_queues.get(delivery_id, [])
+            if q in lst:
+                lst.remove(q)
+
+    return StreamingResponse(generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ─────────────────────────────────────────────────────────────────
+# GEMINI MULTI-TURN CLASSIFICATION (runs in threadpool so it doesn't
+# block the event loop — Gemini HTTP call can take 2-5s)
+# ─────────────────────────────────────────────────────────────────
+_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
+    """
+    Build a transcript of the last few messages and ask Gemini to classify
+    the latest seller reply IN CONTEXT.  Returns a dict matching the schema:
+    { "classification": str, "contextual_summary": str, "action_required": bool }
+    """
+    if not _GEMINI_KEY:
+        return {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
+
+    transcript_lines = []
+    for m in thread:
+        direction = "Agent → Group" if m["direction"] == "outbound" else "Seller reply"
+        transcript_lines.append(f"[{direction}]: {m['body']}")
+    transcript = "\n".join(transcript_lines)
+
+    prompt = (
+        "You are a precise logistics coordinator AI. Below is a WhatsApp conversation thread "
+        "between a delivery agent (sending updates to a seller group) and sellers replying.\n\n"
+        f"THREAD:\n{transcript}\n\n"
+        f"The latest seller reply is:\n\"{latest_reply}\"\n\n"
+        "Evaluate the latest reply IN CONTEXT of the full thread and respond ONLY with valid JSON "
+        "matching this exact schema (no markdown, no explanation):\n"
+        '{"classification": "<QUESTION|COMPLAINT|CONFIRMED_AVAILABLE|RESCHEDULE_REQUEST|ADDRESS_CHANGE|RESOLVED|OTHER>", '
+        '"contextual_summary": "<one sentence max 20 words explaining what the seller needs>", '
+        '"action_required": <true|false>}'
+    )
+
+    try:
+        resp = httpx.post(
+            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0.1, "maxOutputTokens": 150}},
+            timeout=10,
+        )
+        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Strip markdown fences if Gemini wraps anyway
+        if text_out.startswith("```"):
+            text_out = text_out.strip("`").lstrip("json").strip()
+        return _json.loads(text_out)
+    except Exception as e:
+        logging.getLogger("gemini").warning("Gemini classify failed: %s", e)
+        return {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
+
+
+# ─────────────────────────────────────────────────────────────────
+# AGENT FEEDBACK  (agent clicks a button → bot sends to group)
+# ─────────────────────────────────────────────────────────────────
 @app.post("/api/agent-feedback")
 async def send_agent_feedback(
     delivery_id: int = Form(...),
@@ -5897,20 +6012,10 @@ async def send_agent_feedback(
     group_name: str = Form(""),
     db: Session = Depends(get_db)
 ):
-    # 1. Fetch the delivery from the database
     delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
-    
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
 
-    # 2. Gather delivery items for matching
-    delivery_items = db.execute(
-        select(Item.name).join(DeliveryItem, DeliveryItem.item_id == Item.id)
-        .where(DeliveryItem.delivery_id == delivery.id, DeliveryItem.line_amount > 0)
-    ).scalars().all()
-    items_str = ", ".join(delivery_items) if delivery_items else ""
-
-    # 2. Format the feedback message
     update_templates = {
         "OUT_FOR_DELIVERY": f"🚚 *Update: Out for Delivery*\nOrder #{delivery.id} - {delivery.customer_name}\nYour order is on its way and will be delivered shortly.",
         "CALLED_CUSTOMER":  f"📞 *Update: Customer Called*\nOrder #{delivery.id} - {delivery.customer_name}\nOur agent has called the customer to confirm delivery.",
@@ -5925,68 +6030,147 @@ async def send_agent_feedback(
             f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
         )
 
-    # 3. Send the command to your Clawbot via the Railway Internal URL
+    # Look up the most recent bot message ID for this delivery so Baileys can
+    # quote it (making the group thread clear which order is being updated).
+    last_map = db.execute(text(
+        "SELECT message_id, body FROM whatsapp_outbound_map "
+        "WHERE order_id = :oid ORDER BY created_at DESC LIMIT 1"
+    ), {"oid": delivery.id}).first()
+    previous_id   = last_map.message_id if last_map else None
+    previous_body = last_map.body       if last_map else None
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "http://adventurous-flow.railway.internal:3000/send-group-feedback",
                 json={
-                    "groupName": group_name,
-                    "message": message,
-                    "orderId": str(delivery.id),
-                    "customerName": delivery.customer_name or "",
-                    "customerPhone": delivery.customer_phone or "",
-                    "items": items_str,
+                    "orderId":              str(delivery.id),
+                    "message":              message,
+                    "previousMessageId":    previous_id,
+                    "previousMessageBody":  previous_body,
                 },
-                timeout=60
+                timeout=60,
             )
             data = resp.json()
-            if data.get("success"):
-                # Save outbound message so it shows on the delivery page
-                db.execute(text(
-                    "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-                    "VALUES (:did, 'outbound', 'Agent', :body, NOW())"
-                ), {"did": delivery.id, "body": message})
-                db.commit()
-                return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
-            else:
-                return JSONResponse({"status": "error", "message": data.get("error")})
+
+        if not data.get("success"):
+            return JSONResponse({"status": "error", "message": data.get("error", "Bot error")})
+
+        # Persist the new Baileys message_id so future sends can quote it,
+        # and inbound replies can be routed back to this order in O(1).
+        new_msg_id = data.get("message_id", "")
+        now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+        if new_msg_id:
+            db.execute(text(
+                f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, created_at) "
+                f"VALUES (:mid, :oid, :body, {now_sql})"
+            ), {"mid": new_msg_id, "oid": delivery.id, "body": message})
+
+        # Save outbound comment for the chat thread UI
+        db.execute(text(
+            f"INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+            f"VALUES (:did, 'outbound', 'Agent', :body, {now_sql})"
+        ), {"did": delivery.id, "body": message})
+        db.commit()
+
+        # SSE broadcast so open tabs update immediately
+        now_str  = datetime.utcnow().strftime("%d %b %H:%M")
+        fragment = (
+            f'<div style="display:flex;gap:10px;align-items:flex-start;flex-direction:row-reverse;">'
+            f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(79,124,255,.2);'
+            f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">🤖</div>'
+            f'<div style="max-width:80%;background:rgba(79,124,255,.08);border:1px solid rgba(255,255,255,.07);'
+            f'border-radius:10px;padding:8px 12px;">'
+            f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">Agent → Group · {now_str}</div>'
+            f'<div style="font-size:13px;white-space:pre-wrap;">{message}</div>'
+            f'</div></div>'
+        )
+        _sse_broadcast(delivery.id, fragment)
+
+        return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
+
     except Exception as e:
         return JSONResponse({"status": "error", "message": f"Clawbot is offline: {str(e)}"})
 
+
+# ─────────────────────────────────────────────────────────────────
+# WHATSAPP WEBHOOK  (bot posts inbound seller replies here)
+# ─────────────────────────────────────────────────────────────────
 @app.post("/api/whatsapp-webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
-    data = await request.json()
-    order_id = data.get("order_id")
-    comment  = data.get("comment", "").strip()
-    sender   = data.get("sender_phone", "")
+    data             = await request.json()
+    quoted_msg_id    = data.get("quoted_message_id", "").strip()
+    reply_text       = data.get("reply_text", "").strip()
+    sender           = data.get("sender_phone", "")
 
-    if not order_id or not comment:
+    if not reply_text:
         return {"status": "ignored"}
 
+    # O(1) lookup: find the delivery this message is replying to
+    row = db.execute(text(
+        "SELECT order_id FROM whatsapp_outbound_map WHERE message_id = :mid"
+    ), {"mid": quoted_msg_id}).first() if quoted_msg_id else None
+
+    if not row:
+        logging.getLogger("wa_webhook").info(
+            "Unmatched quoted_message_id=%s — ignoring", quoted_msg_id
+        )
+        return {"status": "unmatched"}
+
+    order_id = row.order_id
     delivery = db.query(Delivery).filter(Delivery.id == order_id).first()
     if not delivery:
         return {"status": "not_found"}
 
-    # Save inbound reply to wa_comments
+    # Fetch last 8 messages for multi-turn Gemini context
+    thread_rows = db.execute(text(
+        "SELECT direction, body FROM wa_comments "
+        "WHERE delivery_id = :did ORDER BY created_at DESC LIMIT 8"
+    ), {"did": order_id}).fetchall()
+    thread = [{"direction": r.direction, "body": r.body} for r in reversed(thread_rows)]
+
+    # Classify in a thread so we don't block the event loop
+    loop = asyncio.get_event_loop()
+    ai   = await loop.run_in_executor(None, _call_gemini_classify, thread, reply_text)
+    classification_json = _json.dumps(ai)
+
+    # Render comment body: show AI summary prominently, raw text below
+    label   = ai.get("classification", "OTHER")
+    summary = ai.get("contextual_summary", reply_text[:100])
+    comment_body = f"[{label}] {summary}\n\nOriginal: \"{reply_text}\""
+
+    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
     db.execute(text(
-        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-        "VALUES (:did, 'inbound', :sender, :body, NOW())"
-    ), {"did": delivery.id, "sender": sender, "body": comment})
+        f"INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
+        f"VALUES (:did, 'inbound', :sender, :body, :clf, {now_sql})"
+    ), {"did": order_id, "sender": sender, "body": comment_body, "clf": classification_json})
     db.commit()
 
-    notif_title = f"💬 Seller Reply on Order #{order_id}"
-    notif_msg   = f"{sender or 'Seller'}: {comment[:120]}"
+    # SSE — push fragment to any open delivery detail tabs
+    now_str  = datetime.utcnow().strftime("%d %b %H:%M")
+    action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION NEEDED</span>' if ai.get("action_required") else ""
+    fragment = (
+        f'<div style="display:flex;gap:10px;align-items:flex-start;">'
+        f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(34,197,94,.15);'
+        f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">💬</div>'
+        f'<div style="max-width:80%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);'
+        f'border-radius:10px;padding:8px 12px;">'
+        f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">'
+        f'{sender or "Seller"} → You · {now_str}{action_badge}</div>'
+        f'<div style="font-size:13px;white-space:pre-wrap;">{comment_body}</div>'
+        f'</div></div>'
+    )
+    _sse_broadcast(order_id, fragment)
+
+    # Persistent notifications (bell + web push)
+    notif_title = f"💬 Seller Reply — Order #{order_id}"
+    notif_msg   = f"{sender or 'Seller'}: {summary}"
     notif_link  = f"/deliveries/{order_id}"
-
-    # Notify the assigned agent
     if delivery.agent_id:
-        await create_notification(user_id=delivery.agent_id, title=notif_title, message=notif_msg, link=notif_link)
-
-    # Also notify all admins so nothing is missed
+        notify(db, delivery.agent_id, notif_title, notif_msg, notif_link, "info")
     admin_ids = db.execute(text("SELECT id FROM users WHERE role='ADMIN'")).scalars().all()
     for aid in admin_ids:
         if aid != delivery.agent_id:
-            await create_notification(user_id=aid, title=notif_title, message=notif_msg, link=notif_link)
+            notify(db, aid, notif_title, notif_msg, notif_link, "info")
 
-    return {"status": "received"}
+    return {"status": "received", "order_id": order_id, "classification": label}

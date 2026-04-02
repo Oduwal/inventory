@@ -47,23 +47,23 @@
     <div style="margin-top:16px;">
       <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px;">Send Update to Seller Group</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
-        <button onclick="sendWaUpdate({{ d.id }}, 'OUT_FOR_DELIVERY')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 6px;justify-content:center;">
+        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'OUT_FOR_DELIVERY')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 6px;justify-content:center;">
           🚚 Out for Delivery
         </button>
-        <button onclick="sendWaUpdate({{ d.id }}, 'CALLED_CUSTOMER')" class="btnGhost" style="color:#a78bfa;border-color:#a78bfa;font-size:12px;padding:7px 6px;justify-content:center;">
+        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'CALLED_CUSTOMER')" class="btnGhost" style="color:#a78bfa;border-color:#a78bfa;font-size:12px;padding:7px 6px;justify-content:center;">
           📞 Called Customer
         </button>
-        <button onclick="sendWaUpdate({{ d.id }}, 'NOT_PICKING')" class="btnGhost" style="color:#f59e0b;border-color:#f59e0b;font-size:12px;padding:7px 6px;justify-content:center;">
+        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'NOT_PICKING')" class="btnGhost" style="color:#f59e0b;border-color:#f59e0b;font-size:12px;padding:7px 6px;justify-content:center;">
           📵 Not Picking
         </button>
-        <button onclick="sendWaUpdate({{ d.id }}, 'DELIVERED')" class="btnGhost" style="color:#22c55e;border-color:#22c55e;font-size:12px;padding:7px 6px;justify-content:center;">
+        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'DELIVERED')" class="btnGhost" style="color:#22c55e;border-color:#22c55e;font-size:12px;padding:7px 6px;justify-content:center;">
           ✅ Delivered
         </button>
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;">
         <textarea id="wa-custom-msg-{{ d.id }}" rows="2" placeholder="Type a custom message to the seller group…"
           style="flex:1;background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:7px 10px;resize:none;font-family:inherit;"></textarea>
-        <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 10px;align-self:stretch;">
+        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 10px;align-self:stretch;">
           Send
         </button>
       </div>
@@ -411,26 +411,74 @@
   </div>
 </div>
 
-{% if wa_comments %}
-<div class="card" style="margin-top:16px;">
-  <div class="badge b-blue" style="margin-bottom:14px;">💬 SELLER GROUP CHAT</div>
-  <div style="display:flex;flex-direction:column;gap:8px;">
-    {% for c in wa_comments %}
-    <div style="display:flex;gap:10px;align-items:flex-start;{% if c.direction=='outbound' %}flex-direction:row-reverse;{% endif %}">
-      <div style="width:28px;height:28px;border-radius:50%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.2){% else %}rgba(34,197,94,.15){% endif %};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">
-        {% if c.direction=='outbound' %}🤖{% else %}💬{% endif %}
-      </div>
-      <div style="max-width:80%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.08){% else %}rgba(255,255,255,.04){% endif %};border:1px solid var(--border);border-radius:10px;padding:8px 12px;">
-        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-family:var(--font-mono);">
-          {% if c.direction=='outbound' %}Agent → Group{% else %}{{ c.sender or 'Seller' }} → You{% endif %}&nbsp;·&nbsp;{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}
+<div class="card" style="margin-top:16px;" id="wa-chat-card">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <div class="badge b-blue">💬 SELLER GROUP CHAT</div>
+    <span id="wa-live-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e;" title="Live"></span>
+  </div>
+  <div id="wa-chat-thread" style="display:flex;flex-direction:column;gap:8px;">
+    {% if wa_comments %}
+      {% for c in wa_comments %}
+      <div style="display:flex;gap:10px;align-items:flex-start;{% if c.direction=='outbound' %}flex-direction:row-reverse;{% endif %}">
+        <div style="width:28px;height:28px;border-radius:50%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.2){% else %}rgba(34,197,94,.15){% endif %};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">
+          {% if c.direction=='outbound' %}🤖{% else %}💬{% endif %}
         </div>
-        <div style="font-size:13px;white-space:pre-wrap;">{{ c.body }}</div>
+        <div style="max-width:80%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.08){% else %}rgba(255,255,255,.04){% endif %};border:1px solid var(--border);border-radius:10px;padding:8px 12px;">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-family:var(--font-mono);">
+            {% if c.direction=='outbound' %}Agent → Group{% else %}{{ c.sender or 'Seller' }} → You{% endif %}&nbsp;·&nbsp;{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}
+          </div>
+          <div style="font-size:13px;white-space:pre-wrap;">{{ c.body }}</div>
+        </div>
       </div>
-    </div>
-    {% endfor %}
+      {% endfor %}
+    {% else %}
+      <div id="wa-empty-state" style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0;">
+        No messages yet — send an update to start the thread.
+      </div>
+    {% endif %}
   </div>
 </div>
-{% endif %}
+
+<script>
+(function() {
+  const thread   = document.getElementById('wa-chat-thread');
+  const liveDot  = document.getElementById('wa-live-dot');
+  const delivId  = {{ d.id }};
+
+  const es = new EventSource(`/api/stream/${delivId}`);
+
+  es.addEventListener('wa_comment', function(e) {
+    // Remove empty-state placeholder on first real message
+    const empty = document.getElementById('wa-empty-state');
+    if (empty) empty.remove();
+
+    const div = document.createElement('div');
+    div.innerHTML = e.data;
+    thread.appendChild(div.firstElementChild || div);
+    thread.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Flash the live dot to signal a new message arrived
+    liveDot.style.background = '#f59e0b';
+    liveDot.style.boxShadow  = '0 0 8px #f59e0b';
+    setTimeout(() => {
+      liveDot.style.background = '#22c55e';
+      liveDot.style.boxShadow  = '0 0 6px #22c55e';
+    }, 1500);
+  });
+
+  es.onerror = function() {
+    liveDot.style.background = '#ef4444';
+    liveDot.style.boxShadow  = '0 0 6px #ef4444';
+    liveDot.title = 'Disconnected — reconnecting...';
+  };
+
+  es.onopen = function() {
+    liveDot.style.background = '#22c55e';
+    liveDot.style.boxShadow  = '0 0 6px #22c55e';
+    liveDot.title = 'Live';
+  };
+})();
+</script>
 
 <script>
 function addRejectionNote(form) {
@@ -438,6 +486,8 @@ function addRejectionNote(form) {
   form.querySelector('[id^="rej-note-"]').value = note;
   return true;
 }
+
+let _waSending = false; // prevent double-send
 
 async function sendWaUpdate(deliveryId, issueType) {
     const labels = {
@@ -457,8 +507,19 @@ async function sendWaUpdate(deliveryId, issueType) {
         return;
     }
 
-    statusEl.style.color = 'var(--muted)';
-    statusEl.textContent = '⏳ Sending...';
+    // Prevent double-clicks while a send is in progress
+    if (_waSending) return;
+    _waSending = true;
+
+    // Disable all WA buttons immediately
+    const allBtns = document.querySelectorAll('[data-wa-btn]');
+    allBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+
+    // Show success IMMEDIATELY — optimistic UI
+    // The message is queued in the bot and WILL go through.
+    statusEl.style.color = '#22c55e';
+    statusEl.textContent = '✅ "' + labels[issueType] + '" sent to seller group!';
+    if (issueType === 'CUSTOM' && customEl) customEl.value = '';
 
     const formData = new FormData();
     formData.append("delivery_id", deliveryId);
@@ -466,21 +527,26 @@ async function sendWaUpdate(deliveryId, issueType) {
     formData.append("custom_message", customText);
     formData.append("group_name", "");
 
-    try {
-        const response = await fetch('/api/agent-feedback', { method: 'POST', body: formData });
-        const result = await response.json();
-        if (result.status === "success") {
-            statusEl.style.color = '#22c55e';
-            statusEl.textContent = '✅ "' + labels[issueType] + '" sent to seller group!';
-            if (issueType === 'CUSTOM' && customEl) customEl.value = '';
-        } else {
+    // Send in background — only surface errors
+    fetch('/api/agent-feedback', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(result => {
+            if (result.status !== "success") {
+                statusEl.style.color = '#f87171';
+                statusEl.textContent = '❌ ' + (result.message || 'Send failed — check bot logs.');
+            }
+        })
+        .catch(() => {
             statusEl.style.color = '#f87171';
-            statusEl.textContent = '❌ ' + result.message;
-        }
-    } catch (e) {
-        statusEl.style.color = '#f87171';
-        statusEl.textContent = '❌ System error — try again.';
-    }
+            statusEl.textContent = '❌ Could not reach server — message may still go through.';
+        })
+        .finally(() => {
+            // Re-enable buttons after 4 seconds
+            setTimeout(() => {
+                allBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+                _waSending = false;
+            }, 4000);
+        });
 }
 </script>
 {% endblock %}
