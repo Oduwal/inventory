@@ -1,6 +1,7 @@
-const express = require('express');
+const express   = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode    = require('qrcode-terminal');
+const QRCode    = require('qrcode');
 const axios     = require('axios');
 const fs        = require('fs');
 const path      = require('path');
@@ -166,9 +167,11 @@ const client = new Client({
 });
 
 let clientReady = false;
+let latestQr    = null;   // raw QR string — served at /qr
 
 client.on('qr', (qr) => {
-    console.log('🤖 SCAN QR CODE:');
+    latestQr = qr;
+    console.log('🤖 SCAN QR CODE (or visit /qr):');
     qrcode.generate(qr, { small: true });
 });
 
@@ -232,6 +235,28 @@ client.on('message', async (msg) => {
 // ─────────────────────────────────────────────
 const app = express();
 app.use(express.json());
+
+app.get('/qr', async (_req, res) => {
+    if (clientReady) {
+        return res.send('<h2 style="font-family:sans-serif;color:green">✅ Already authenticated — no QR needed.</h2>');
+    }
+    if (!latestQr) {
+        return res.send('<h2 style="font-family:sans-serif;color:orange">⏳ QR not ready yet — refresh in a few seconds.</h2>');
+    }
+    try {
+        const dataUrl = await QRCode.toDataURL(latestQr, { scale: 8 });
+        res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Clawbot QR</title>
+<meta http-equiv="refresh" content="30">
+<style>body{font-family:sans-serif;text-align:center;padding:40px;background:#111;color:#eee;}
+img{border:12px solid #fff;border-radius:12px;}</style></head>
+<body><h2>📱 Scan with WhatsApp</h2>
+<p style="color:#aaa;font-size:13px;">Page auto-refreshes every 30s</p>
+<img src="${dataUrl}" alt="QR Code"/></body></html>`);
+    } catch (e) {
+        res.status(500).send('QR generation error: ' + e.message);
+    }
+});
 
 app.get('/health', (_req, res) => {
     res.json({
