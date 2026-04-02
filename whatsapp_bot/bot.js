@@ -1,7 +1,6 @@
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-
 console.log('🚀 Booting up Clawbot...');
 
 const app = express();
@@ -34,19 +33,26 @@ client.on('ready', () => {
 // Our custom API endpoint that Python will call
 app.post('/send-group-feedback', async (req, res) => {
     const { groupName, message } = req.body;
+    console.log(`\n📥 Received request to message group: "${groupName}"`);
 
     try {
-        // Fetch all your WhatsApp chats to find the right group
+        console.log('⏳ Fetching WhatsApp chats... (this might take a few seconds)');
         const chats = await client.getChats();
+        console.log(`✅ Loaded ${chats.length} chats. Searching for target group...`);
+
         const targetGroup = chats.find(chat => chat.isGroup && chat.name === groupName);
 
         if (targetGroup) {
+            console.log(`✅ Found group "${groupName}"! Sending message...`);
             await client.sendMessage(targetGroup.id._serialized, message);
+            console.log(`🚀 Message dropped successfully!`);
             res.status(200).json({ success: true, message: `Sent to ${groupName}` });
         } else {
-            res.status(404).json({ success: false, error: "Group not found. Ensure the bot's phone is in this group." });
+            console.log(`❌ Could not find a group named "${groupName}".`);
+            res.status(404).json({ success: false, error: "Group not found. Make sure the bot's phone is in the group and the name is an exact match." });
         }
     } catch (error) {
+        console.error('❌ Crash while sending message:', error);
         res.status(500).json({ success: false, error: error.toString() });
     }
 }); // <-- This is the closing tag that was likely missing!

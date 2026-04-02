@@ -5893,7 +5893,7 @@ async def send_agent_feedback(
             resp = await client.post(
                 "http://adventurous-flow.railway.internal:3000/send-group-feedback", 
                 json={"groupName": group_name, "message": message},
-                timeout=10
+                timeout=60
             )
             data = resp.json()
             if data.get("success"):
