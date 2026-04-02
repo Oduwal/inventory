@@ -319,6 +319,8 @@ async function startClient(attempt = 1) {
     } catch (e) {
         const wait = Math.min(attempt * 5000, 30000); // 5s → 10s → 15s … max 30s
         console.log(`⚠️  Initialize failed (attempt ${attempt}): ${e.message}. Retrying in ${wait / 1000}s...`);
+        // Kill the orphaned Chromium process so the next attempt can acquire the lock
+        try { await client.destroy(); } catch (_) {}
         setTimeout(() => startClient(attempt + 1), wait);
     }
 }
