@@ -171,7 +171,10 @@ let latestQr    = null;   // raw QR string — served at /qr
 
 client.on('qr', (qr) => {
     latestQr = qr;
-    console.log('🤖 SCAN QR CODE (or visit /qr):');
+    const host = process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : `http://localhost:${process.env.PORT || 3000}`;
+    console.log(`🤖 SCAN QR CODE → ${host}/qr`);
     qrcode.generate(qr, { small: true });
 });
 
