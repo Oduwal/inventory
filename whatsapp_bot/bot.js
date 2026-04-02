@@ -61,19 +61,27 @@ function extractOrderIds(text) {
     return [...text.matchAll(/Order\s?#?(\d+)/gi)].map(m => m[1]);
 }
 
-/** Store an incoming message body + ID so we can search it later */
-function cacheMessage(serializedId, body) {
+/**
+ * Store a message body + ID so we can search it later.
+ * @param {boolean} indexOrders - false for bot-sent messages so we never
+ *   overwrite the original group message in orderIdIndex.
+ */
+function cacheMessage(serializedId, body, indexOrders = true) {
     if (!body || !serializedId) return;
 
-    // Add to full store
     messageStore.push({ id: serializedId, body, ts: Date.now() });
 
-    // Index any order IDs mentioned
-    const ids = extractOrderIds(body);
-    ids.forEach(oid => {
-        orderIdIndex.set(oid, serializedId);
-        console.log(`📌 Indexed Order #${oid} → message`);
-    });
+    if (indexOrders) {
+        const ids = extractOrderIds(body);
+        ids.forEach(oid => {
+            // First seen wins — never overwrite an existing mapping with a
+            // later message (which could be the bot's own reply).
+            if (!orderIdIndex.has(oid)) {
+                orderIdIndex.set(oid, serializedId);
+                console.log(`📌 Indexed Order #${oid} → message`);
+            }
+        });
+    }
 
     saveCache();
 }
@@ -210,6 +218,7 @@ client.on('message', async (msg) => {
     // If this is a reply to another message, check if that original message
     // had an order ID → notify Python dashboard
     if (msg.hasQuotedMsg) {
+        console.log(`💬 Reply detected in group — checking for order ID...`);
         try {
             const quoted = await msg.getQuotedMessage();
             const ids    = extractOrderIds(quoted.body || '');
@@ -220,11 +229,17 @@ client.on('message', async (msg) => {
             if (ids.length > 0) {
                 const orderId = ids[0];
                 console.log(`🔔 Reply to Order #${orderId} detected — notifying dashboard...`);
-                await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+                const webhookRes = await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id:     orderId,
                     comment:      msg.body,
                     sender_phone: msg.author || msg.from,
-                }).catch(e => console.log('⚠️  Could not reach Python app:', e.message));
+                }).catch(e => {
+                    console.log('⚠️  Could not reach Python app:', e.message);
+                    return null;
+                });
+                if (webhookRes) console.log(`✅ Dashboard notified for Order #${orderId} (HTTP ${webhookRes.status})`);
+            } else {
+                console.log(`💬 Quoted message had no order ID — ignoring.`);
             }
         } catch (e) {
             console.log('Error processing quoted message:', e.message);
@@ -316,9 +331,10 @@ app.post('/send-group-feedback', async (req, res) => {
             sentMsg = await client.sendMessage(SAVED_GROUP_ID, message);
         }
 
-        // Cache sent message so future calls can reply to it
+        // Store sent message in history but do NOT update orderIdIndex —
+        // the original group message should remain the reply target.
         if (sentMsg && sentMsg.id) {
-            cacheMessage(sentMsg.id._serialized, message);
+            cacheMessage(sentMsg.id._serialized, message, false);
         }
 
         res.status(200).json({ success: true, quoted: !!cachedId });
