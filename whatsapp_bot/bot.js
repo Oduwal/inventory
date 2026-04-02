@@ -102,39 +102,56 @@ function extractQuotedId(msg) {
     return ctx?.stanzaId || null;
 }
 
+const ORDER_REGEX = /Order\s*#?\s*(\d+)/gi;
+function extractOrderIds(text) {
+    if (!text) return [];
+    return [...text.matchAll(ORDER_REGEX)].map(m => m[1]);
+}
+
 // ─────────────────────────────────────────────
 // INBOUND HANDLER
+// Flow:
+//  A. Non-reply message with "Order #N" → tell Python to cache (msg_id → order_id)
+//     so the bot can quote the ORIGINAL order post when agent sends an update.
+//  B. Any reply (has a quoted message) → forward to Python.
+//     Python looks up the quoted msg_id in whatsapp_outbound_map which contains
+//     BOTH the original order posts (source='group') AND bot updates (source='bot').
+//     So sellers can quote EITHER and it routes to the right delivery.
 // ─────────────────────────────────────────────
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
-
-    // Only care about our target group
     if (!jid.includes(GROUP_JID.split('@')[0])) return;
-
-    // Skip our own messages
     if (msg.key.fromMe) return;
 
-    const text      = extractText(msg);
-    const quotedId  = extractQuotedId(msg);
-    const sender    = msg.key.participant || jid;
+    const text     = extractText(msg);
+    const quotedId = extractQuotedId(msg);
+    const sender   = msg.key.participant || jid;
+    const msgId    = msg.key.id;
 
-    // Cache all group messages in case we want to debug
-    console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 60)}"`);
+    console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 80)}"`);
 
-    // Only forward to Python if this is a reply (quoted message present)
-    if (!quotedId) return;
-
-    console.log(`🔁 Reply quoting msg ID ${quotedId.slice(0, 20)}... — forwarding to Python`);
-
-    try {
-        await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
-            quoted_message_id: quotedId,
-            reply_text:        text,
-            sender_phone:      sender,
-        }, { timeout: 10000 });
-    } catch (e) {
-        console.log('⚠️  Webhook POST failed:', e.message);
+    // A — cache original order posts (non-replies that mention an order number)
+    if (!quotedId && text) {
+        const orderIds = extractOrderIds(text);
+        for (const orderId of orderIds) {
+            console.log(`📌 Caching original order post — Order #${orderId} msg_id=${msgId.slice(0,20)}`);
+            axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
+                message_id: msgId,
+                order_id:   parseInt(orderId),
+                body:       text,
+                source:     'group',
+            }, { timeout: 5000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
+        }
     }
+
+    // B — forward any reply to Python regardless of what was quoted
+    if (!quotedId) return;
+    console.log(`🔁 Reply quoting ${quotedId.slice(0,20)}... — forwarding to Python`);
+    axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+        quoted_message_id: quotedId,
+        reply_text:        text,
+        sender_phone:      sender,
+    }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
 }
 
 // ─────────────────────────────────────────────
@@ -241,16 +258,16 @@ app.get('/health', (_req, res) => {
 /**
  * POST /send-group-feedback
  * Body (JSON):
- *   orderId              string   — delivery ID (for logging)
- *   message              string   — text to send
- *   previousMessageId?   string   — Baileys ID of last bot message for this order (for quoting)
- *   previousMessageBody? string   — body of that message (needed to construct Baileys quote context)
+ *   orderId          string  — delivery ID (for logging)
+ *   message          string  — text to send
+ *   quoteMessageId?  string  — Baileys ID of the ORIGINAL group order post to quote
+ *   quoteMessageBody? string — body of that original post (needed by Baileys to build quote)
  *
  * Response: { success, message_id }
- * Python stores the returned message_id → orderId in whatsapp_outbound_map.
+ * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message, previousMessageId, previousMessageBody } = req.body;
+    const { orderId, message, quoteMessageId, quoteMessageBody } = req.body;
 
     if (!orderId || !message) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
@@ -266,8 +283,8 @@ app.post('/send-group-feedback', async (req, res) => {
         const msgId = await humanizedSend(
             GROUP_JID,
             message,
-            previousMessageId  || null,
-            previousMessageBody || null,
+            quoteMessageId   || null,
+            quoteMessageBody || null,
         );
         console.log(`✅ Sent (msg_id: ${msgId?.slice(0, 20)}...)`);
         res.json({ success: true, message_id: msgId });

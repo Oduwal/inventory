@@ -630,8 +630,10 @@ def ensure_schema() -> None:
             message_id  TEXT PRIMARY KEY,
             order_id    INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
             body        TEXT NOT NULL DEFAULT '',
+            source      TEXT NOT NULL DEFAULT 'bot',
             created_at  TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
+        _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'bot'")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_outbound_order ON whatsapp_outbound_map (order_id)")
 
 
@@ -6030,24 +6032,26 @@ async def send_agent_feedback(
             f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
         )
 
-    # Look up the most recent bot message ID for this delivery so Baileys can
-    # quote it (making the group thread clear which order is being updated).
-    last_map = db.execute(text(
+    # Always quote the ORIGINAL group order post (source='group'), not a bot update.
+    # This anchors the reply thread to the seller's original message in the group,
+    # making it obvious which order is being discussed regardless of how many updates
+    # the agent has sent.
+    orig_map = db.execute(text(
         "SELECT message_id, body FROM whatsapp_outbound_map "
-        "WHERE order_id = :oid ORDER BY created_at DESC LIMIT 1"
+        "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
-    previous_id   = last_map.message_id if last_map else None
-    previous_body = last_map.body       if last_map else None
+    quote_id   = orig_map.message_id if orig_map else None
+    quote_body = orig_map.body       if orig_map else None
 
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "http://adventurous-flow.railway.internal:3000/send-group-feedback",
                 json={
-                    "orderId":              str(delivery.id),
-                    "message":              message,
-                    "previousMessageId":    previous_id,
-                    "previousMessageBody":  previous_body,
+                    "orderId":          str(delivery.id),
+                    "message":          message,
+                    "quoteMessageId":   quote_id,
+                    "quoteMessageBody": quote_body,
                 },
                 timeout=60,
             )
@@ -6062,8 +6066,8 @@ async def send_agent_feedback(
         now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
         if new_msg_id:
             db.execute(text(
-                f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, created_at) "
-                f"VALUES (:mid, :oid, :body, {now_sql})"
+                f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+                f"VALUES (:mid, :oid, :body, 'bot', {now_sql})"
             ), {"mid": new_msg_id, "oid": delivery.id, "body": message})
 
         # Save outbound comment for the chat thread UI
@@ -6174,3 +6178,38 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             notify(db, aid, notif_title, notif_msg, notif_link, "info")
 
     return {"status": "received", "order_id": order_id, "classification": label}
+
+
+@app.post("/api/cache-wa-message")
+async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
+    """
+    Called by the bot whenever it sees a group message that mentions an order number.
+    Stores (message_id → order_id) with source='group' so agent-feedback can always
+    quote the ORIGINAL seller order post — not a bot update.
+    Also covers the reply routing path: if a seller later quotes this original post,
+    the webhook can resolve which delivery it belongs to.
+    """
+    data       = await request.json()
+    message_id = (data.get("message_id") or "").strip()
+    order_id   = data.get("order_id")
+    body       = (data.get("body") or "").strip()
+    source     = data.get("source", "group")
+
+    if not message_id or not order_id:
+        return {"status": "ignored"}
+
+    delivery = db.execute(text("SELECT id FROM deliveries WHERE id = :oid"), {"oid": order_id}).first()
+    if not delivery:
+        logging.getLogger("cache_wa").warning("cache-wa-message: order_id %s not found", order_id)
+        return {"status": "not_found"}
+
+    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+    # INSERT OR IGNORE — first seen wins; we never overwrite the original post
+    db.execute(text(
+        f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+        f"VALUES (:mid, :oid, :body, :src, {now_sql})"
+    ), {"mid": message_id, "oid": order_id, "body": body, "src": source})
+    db.commit()
+
+    logging.getLogger("cache_wa").info("Cached WA msg %s → order %s (source=%s)", message_id[:20], order_id, source)
+    return {"status": "cached"}
