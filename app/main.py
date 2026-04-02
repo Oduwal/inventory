@@ -6193,7 +6193,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # Render comment body: show AI summary prominently, raw text below
     label   = ai.get("classification", "OTHER")
     summary = ai.get("contextual_summary", reply_text[:100])
-    comment_body = f"[{label}] {summary}\n\nOriginal: \"{reply_text}\""
+    
+    # Add the quoted message so the agent knows what the seller is replying to
+    quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
+    comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
     now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
     db.execute(text(
