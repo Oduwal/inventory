@@ -212,12 +212,34 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    // Give WhatsApp Web 10s to fully settle before accepting sends.
-    // Sending immediately after 'ready' causes detached frame errors.
     console.log('🔗 WA connected — warming up for 10s...');
     setTimeout(() => {
         clientReady = true;
         console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
+
+        // Proactively detect frame detachment so we pause sends BEFORE
+        // they fail, rather than reacting after the error.
+        if (client.pupPage) {
+            client.pupPage.on('framedetached', () => {
+                if (!clientReady) return; // already handling it
+                console.log('⚠️  Puppeteer frame detached — pausing sends...');
+                clientReady = false;
+                // Give WA Web 8s to finish its internal navigation,
+                // then check if the page is stable again.
+                setTimeout(async () => {
+                    try {
+                        await client.pupPage.evaluate(() => true); // ping
+                        clientReady = true;
+                        console.log('✅ Page stable again — sends resumed.');
+                    } catch (_) {
+                        // Page is gone — full reconnect
+                        console.log('🔄 Page unresponsive — reconnecting...');
+                        try { await client.destroy(); } catch (_) {}
+                        startClient();
+                    }
+                }, 8000);
+            });
+        }
     }, 10000);
 });
 
