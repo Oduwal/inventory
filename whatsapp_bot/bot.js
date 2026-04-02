@@ -139,6 +139,20 @@ function findBestMatch(orderId, customerName, customerPhone, items) {
 
 loadCache();
 
+// Chromium leaves singleton lock files when it crashes / container is killed.
+// On next boot the new process sees them and refuses to start.
+// Always wipe them before initialising.
+const CHROME_LOCK_FILES = [
+    path.join(__dirname, '.wwebjs_auth', 'session', 'SingletonLock'),
+    path.join(__dirname, '.wwebjs_auth', 'session', 'SingletonCookie'),
+    path.join(__dirname, '.wwebjs_auth', 'session', 'SingletonSocket'),
+];
+function clearChromeLocks() {
+    CHROME_LOCK_FILES.forEach(f => {
+        try { fs.unlinkSync(f); console.log(`🗑️  Removed stale lock: ${path.basename(f)}`); } catch (_) {}
+    });
+}
+
 // ─────────────────────────────────────────────
 // WHATSAPP CLIENT
 // ─────────────────────────────────────────────
@@ -359,6 +373,7 @@ app.post('/send-group-feedback', async (req, res) => {
 // BOOT
 // ─────────────────────────────────────────────
 async function startClient(attempt = 1) {
+    clearChromeLocks();
     try {
         await client.initialize();
     } catch (e) {
