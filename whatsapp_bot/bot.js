@@ -72,25 +72,15 @@ client.on('message', async (msg) => {
     }
 });
 
-// --- THE SENDER (Python -> WhatsApp) ---
+// --- THE SENDER (Direct Fire - No History Lookup) ---
 app.post('/send-group-feedback', async (req, res) => {
     const { groupName, message, orderId } = req.body;
     console.log(`\n📥 Sending update for ${orderId}...`);
 
     try {
-        const chat = await client.getChatById(SAVED_GROUP_ID);
-        
-        // Look for the original message to reply to
-        const messages = await chat.fetchMessages({ limit: 50 });
-        const targetMsg = messages.reverse().find(m => m.body && m.body.includes(orderId));
-
-        if (targetMsg) {
-            await targetMsg.reply(message);
-            console.log(`✅ Replying to original ${orderId} message.`);
-        } else {
-            await client.sendMessage(SAVED_GROUP_ID, message);
-            console.log(`✅ Dropping fresh message for ${orderId}.`);
-        }
+        // DIRECT FIRE: Skip fetching history, just drop the message instantly!
+        await client.sendMessage(SAVED_GROUP_ID, message);
+        console.log(`✅ Dropped message for ${orderId} instantly!`);
         
         res.status(200).json({ success: true });
     } catch (error) {
