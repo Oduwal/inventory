@@ -6050,9 +6050,10 @@ async def send_agent_feedback(
 
     # ── STRICT CATEGORY ROUTING ──
     CATEGORY_GROUP_MAP = {
-        "Daggo": "120363111111111111@g.us",
-        "Dangote": "120363222222222222@g.us",
-        "AnotherCategory": "120363333333333333@g.us"
+        "DAGGO":   "120363418850903362@g.us",
+        "NEXTILE": "120363304493232977@g.us",
+        "NEWLIFE": "120363287198677451@g.us",
+        "LOCO":    "120363239510350827@g.us"
     }
 
     delivery_category = db.execute(
