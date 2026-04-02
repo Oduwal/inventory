@@ -6111,7 +6111,8 @@ async def send_agent_feedback(
                     f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
                 )
             db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group})
-
+            db.commit()  # <--- THIS IS THE MISSING MAGIC LINE!
+            
         # Save outbound comment for the chat thread UI
         db.execute(text(
             f"INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
@@ -6317,25 +6318,4 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         )
         return {"status": "no_match"}
 
-    now_sql   = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
-    is_sqlite = DATABASE_URL.startswith("sqlite")
-    # First seen wins — never overwrite the original group post mapping
-    if is_sqlite:
-        ignore_sql = (
-            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql})"
-        )
-    else:
-        ignore_sql = (
-            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql}) "
-            f"ON CONFLICT (message_id) DO NOTHING"
-        )
-    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body, "sender": sender, "gjid": group_jid})
-    db.commit()
-
-    logging.getLogger("cache_wa").info(
-        "Cached group post %s → Order #%s (name='%s' phone='%s')",
-        message_id[:20], matched_order_id, customer_name, customer_phone
-    )
-    return {"status": "cached", "order_id": matched_order_id}
+    cache_wa_message
