@@ -25,6 +25,10 @@ const MAX_CACHE_SIZE = 2000; // rolling cap — oldest dropped first
 // Lets us search by name, phone, item — not just order ID
 let messageStore = [];   // all cached group messages (capped at MAX_CACHE_SIZE)
 let orderIdIndex = new Map(); // orderId → serialized message id (fast lookup)
+let msgToOrderId = new Map(); // reverse: serialized message id → orderId
+let orderDetails = new Map(); // orderId → { customerName, customerPhone, items }
+                               // populated every time Python sends an update so we
+                               // can match replies even if the original msg was never cached
 
 function loadCache() {
     try {
@@ -34,6 +38,8 @@ function loadCache() {
             messageStore = data.store || [];
             const idx    = data.index || {};
             orderIdIndex = new Map(Object.entries(idx));
+            const rev    = data.reverse || {};
+            msgToOrderId = new Map(Object.entries(rev));
             console.log(`📦 Loaded ${messageStore.length} messages + ${orderIdIndex.size} order IDs from disk.`);
         }
     } catch (e) {
@@ -48,8 +54,9 @@ function saveCache() {
             messageStore = messageStore.slice(-MAX_CACHE_SIZE);
         }
         fs.writeFileSync(CACHE_FILE, JSON.stringify({
-            store: messageStore,
-            index: Object.fromEntries(orderIdIndex),
+            store:   messageStore,
+            index:   Object.fromEntries(orderIdIndex),
+            reverse: Object.fromEntries(msgToOrderId),
         }), 'utf8');
     } catch (e) {
         console.log('⚠️  Could not save message cache:', e.message);
@@ -235,14 +242,43 @@ client.on('message', async (msg) => {
         console.log(`💬 Reply detected in group — checking for order ID...`);
         try {
             const quoted = await msg.getQuotedMessage();
-            const ids    = extractOrderIds(quoted.body || '');
-
-            // Also cache the quoted message itself while we have it
             if (quoted.body) cacheMessage(quoted.id._serialized, quoted.body);
+
+            // 1. Try to extract order ID from quoted text ("Order #97")
+            let ids = extractOrderIds(quoted.body || '');
+
+            // 2. Fallback: reverse-map the quoted message ID → order ID
+            //    (covers replies to bot's own messages or previously matched originals)
+            if (ids.length === 0 && msgToOrderId.has(quoted.id._serialized)) {
+                ids = [msgToOrderId.get(quoted.id._serialized)];
+                console.log(`🔁 Reverse-mapped quoted message → Order #${ids[0]}`);
+            }
+
+            // 3. Deep fallback: scan quoted body against all known order details
+            //    (covers replies to original group messages the bot never saw)
+            if (ids.length === 0 && quoted.body) {
+                const qBody   = quoted.body.toLowerCase();
+                const qDigits = quoted.body.replace(/\D/g, '');
+                for (const [oid, det] of orderDetails.entries()) {
+                    const phoneClean = (det.customerPhone || '').replace(/\D/g, '').slice(-10);
+                    const nameLower  = (det.customerName  || '').toLowerCase().trim();
+                    const nameTokens = nameLower.split(/\s+/).filter(t => t.length > 2);
+                    if (phoneClean && qDigits.includes(phoneClean)) {
+                        ids = [oid];
+                        console.log(`🔁 Matched reply to Order #${oid} via phone in quoted body`);
+                        break;
+                    }
+                    if (nameTokens.length > 0 && nameTokens.every(t => qBody.includes(t))) {
+                        ids = [oid];
+                        console.log(`🔁 Matched reply to Order #${oid} via name in quoted body`);
+                        break;
+                    }
+                }
+            }
 
             if (ids.length > 0) {
                 const orderId = ids[0];
-                console.log(`🔔 Reply to Order #${orderId} detected — notifying dashboard...`);
+                console.log(`🔔 Reply to Order #${orderId} — notifying dashboard...`);
                 const webhookRes = await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id:     orderId,
                     comment:      msg.body,
@@ -253,7 +289,7 @@ client.on('message', async (msg) => {
                 });
                 if (webhookRes) console.log(`✅ Dashboard notified for Order #${orderId} (HTTP ${webhookRes.status})`);
             } else {
-                console.log(`💬 Quoted message had no order ID — ignoring.`);
+                console.log(`💬 Quoted message not linked to any order — ignoring.`);
             }
         } catch (e) {
             console.log('Error processing quoted message:', e.message);
@@ -318,6 +354,11 @@ app.post('/send-group-feedback', async (req, res) => {
     const cleanId = String(orderId).replace(/^Order\s*#?\s*/i, '').trim();
     console.log(`\n📥 Outbound update for Order #${cleanId} (${customerName || 'unknown'})...`);
 
+    // Always refresh order details so reply matching works even without a cached message
+    if (customerName || customerPhone || items) {
+        orderDetails.set(cleanId, { customerName, customerPhone, items });
+    }
+
     if (!clientReady) {
         console.log('⚠️  Client not ready yet — rejecting request.');
         return res.status(503).json({ success: false, error: 'WhatsApp client not ready. Try again in a moment.' });
@@ -349,6 +390,11 @@ app.post('/send-group-feedback', async (req, res) => {
         // the original group message should remain the reply target.
         if (sentMsg && sentMsg.id) {
             cacheMessage(sentMsg.id._serialized, message, false);
+            // Reverse map: both the found original msg and the bot's reply
+            // point back to this order so replies to either get routed correctly.
+            if (cachedId) msgToOrderId.set(cachedId, cleanId);
+            msgToOrderId.set(sentMsg.id._serialized, cleanId);
+            saveCache();
         }
 
         res.status(200).json({ success: true, quoted: !!cachedId });

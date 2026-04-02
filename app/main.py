@@ -5896,11 +5896,15 @@ async def send_agent_feedback(
     items_str = ", ".join(delivery_items) if delivery_items else ""
 
     # 2. Format the feedback message
-    message = (
-        f"🚨 *Agent Feedback Alert*\n"
-        f"Order #{delivery.id} - {delivery.customer_name}\n"
-        f"Status Issue: {issue_type}\n"
-        f"Agent Note: The customer is currently unreachable or unavailable. Please advise."
+    update_templates = {
+        "OUT_FOR_DELIVERY": f"🚚 *Update: Out for Delivery*\nOrder #{delivery.id} - {delivery.customer_name}\nYour order is on its way and will be delivered shortly.",
+        "CALLED_CUSTOMER":  f"📞 *Update: Customer Called*\nOrder #{delivery.id} - {delivery.customer_name}\nOur agent has called the customer to confirm delivery.",
+        "NOT_PICKING":      f"📵 *Update: Customer Not Reachable*\nOrder #{delivery.id} - {delivery.customer_name}\nWe are unable to reach the customer. Please advise.",
+        "DELIVERED":        f"✅ *Update: Delivered*\nOrder #{delivery.id} - {delivery.customer_name}\nOrder has been successfully delivered. Thank you!",
+    }
+    message = update_templates.get(
+        issue_type,
+        f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
     )
 
     # 3. Send the command to your Clawbot via the Railway Internal URL

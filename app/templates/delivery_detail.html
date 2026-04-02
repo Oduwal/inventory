@@ -44,10 +44,23 @@
       {% endif %}
     </div>
 
-    <div style="margin-top: 16px;">
-      <button onclick="sendSellerFeedback({{ d.id }}, 'BRO\'S😎')" class="btnGhost" style="color: #f59e0b; border-color: #f59e0b; width: 100%; justify-content: center;">
-          📣 Notify Seller Group
-      </button>
+    <div style="margin-top:16px;">
+      <div style="font-size:11px;color:var(--muted);font-family:var(--font-mono);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px;">Send Update to Seller Group</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
+        <button onclick="sendWaUpdate({{ d.id }}, 'OUT_FOR_DELIVERY')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 6px;justify-content:center;">
+          🚚 Out for Delivery
+        </button>
+        <button onclick="sendWaUpdate({{ d.id }}, 'CALLED_CUSTOMER')" class="btnGhost" style="color:#a78bfa;border-color:#a78bfa;font-size:12px;padding:7px 6px;justify-content:center;">
+          📞 Called Customer
+        </button>
+        <button onclick="sendWaUpdate({{ d.id }}, 'NOT_PICKING')" class="btnGhost" style="color:#f59e0b;border-color:#f59e0b;font-size:12px;padding:7px 6px;justify-content:center;">
+          📵 Not Picking
+        </button>
+        <button onclick="sendWaUpdate({{ d.id }}, 'DELIVERED')" class="btnGhost" style="color:#22c55e;border-color:#22c55e;font-size:12px;padding:7px 6px;justify-content:center;">
+          ✅ Delivered
+        </button>
+      </div>
+      <div id="wa-update-status" style="font-size:12px;margin-top:8px;min-height:18px;"></div>
     </div>
   </div>
 
@@ -398,28 +411,35 @@ function addRejectionNote(form) {
   return true;
 }
 
-async function sendSellerFeedback(deliveryId, groupName) {
-    if(!confirm("Alert the seller group that this customer is unreachable?")) return;
+async function sendWaUpdate(deliveryId, issueType) {
+    const labels = {
+        'OUT_FOR_DELIVERY': 'Out for Delivery',
+        'CALLED_CUSTOMER':  'Called Customer',
+        'NOT_PICKING':      'Customer Not Picking',
+        'DELIVERED':        'Delivered',
+    };
+    const statusEl = document.getElementById('wa-update-status');
+    statusEl.style.color = 'var(--muted)';
+    statusEl.textContent = '⏳ Sending...';
 
     const formData = new FormData();
     formData.append("delivery_id", deliveryId);
-    formData.append("group_name", groupName);
-    formData.append("issue_type", "Customer Not Picking");
+    formData.append("group_name", "");
+    formData.append("issue_type", issueType);
 
     try {
-        const response = await fetch('/api/agent-feedback', {
-            method: 'POST',
-            body: formData
-        });
+        const response = await fetch('/api/agent-feedback', { method: 'POST', body: formData });
         const result = await response.json();
-        
-        if(result.status === "success") {
-            alert("✅ Message successfully dropped in the WhatsApp group!");
+        if (result.status === "success") {
+            statusEl.style.color = '#22c55e';
+            statusEl.textContent = '✅ "' + labels[issueType] + '" sent to seller group!';
         } else {
-            alert("❌ Failed to send: " + result.message);
+            statusEl.style.color = '#f87171';
+            statusEl.textContent = '❌ ' + result.message;
         }
     } catch (e) {
-        alert("❌ System Error.");
+        statusEl.style.color = '#f87171';
+        statusEl.textContent = '❌ System error — try again.';
     }
 }
 </script>
