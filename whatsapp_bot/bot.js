@@ -2,6 +2,8 @@ const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
+console.log('🚀 Booting up Clawbot...');
+
 const app = express();
 app.use(express.json());
 
