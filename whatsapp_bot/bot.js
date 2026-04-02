@@ -58,12 +58,15 @@ async function humanizedSend(jid, text, quotedKey, quotedBody) {
     const opts = {};
     // If caller supplies a quoted message key + body, construct the quote context
     // so the group sees which order update this is referencing.
+    // participant is required for group messages — without it WhatsApp silently
+    // drops the quote rendering even though the message still sends.
     if (quotedKey && quotedBody) {
         opts.quoted = {
             key: {
-                remoteJid: jid,
-                fromMe:    true,
-                id:        quotedKey,
+                remoteJid:   jid,
+                fromMe:      true,
+                id:          quotedKey,
+                participant: sock.user?.id || sock.user?.jid || '',
             },
             message: { conversation: quotedBody },
         };
