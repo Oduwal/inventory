@@ -3,16 +3,19 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 
+console.log('🚀 Booting up Clawbot (Production Mode)...');
+
 const app = express();
 app.use(express.json());
 
-// --- CONFIGURATION ---
-// 1. Paste your Group ID here once you see it in the logs (e.g. "120363042123456789@g.us")
-const SAVED_GROUP_ID = "PASTE_YOUR_ID_HERE_LATER"; 
+// --- FINAL CONFIGURATION ---
+// 1. Your exact Group ID:
+const SAVED_GROUP_ID = "120363239510350827@g.us"; 
 
-// 2. YOUR SPECIFIC PYTHON URL:
+// 2. Your Python Dashboard URL:
 const PYTHON_APP_URL = "https://inventory-production-d41e.up.railway.app";
 
+// Initialize with advanced memory protection for Railway
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
@@ -20,97 +23,73 @@ const client = new Client({
         args: [
             '--no-sandbox', 
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // ⬅️ THIS IS THE MAGIC BULLET FOR RAILWAY
-            '--disable-accelerated-2d-canvas', // ⬅️ Turns off heavy graphics
+            '--disable-dev-shm-usage', // ⬅️ Prevents the silent crash!
+            '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu' // ⬅️ No GPU in Railway containers anyway
+            '--disable-gpu'
         ],
         handleSIGINT: false,
         protocolTimeout: 0 
     }
 });
 
-// --- ADD THESE NEW LISTENERS RIGHT BELOW IT ---
-// These will act as alarms if the connection drops in the background!
-client.on('disconnected', (reason) => {
-    console.log('❌ WhatsApp Disconnected!', reason);
-});
-
-client.on('auth_failure', msg => {
-    console.error('❌ Authentication failed!', msg);
-});
-
+// --- QR CODE & STATUS ---
 client.on('qr', (qr) => {
     console.log('🤖 SCAN QR CODE:');
     qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
-    console.log('✅ CLAWBOT IS READY AND LISTENING FOR MESSAGES!');
+    console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
 });
 
-// --- THE AGGRESSIVE ID FINDER ---
-// This triggers for EVERY message (sent or received) to help us find that ID
-client.on('message_create', async (msg) => {
-    try {
-        const chat = await msg.getChat();
-        
-        // This block prints the ID to your Railway logs every time you text the group
-        console.log(`------------------------------------------`);
-        console.log(`📩 ACTIVITY DETECTED!`);
-        console.log(`👥 From Group/Chat: "${chat.name}"`);
-        console.log(`🆔 ID: ${chat.id._serialized}`);
-        console.log(`💬 Message: ${msg.body}`);
-        console.log(`------------------------------------------`);
+client.on('disconnected', (reason) => {
+    console.log('❌ WhatsApp Disconnected!', reason);
+});
 
-        // Two-Way Sync: If it's a reply to an Order message, tell Python
-        if (msg.hasQuotedMsg) {
+// --- TWO-WAY SYNC (Listener) ---
+client.on('message', async (msg) => {
+    // If someone replies to an Order message in the group
+    if (msg.hasQuotedMsg) {
+        try {
             const quotedMsg = await msg.getQuotedMessage();
             const orderMatch = quotedMsg.body.match(/Order\s?#(\d+)/i);
             
             if (orderMatch) {
                 const orderId = orderMatch[1];
-                console.log(`🔔 Order #${orderId} comment found! Notifying Python...`);
+                console.log(`🔔 Order #${orderId} comment found! Notifying Agent Dashboard...`);
                 
                 await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id: orderId,
                     comment: msg.body,
                     sender_phone: msg.author || msg.from
-                }).catch(e => console.log("⚠️ Python Webhook error - check if /api/whatsapp-webhook exists in main.py"));
+                }).catch(e => console.log("⚠️ Failed to reach Python App. Is the URL correct?"));
             }
+        } catch (e) {
+            console.log("Error processing quote:", e.message);
         }
-    } catch (e) {
-        console.log("Debug Error:", e.message);
     }
 });
 
-// --- THE SENDER (Python Dashboard -> Bot) ---
+// --- THE SENDER (Python -> WhatsApp) ---
 app.post('/send-group-feedback', async (req, res) => {
     const { groupName, message, orderId } = req.body;
-    console.log(`\n📥 Request received for ${orderId}`);
+    console.log(`\n📥 Sending update for ${orderId}...`);
 
     try {
-        let groupId = SAVED_GROUP_ID;
+        const chat = await client.getChatById(SAVED_GROUP_ID);
         
-        // If we haven't hardcoded the ID yet, try to find it by name
-        if (groupId === "PASTE_YOUR_ID_HERE_LATER") {
-            const chats = await client.getChats();
-            const target = chats.find(c => c.name === groupName);
-            if (!target) return res.status(404).json({ error: "Group not found. Send a text to it on your phone first." });
-            groupId = target.id._serialized;
-        }
-
-        const chat = await client.getChatById(groupId);
-        
-        // Reply logic: find the original message and quote it
+        // Look for the original message to reply to
         const messages = await chat.fetchMessages({ limit: 50 });
         const targetMsg = messages.reverse().find(m => m.body && m.body.includes(orderId));
 
         if (targetMsg) {
             await targetMsg.reply(message);
+            console.log(`✅ Replying to original ${orderId} message.`);
         } else {
-            await client.sendMessage(groupId, message);
+            await client.sendMessage(SAVED_GROUP_ID, message);
+            console.log(`✅ Dropping fresh message for ${orderId}.`);
         }
         
         res.status(200).json({ success: true });
