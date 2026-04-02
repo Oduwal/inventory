@@ -3,16 +3,14 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 
-console.log('🚀 Booting up Clawbot...');
-
 const app = express();
 app.use(express.json());
 
 // --- CONFIGURATION ---
-// 1. Once you see the ID in the logs, paste it here (e.g. "120363042123456789@g.us")
+// 1. Paste your Group ID here once you see it in the logs (e.g. "120363042123456789@g.us")
 const SAVED_GROUP_ID = "PASTE_YOUR_ID_HERE_LATER"; 
 
-// 2. Your Python Dashboard URL
+// 2. YOUR SPECIFIC PYTHON URL:
 const PYTHON_APP_URL = "https://inventory-production-d41e.up.railway.app";
 
 const client = new Client({
@@ -24,78 +22,75 @@ const client = new Client({
     }
 });
 
-// --- QR CODE STRATEGY ---
 client.on('qr', (qr) => {
-    console.log('\n=========================================================');
-    console.log('🤖 SCAN THIS QR CODE TO LINK THE BOT:');
+    console.log('🤖 SCAN QR CODE:');
     qrcode.generate(qr, { small: true });
-    console.log('\n⚠️ LINK FOR PERFECT IMAGE:');
-    console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
-    console.log('=========================================================\n');
 });
 
 client.on('ready', () => {
-    console.log('✅ Clawbot is ONLINE and ready. No heavy sync needed.');
+    console.log('✅ CLAWBOT IS READY AND LISTENING FOR MESSAGES!');
 });
 
-// --- THE LISTENER (Hear comments & find Group ID) ---
-client.on('message', async (msg) => {
-    const chat = await msg.getChat();
-    
-    // LOG EVERYTHING: This helps you find the ID for "BRO'S😎"
-    if (chat.isGroup) {
-        console.log(`🔍 Activity in Group: "${chat.name}" | ID: ${chat.id._serialized}`);
-    }
+// --- THE AGGRESSIVE ID FINDER ---
+// This triggers for EVERY message (sent or received) to help us find that ID
+client.on('message_create', async (msg) => {
+    try {
+        const chat = await msg.getChat();
+        
+        // This block prints the ID to your Railway logs every time you text the group
+        console.log(`------------------------------------------`);
+        console.log(`📩 ACTIVITY DETECTED!`);
+        console.log(`👥 From Group/Chat: "${chat.name}"`);
+        console.log(`🆔 ID: ${chat.id._serialized}`);
+        console.log(`💬 Message: ${msg.body}`);
+        console.log(`------------------------------------------`);
 
-    // Two-Way Sync: If someone replies to an order message
-    if (msg.hasQuotedMsg) {
-        try {
+        // Two-Way Sync: If it's a reply to an Order message, tell Python
+        if (msg.hasQuotedMsg) {
             const quotedMsg = await msg.getQuotedMessage();
             const orderMatch = quotedMsg.body.match(/Order\s?#(\d+)/i);
             
             if (orderMatch) {
                 const orderId = orderMatch[1];
-                console.log(`🔔 Found comment on Order #${orderId}. Notifying Python...`);
-
+                console.log(`🔔 Order #${orderId} comment found! Notifying Python...`);
+                
                 await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id: orderId,
                     comment: msg.body,
                     sender_phone: msg.author || msg.from
-                }).catch(e => console.log("⚠️ Python Webhook error (Check your Python URL/Route)"));
+                }).catch(e => console.log("⚠️ Python Webhook error - check if /api/whatsapp-webhook exists in main.py"));
             }
-        } catch (e) {
-            console.log("Error processing quote:", e.message);
         }
+    } catch (e) {
+        console.log("Debug Error:", e.message);
     }
 });
 
-// --- THE SENDER (Triggered by your Dashboard) ---
+// --- THE SENDER (Python Dashboard -> Bot) ---
 app.post('/send-group-feedback', async (req, res) => {
     const { groupName, message, orderId } = req.body;
-    console.log(`\n📥 Outbound Request for ${orderId}`);
+    console.log(`\n📥 Request received for ${orderId}`);
 
     try {
         let groupId = SAVED_GROUP_ID;
         
-        // Dynamic find if ID isn't hardcoded yet
+        // If we haven't hardcoded the ID yet, try to find it by name
         if (groupId === "PASTE_YOUR_ID_HERE_LATER") {
             const chats = await client.getChats();
             const target = chats.find(c => c.name === groupName);
-            if (!target) return res.status(404).json({ error: "Group ID not found. Send a message to the group on your phone first." });
+            if (!target) return res.status(404).json({ error: "Group not found. Send a text to it on your phone first." });
             groupId = target.id._serialized;
         }
 
         const chat = await client.getChatById(groupId);
-        const messages = await chat.fetchMessages({ limit: 50 });
         
-        // Search for the original message bubble to reply to
+        // Reply logic: find the original message and quote it
+        const messages = await chat.fetchMessages({ limit: 50 });
         const targetMsg = messages.reverse().find(m => m.body && m.body.includes(orderId));
 
         if (targetMsg) {
-            console.log(`✅ Replying to original Order ${orderId} message.`);
             await targetMsg.reply(message);
         } else {
-            console.log(`⚠️ Order ${orderId} not found in recent chat. Sending fresh message.`);
             await client.sendMessage(groupId, message);
         }
         
@@ -110,5 +105,5 @@ client.initialize();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🤖 Clawbot API listening on port ${PORT}`);
+    console.log(`🤖 API listening on port ${PORT}`);
 });
