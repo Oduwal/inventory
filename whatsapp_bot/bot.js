@@ -20,51 +20,112 @@ const MAX_CACHE_SIZE = 2000; // rolling cap — oldest dropped first
 // This is the core fix: we NEVER call fetchMessages().
 // Instead we passively intercept every message and store its ID.
 // ─────────────────────────────────────────────
-let messageCache = new Map(); // orderId (string) → serialized id (string)
+// Full message store: array of { id, body, ts }
+// Lets us search by name, phone, item — not just order ID
+let messageStore = [];   // all cached group messages (capped at MAX_CACHE_SIZE)
+let orderIdIndex = new Map(); // orderId → serialized message id (fast lookup)
 
 function loadCache() {
     try {
         if (fs.existsSync(CACHE_FILE)) {
             const raw  = fs.readFileSync(CACHE_FILE, 'utf8');
             const data = JSON.parse(raw);
-            messageCache = new Map(Object.entries(data));
-            console.log(`📦 Loaded ${messageCache.size} cached message IDs from disk.`);
+            messageStore = data.store || [];
+            const idx    = data.index || {};
+            orderIdIndex = new Map(Object.entries(idx));
+            console.log(`📦 Loaded ${messageStore.length} messages + ${orderIdIndex.size} order IDs from disk.`);
         }
     } catch (e) {
         console.log('⚠️  Could not load message cache:', e.message);
+        messageStore = []; orderIdIndex = new Map();
     }
 }
 
 function saveCache() {
     try {
-        // Trim to MAX_CACHE_SIZE — drop oldest entries (Map preserves insertion order)
-        if (messageCache.size > MAX_CACHE_SIZE) {
-            const keys = [...messageCache.keys()];
-            keys.slice(0, messageCache.size - MAX_CACHE_SIZE).forEach(k => messageCache.delete(k));
+        if (messageStore.length > MAX_CACHE_SIZE) {
+            messageStore = messageStore.slice(-MAX_CACHE_SIZE);
         }
-        const obj = Object.fromEntries(messageCache);
-        fs.writeFileSync(CACHE_FILE, JSON.stringify(obj), 'utf8');
+        fs.writeFileSync(CACHE_FILE, JSON.stringify({
+            store: messageStore,
+            index: Object.fromEntries(orderIdIndex),
+        }), 'utf8');
     } catch (e) {
         console.log('⚠️  Could not save message cache:', e.message);
     }
 }
 
-/** Extract all order IDs mentioned in a message body */
 function extractOrderIds(text) {
     if (!text) return [];
-    const matches = [...text.matchAll(/Order\s?#?(\d+)/gi)];
-    return matches.map(m => m[1]);
+    return [...text.matchAll(/Order\s?#?(\d+)/gi)].map(m => m[1]);
 }
 
-/** Store message ID in cache for every order ID found in the text */
-function cacheMessage(msgId, text) {
-    const ids = extractOrderIds(text);
-    if (ids.length === 0) return;
-    ids.forEach(orderId => {
-        messageCache.set(orderId, msgId);
-        console.log(`📌 Cached message id for Order #${orderId}`);
+/** Store an incoming message body + ID so we can search it later */
+function cacheMessage(serializedId, body) {
+    if (!body || !serializedId) return;
+
+    // Add to full store
+    messageStore.push({ id: serializedId, body, ts: Date.now() });
+
+    // Index any order IDs mentioned
+    const ids = extractOrderIds(body);
+    ids.forEach(oid => {
+        orderIdIndex.set(oid, serializedId);
+        console.log(`📌 Indexed Order #${oid} → message`);
     });
+
     saveCache();
+}
+
+/**
+ * Smart search: finds the best matching cached message for an order.
+ * Priority: 1) exact order ID  2) phone number  3) customer name  4) item name
+ */
+function findBestMatch(orderId, customerName, customerPhone, items) {
+    // 1. Exact order ID index
+    if (orderId && orderIdIndex.has(String(orderId))) {
+        console.log(`🎯 Matched by Order ID`);
+        return orderIdIndex.get(String(orderId));
+    }
+
+    // Normalise search terms
+    const phoneClean  = (customerPhone || '').replace(/\D/g, '').slice(-10); // last 10 digits
+    const nameLower   = (customerName  || '').toLowerCase().trim();
+    const itemsLower  = (items         || '').toLowerCase();
+
+    // Build name tokens (each word separately, skip short ones)
+    const nameTokens  = nameLower.split(/\s+/).filter(t => t.length > 2);
+
+    // Search newest-first so we find the most recent relevant message
+    for (let i = messageStore.length - 1; i >= 0; i--) {
+        const { id, body } = messageStore[i];
+        const bodyLower = body.toLowerCase();
+        const bodyDigits = body.replace(/\D/g, '');
+
+        // 2. Phone number match (last 10 digits anywhere in body)
+        if (phoneClean && bodyDigits.includes(phoneClean)) {
+            console.log(`🎯 Matched by phone number`);
+            return id;
+        }
+
+        // 3. Customer name match (all name tokens found in body)
+        if (nameTokens.length > 0 && nameTokens.every(t => bodyLower.includes(t))) {
+            console.log(`🎯 Matched by customer name: ${customerName}`);
+            return id;
+        }
+
+        // 4. Item name match (any item keyword found in body)
+        if (itemsLower) {
+            const itemTokens = itemsLower.split(/[,\s]+/).filter(t => t.length > 3);
+            const matchedItem = itemTokens.find(t => bodyLower.includes(t));
+            if (matchedItem) {
+                console.log(`🎯 Matched by item: ${matchedItem}`);
+                return id;
+            }
+        }
+    }
+
+    return null;
 }
 
 loadCache();
@@ -92,17 +153,26 @@ const client = new Client({
     }
 });
 
+let clientReady = false;
+
 client.on('qr', (qr) => {
     console.log('🤖 SCAN QR CODE:');
     qrcode.generate(qr, { small: true });
 });
 
 client.on('ready', () => {
+    clientReady = true;
     console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
 });
 
 client.on('disconnected', (reason) => {
+    clientReady = false;
     console.log('❌ WhatsApp Disconnected:', reason);
+    // Auto-reinitialize after 5 seconds
+    setTimeout(() => {
+        console.log('🔄 Attempting to reinitialize WhatsApp client...');
+        client.initialize().catch(e => console.log('Reinit error:', e.message));
+    }, 5000);
 });
 
 // ─────────────────────────────────────────────
@@ -171,37 +241,43 @@ app.get('/health', (_req, res) => {
  *  5. Cache the sent/replied message ID so future calls can reply to it
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message } = req.body;
+    const { orderId, message, customerName, customerPhone, items } = req.body;
     if (!orderId || !message) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
     }
 
-    console.log(`\n📥 Outbound update for Order #${orderId}...`);
+    // Strip any "Order #" prefix Python may have already included
+    const cleanId = String(orderId).replace(/^Order\s*#?\s*/i, '').trim();
+    console.log(`\n📥 Outbound update for Order #${cleanId} (${customerName || 'unknown'})...`);
+
+    if (!clientReady) {
+        console.log('⚠️  Client not ready yet — rejecting request.');
+        return res.status(503).json({ success: false, error: 'WhatsApp client not ready. Try again in a moment.' });
+    }
 
     try {
-        const cachedId = messageCache.get(String(orderId));
+        const cachedId = findBestMatch(cleanId, customerName, customerPhone, items);
         let sentMsg;
 
         if (cachedId) {
             console.log(`🔍 Cache hit — fetching single message ${cachedId.substring(0, 30)}...`);
             try {
-                // Lightweight: fetches ONE message by ID — never the full history
                 const originalMsg = await Promise.race([
                     client.getMessageById(cachedId),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('getMessageById timeout')), 8000))
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
                 ]);
                 sentMsg = await originalMsg.reply(message);
-                console.log(`✅ Replied to original Order #${orderId} message.`);
+                console.log(`✅ Replied/quoted original Order #${cleanId} message.`);
             } catch (lookupErr) {
-                console.log(`⚠️  Could not fetch cached message (${lookupErr.message}) — falling back to new message.`);
+                console.log(`⚠️  Cache lookup failed (${lookupErr.message}) — sending as new message.`);
                 sentMsg = await client.sendMessage(SAVED_GROUP_ID, message);
             }
         } else {
-            console.log(`📭 No cache for Order #${orderId} — sending as new message.`);
+            console.log(`📭 No cache for Order #${cleanId} — sending as new message.`);
             sentMsg = await client.sendMessage(SAVED_GROUP_ID, message);
         }
 
-        // Cache the sent/replied message so future calls can reply to it
+        // Cache sent message so future calls can reply to it
         if (sentMsg && sentMsg.id) {
             cacheMessage(sentMsg.id._serialized, message);
         }
@@ -210,6 +286,14 @@ app.post('/send-group-feedback', async (req, res) => {
 
     } catch (error) {
         console.error('❌ Send Error:', error.message);
+
+        // Detached frame = Puppeteer page died. Mark client not ready so
+        // future requests get a clean 503 instead of another crash.
+        if (error.message && error.message.includes('detached Frame')) {
+            console.log('🔄 Detached frame detected — marking client as disconnected. Puppeteer will recover on reconnect.');
+            clientReady = false;
+        }
+
         res.status(500).json({ success: false, error: error.message });
     }
 });

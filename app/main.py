@@ -5888,6 +5888,13 @@ async def send_agent_feedback(
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
 
+    # 2. Gather delivery items for matching
+    delivery_items = db.execute(
+        select(Item.name).join(DeliveryItem, DeliveryItem.item_id == Item.id)
+        .where(DeliveryItem.delivery_id == delivery.id, DeliveryItem.line_amount > 0)
+    ).scalars().all()
+    items_str = ", ".join(delivery_items) if delivery_items else ""
+
     # 2. Format the feedback message
     message = (
         f"🚨 *Agent Feedback Alert*\n"
@@ -5900,11 +5907,14 @@ async def send_agent_feedback(
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://adventurous-flow.railway.internal:3000/send-group-feedback", 
+                "http://adventurous-flow.railway.internal:3000/send-group-feedback",
                 json={
-                    "groupName": group_name, 
+                    "groupName": group_name,
                     "message": message,
-                    "orderId": f"Order #{delivery.id}"  # <-- Tell the bot what to search for!
+                    "orderId": str(delivery.id),
+                    "customerName": delivery.customer_name or "",
+                    "customerPhone": delivery.customer_phone or "",
+                    "items": items_str,
                 },
                 timeout=60
             )
