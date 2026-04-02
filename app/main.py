@@ -10,6 +10,7 @@
 #   [FIX-7] Minimum password length raised from 4 → 8
 #   [FIX-8] /admin/reset-system converted to POST with confirmation token
 
+from __future__ import annotations
 import os
 import json as _json
 import threading
@@ -634,6 +635,7 @@ def ensure_schema() -> None:
             created_at  TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
         _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'bot'")
+        _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS sender TEXT DEFAULT ''")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_outbound_order ON whatsapp_outbound_map (order_id)")
 
 
@@ -6037,21 +6039,24 @@ async def send_agent_feedback(
     # making it obvious which order is being discussed regardless of how many updates
     # the agent has sent.
     orig_map = db.execute(text(
-        "SELECT message_id, body FROM whatsapp_outbound_map "
+        "SELECT message_id, body, sender FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
-    quote_id   = orig_map.message_id if orig_map else None
-    quote_body = orig_map.body       if orig_map else None
+    quote_id     = orig_map.message_id if orig_map else None
+    quote_body   = orig_map.body       if orig_map else None
+    quote_sender = getattr(orig_map, 'sender', None) if orig_map else None
 
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 "http://adventurous-flow.railway.internal:3000/send-group-feedback",
                 json={
-                    "orderId":          str(delivery.id),
-                    "message":          message,
-                    "quoteMessageId":   quote_id,
-                    "quoteMessageBody": quote_body,
+                    "orderId":            str(delivery.id),
+                    "message":            message,
+                    "quoteMessageId":     quote_id,
+                    "quoteMessageBody":   quote_body,
+                    "quoteMessageSender": quote_sender,
+                    "quoteMessageFromMe": False,
                 },
                 timeout=60,
             )
@@ -6068,14 +6073,14 @@ async def send_agent_feedback(
         if new_msg_id:
             if is_sqlite:
                 upsert_sql = (
-                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', {now_sql})"
+                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', '', {now_sql})"
                 )
             else:
                 upsert_sql = (
-                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', {now_sql}) "
-                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source"
+                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', '', {now_sql}) "
+                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender"
                 )
             db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message})
 
@@ -6239,6 +6244,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     data           = await request.json()
     message_id     = (data.get("message_id") or "").strip()
     body           = (data.get("body") or "").strip()
+    sender         = (data.get("sender") or "").strip()
     customer_name  = (data.get("customer_name") or "").strip().lower()
     customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
 
@@ -6281,16 +6287,16 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     # First seen wins — never overwrite the original group post mapping
     if is_sqlite:
         ignore_sql = (
-            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', {now_sql})"
+            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, {now_sql})"
         )
     else:
         ignore_sql = (
-            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', {now_sql}) "
+            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, {now_sql}) "
             f"ON CONFLICT (message_id) DO NOTHING"
         )
-    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body})
+    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body, "sender": sender})
     db.commit()
 
     logging.getLogger("cache_wa").info(

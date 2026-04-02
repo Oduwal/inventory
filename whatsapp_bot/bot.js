@@ -49,24 +49,20 @@ let latestQrUrl = null;   // pre-rendered data: URL for the /qr page
 // ─────────────────────────────────────────────
 
 /** Human-like delay — 2–4 seconds with typing presence */
-async function humanizedSend(jid, text, quotedKey, quotedBody) {
+async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe) {
     await sock.sendPresenceUpdate('composing', jid);
     const ms = 2000 + Math.random() * 2000;
     await new Promise(r => setTimeout(r, ms));
     await sock.sendPresenceUpdate('paused', jid);
 
     const opts = {};
-    // If caller supplies a quoted message key + body, construct the quote context
-    // so the group sees which order update this is referencing.
-    // participant is required for group messages — without it WhatsApp silently
-    // drops the quote rendering even though the message still sends.
     if (quotedKey && quotedBody) {
         opts.quoted = {
             key: {
                 remoteJid:   jid,
-                fromMe:      true,
+                fromMe:      quoteFromMe || false,
                 id:          quotedKey,
-                participant: sock.user?.id || sock.user?.jid || '',
+                participant: quoteSender || sock.user?.id || sock.user?.jid || '',
             },
             message: { conversation: quotedBody },
         };
@@ -111,7 +107,7 @@ function extractQuoted(msg) {
 }
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 /**
  * Extract customer name and phone from a group message.
@@ -337,7 +333,7 @@ app.get('/health', (_req, res) => {
  * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message, quoteMessageId, quoteMessageBody } = req.body;
+    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe } = req.body;
 
     if (!orderId || !message) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
@@ -355,6 +351,8 @@ app.post('/send-group-feedback', async (req, res) => {
             message,
             quoteMessageId   || null,
             quoteMessageBody || null,
+            quoteMessageSender || null,
+            quoteMessageFromMe || false
         );
         console.log(`✅ Sent (msg_id: ${msgId?.slice(0, 20)}...)`);
         res.json({ success: true, message_id: msgId });
