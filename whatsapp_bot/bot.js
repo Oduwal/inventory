@@ -186,10 +186,9 @@ client.on('ready', () => {
 client.on('disconnected', (reason) => {
     clientReady = false;
     console.log('❌ WhatsApp Disconnected:', reason);
-    // Auto-reinitialize after 5 seconds
     setTimeout(() => {
         console.log('🔄 Attempting to reinitialize WhatsApp client...');
-        client.initialize().catch(e => console.log('Reinit error:', e.message));
+        startClient();
     }, 5000);
 });
 
@@ -327,11 +326,13 @@ app.post('/send-group-feedback', async (req, res) => {
     } catch (error) {
         console.error('❌ Send Error:', error.message);
 
-        // Detached frame = Puppeteer page died. Mark client not ready so
-        // future requests get a clean 503 instead of another crash.
-        if (error.message && error.message.includes('detached Frame')) {
-            console.log('🔄 Detached frame detected — marking client as disconnected. Puppeteer will recover on reconnect.');
+        // Detached frame = Puppeteer page died mid-send. The 'disconnected'
+        // event won't fire, so we must force a full reconnect ourselves.
+        if (error.message && (error.message.includes('detached Frame') || error.message.includes('Execution context'))) {
+            console.log('🔄 Detached frame — forcing reconnect...');
             clientReady = false;
+            try { await client.destroy(); } catch (_) {}
+            startClient();
         }
 
         res.status(500).json({ success: false, error: error.message });
