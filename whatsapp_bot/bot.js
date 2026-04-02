@@ -51,6 +51,8 @@ app.post('/send-group-feedback', async (req, res) => {
 
 client.initialize();
 
-app.listen(3000, () => {
-    console.log('🤖 Clawbot API listening on port 3000');
+// Tell the bot to use Railway's assigned port, and listen on the internal network
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🤖 Clawbot API listening on port ${PORT}`);
 });
