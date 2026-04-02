@@ -75,13 +75,13 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
     first_message = f"Hello? Is this {display_name}?"
     
     company_knowledge = (
-        "COMPANY KNOWLEDGE BASE: "
-        "- Business Name: Atomic Logistics. "
-        "- Operating Hours: 8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays. "
-        "- Delivery Zones: We currently deliver across all areas in Lagos, Benin, and Abuja. "
-        "- Rescheduling: Customers can reschedule a delivery to the next day for free. "
-        "- Payment: We accept bank transfers and cash on delivery. "
-        "- Support: If they have a major complaint, tell them to message our WhatsApp support line."
+        f"COMPANY KNOWLEDGE BASE: "
+        f"- Business Name: {business_name}. "
+        f"- Operating Hours: {os.getenv('BUSINESS_HOURS', '8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays.')} "
+        f"- Delivery Zones: {os.getenv('DELIVERY_ZONES', 'We deliver across major cities in Nigeria.')} "
+        f"- Rescheduling: Customers can reschedule a delivery to the next day for free. "
+        f"- Payment: We accept bank transfers and cash on delivery. "
+        f"- Support: If they have a major complaint, tell them to message our WhatsApp support line."
     )
 
     spoken_status = status.replace('_', ' ').lower()

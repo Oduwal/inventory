@@ -592,7 +592,7 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_amount NUMERIC(12,2) NULL DEFAULT 0")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_kind VARCHAR(30) NULL")
         _ddl(conn, "ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS receive_expense_note VARCHAR(400) NULL")
-        # Call logs table (Bland.ai integration)
+        # Call logs table (VAPI integration)
         _ddl(conn, """CREATE TABLE IF NOT EXISTS call_logs (
             id              """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
             delivery_id     INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
@@ -601,9 +601,11 @@ def ensure_schema() -> None:
             trigger_status  VARCHAR(30) DEFAULT '',
             call_status     VARCHAR(30) DEFAULT '',
             error_msg       TEXT DEFAULT '',
+            summary         TEXT DEFAULT '',
             duration        INTEGER DEFAULT 0,
             created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
+        _ddl(conn, "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT ''")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_delivery_id ON call_logs (delivery_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_created_at ON call_logs (created_at)")
 
@@ -1087,7 +1089,7 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
     branch_id = get_selected_branch_id(request, user)
     rows = db.execute(text("""
         SELECT cl.id, cl.delivery_id, cl.call_id, cl.phone, cl.trigger_status,
-               cl.call_status, cl.error_msg, cl.duration, cl.created_at,
+               cl.call_status, cl.error_msg, cl.summary, cl.duration, cl.created_at,
                d.customer_name, d.branch_id
         FROM call_logs cl
         JOIN deliveries d ON d.id = cl.delivery_id
@@ -1103,6 +1105,31 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
         "request": request, "user": user, "active": "call_logs",
         "rows": rows, "page": page, "pages": pages, "total": total,
     })
+
+
+@app.post("/api/call-webhook", response_class=JSONResponse)
+async def vapi_call_webhook(request: Request, db: Session = Depends(get_db)):
+    """VAPI end-of-call webhook — updates call log with summary and duration."""
+    try:
+        body = await request.json()
+        msg_type = body.get("message", {}).get("type", "")
+        if msg_type != "end-of-call-report":
+            return JSONResponse({"ok": True})
+        msg = body.get("message", {})
+        call_id   = msg.get("call", {}).get("id", "")
+        summary   = msg.get("summary", "")
+        duration  = int(msg.get("durationSeconds") or msg.get("call", {}).get("duration") or 0)
+        end_reason = msg.get("endedReason", "")
+        call_status = "completed" if end_reason not in ("error", "assistant-error") else "failed"
+        if call_id:
+            db.execute(text(
+                "UPDATE call_logs SET summary=:s, duration=:d, call_status=:cs WHERE call_id=:cid"
+            ), {"s": summary[:1000], "d": duration, "cs": call_status, "cid": call_id})
+            db.commit()
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        logging.getLogger("calling").error("Webhook error: %s", e)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=200)
 
 
 @app.get("/admin/audit-log", response_class=HTMLResponse)
@@ -2686,10 +2713,7 @@ async def delivery_create(
                f"/deliveries/{d.id}", "info")
     db.commit()
 
-    # ==========================================
-    # ADD THIS NEW BLOCK TO TRIGGER THE CALL
-    # ==========================================
-    # 1. Build a readable list of items for the AI to speak
+    # Build item summary and trigger AI call on new order
     call_items = []
     for iid, qty in zip(item_id, quantity):
         if int(qty) > 0:
@@ -2697,22 +2721,7 @@ async def delivery_create(
             if it:
                 call_items.append(f"{it.name} x{qty}")
     items_summary = ", ".join(call_items) if call_items else "your order"
-
-    # 2. Trigger the call immediately
-    # We pass "PENDING" as the status since it's a brand new order
-    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary)
-    # ==========================================
-# 1. Build a readable list of items for the AI to speak
-    call_items = []
-    for iid, qty in zip(item_id, quantity):
-        if int(qty) > 0:
-            it = db.get(Item, int(iid))
-            if it:
-                call_items.append(f"{it.name} x{qty}")
-    items_summary = ", ".join(call_items) if call_items else "your order"
-
-    # 2. Trigger the call immediately (NOW INCLUDES ADDRESS)
-    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address)
+    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "")
 
     return redirect(f"/deliveries/{d.id}")
 
