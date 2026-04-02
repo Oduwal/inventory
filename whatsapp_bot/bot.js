@@ -102,21 +102,51 @@ function extractQuotedId(msg) {
     return ctx?.stanzaId || null;
 }
 
-const ORDER_REGEX = /Order\s*#?\s*(\d+)/gi;
-function extractOrderIds(text) {
-    if (!text) return [];
-    return [...text.matchAll(ORDER_REGEX)].map(m => m[1]);
+const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+
+/**
+ * Ask Gemini to extract customer name and phone number from a WhatsApp group message.
+ * Returns { customer_name, customer_phone } — either field may be null if not found.
+ * Falls back gracefully if GEMINI_KEY is missing or the call fails.
+ */
+async function extractCustomerInfo(text) {
+    if (!GEMINI_KEY) return { customer_name: null, customer_phone: null };
+    try {
+        const prompt =
+            `You are reading a message from a Nigerian logistics WhatsApp group. ` +
+            `The message is a delivery order posted by a seller or dispatcher.\n\n` +
+            `Message:\n"${text}"\n\n` +
+            `Extract the CUSTOMER name and CUSTOMER phone number from this message. ` +
+            `The customer is the person receiving the delivery (not the sender/seller). ` +
+            `Reply ONLY with valid JSON, no markdown:\n` +
+            `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
+
+        const resp = await axios.post(
+            `${GEMINI_URL}?key=${GEMINI_KEY}`,
+            { contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0, maxOutputTokens: 60 } },
+            { timeout: 6000 }
+        );
+        const raw = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+        const clean = raw.startsWith('```') ? raw.replace(/```[a-z]*\n?/g, '').trim() : raw;
+        return JSON.parse(clean);
+    } catch (e) {
+        console.log('⚠️  Gemini extract failed:', e.message);
+        return { customer_name: null, customer_phone: null };
+    }
 }
 
 // ─────────────────────────────────────────────
 // INBOUND HANDLER
 // Flow:
-//  A. Non-reply message with "Order #N" → tell Python to cache (msg_id → order_id)
-//     so the bot can quote the ORIGINAL order post when agent sends an update.
-//  B. Any reply (has a quoted message) → forward to Python.
-//     Python looks up the quoted msg_id in whatsapp_outbound_map which contains
-//     BOTH the original order posts (source='group') AND bot updates (source='bot').
-//     So sellers can quote EITHER and it routes to the right delivery.
+//  A. Non-reply group message → Gemini extracts customer name/phone → Python matches
+//     against its delivery database and stores (message_id → order_id, source='group').
+//     This is the "original order post" the bot will quote when agents send updates.
+//
+//  B. Reply (has a quoted message) → forward to Python.
+//     Python does O(1) lookup by quoted message_id — works whether the seller quoted
+//     the original post OR a bot update, since both are in whatsapp_outbound_map.
 // ─────────────────────────────────────────────
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
@@ -128,30 +158,34 @@ async function handleInbound(msg) {
     const sender   = msg.key.participant || jid;
     const msgId    = msg.key.id;
 
+    if (!text) return;
     console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 80)}"`);
 
-    // A — cache original order posts (non-replies that mention an order number)
-    if (!quotedId && text) {
-        const orderIds = extractOrderIds(text);
-        for (const orderId of orderIds) {
-            console.log(`📌 Caching original order post — Order #${orderId} msg_id=${msgId.slice(0,20)}`);
-            axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
-                message_id: msgId,
-                order_id:   parseInt(orderId),
-                body:       text,
-                source:     'group',
-            }, { timeout: 5000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
-        }
+    // B — seller replied to something
+    if (quotedId) {
+        console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
+        axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+            quoted_message_id: quotedId,
+            reply_text:        text,
+            sender_phone:      sender,
+        }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
+        return;
     }
 
-    // B — forward any reply to Python regardless of what was quoted
-    if (!quotedId) return;
-    console.log(`🔁 Reply quoting ${quotedId.slice(0,20)}... — forwarding to Python`);
-    axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
-        quoted_message_id: quotedId,
-        reply_text:        text,
-        sender_phone:      sender,
-    }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
+    // A — non-reply: use Gemini to extract customer details, let Python match to a delivery
+    const info = await extractCustomerInfo(text);
+    if (!info.customer_name && !info.customer_phone) {
+        console.log(`📭 No customer info found — skipping cache`);
+        return;
+    }
+    console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
+    axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
+        message_id:      msgId,
+        body:            text,
+        sender:          sender,
+        customer_name:   info.customer_name,
+        customer_phone:  info.customer_phone,
+    }, { timeout: 8000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
 }
 
 // ─────────────────────────────────────────────

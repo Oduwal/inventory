@@ -6183,33 +6183,62 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 @app.post("/api/cache-wa-message")
 async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     """
-    Called by the bot whenever it sees a group message that mentions an order number.
-    Stores (message_id → order_id) with source='group' so agent-feedback can always
-    quote the ORIGINAL seller order post — not a bot update.
-    Also covers the reply routing path: if a seller later quotes this original post,
-    the webhook can resolve which delivery it belongs to.
+    Called by the bot for every non-reply group message.
+    The bot uses Gemini to extract customer_name and customer_phone from the text.
+    Python fuzzy-matches those against its delivery records to find the order_id.
+    Stores (message_id → order_id, source='group') so agent-feedback can always
+    quote the ORIGINAL group post when sending updates.
     """
-    data       = await request.json()
-    message_id = (data.get("message_id") or "").strip()
-    order_id   = data.get("order_id")
-    body       = (data.get("body") or "").strip()
-    source     = data.get("source", "group")
+    data           = await request.json()
+    message_id     = (data.get("message_id") or "").strip()
+    body           = (data.get("body") or "").strip()
+    customer_name  = (data.get("customer_name") or "").strip().lower()
+    customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
 
-    if not message_id or not order_id:
+    if not message_id or (not customer_name and not customer_phone):
         return {"status": "ignored"}
 
-    delivery = db.execute(text("SELECT id FROM deliveries WHERE id = :oid"), {"oid": order_id}).first()
-    if not delivery:
-        logging.getLogger("cache_wa").warning("cache-wa-message: order_id %s not found", order_id)
-        return {"status": "not_found"}
+    # Fuzzy match against recent PENDING/OUT_FOR_DELIVERY deliveries only
+    candidates = db.execute(text(
+        "SELECT id, customer_name, customer_phone FROM deliveries "
+        "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') "
+        "ORDER BY created_at DESC LIMIT 200"
+    )).fetchall()
+
+    matched_order_id = None
+    for row in candidates:
+        db_name  = (row.customer_name  or "").lower()
+        db_phone = (row.customer_phone or "").replace(" ", "").replace("-", "")
+
+        # Phone match — last 8 digits (handles country code variations)
+        if customer_phone and db_phone:
+            if customer_phone[-8:] == db_phone[-8:]:
+                matched_order_id = row.id
+                break
+
+        # Name match — all words in extracted name must appear in db name or vice versa
+        if customer_name and db_name:
+            words = [w for w in customer_name.split() if len(w) > 2]
+            if words and all(w in db_name for w in words):
+                matched_order_id = row.id
+                break
+
+    if not matched_order_id:
+        logging.getLogger("cache_wa").info(
+            "cache-wa-message: no delivery matched name='%s' phone='%s'", customer_name, customer_phone
+        )
+        return {"status": "no_match"}
 
     now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
-    # INSERT OR IGNORE — first seen wins; we never overwrite the original post
+    # INSERT OR IGNORE — first seen wins; never overwrite the original post mapping
     db.execute(text(
         f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-        f"VALUES (:mid, :oid, :body, :src, {now_sql})"
-    ), {"mid": message_id, "oid": order_id, "body": body, "src": source})
+        f"VALUES (:mid, :oid, :body, 'group', {now_sql})"
+    ), {"mid": message_id, "oid": matched_order_id, "body": body})
     db.commit()
 
-    logging.getLogger("cache_wa").info("Cached WA msg %s → order %s (source=%s)", message_id[:20], order_id, source)
-    return {"status": "cached"}
+    logging.getLogger("cache_wa").info(
+        "Cached group post %s → Order #%s (name='%s' phone='%s')",
+        message_id[:20], matched_order_id, customer_name, customer_phone
+    )
+    return {"status": "cached", "order_id": matched_order_id}
