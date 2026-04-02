@@ -13,6 +13,7 @@ console.log('🚀 Booting up Clawbot (Production Mode)...');
 // ─────────────────────────────────────────────
 const SAVED_GROUP_ID = process.env.WA_GROUP_ID   || "120363239510350827@g.us";
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || "https://inventory-production-d41e.up.railway.app";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const CACHE_FILE     = path.join(__dirname, 'message_cache.json');
 const MAX_CACHE_SIZE = 2000; // rolling cap — oldest dropped first
 
@@ -198,7 +199,8 @@ const client = new Client({
 });
 
 let clientReady = false;
-let latestQr    = null;   // raw QR string — served at /qr
+let latestQr    = null;
+const sendQueue = new Map(); // orderId → promise — deduplicates concurrent requests
 
 client.on('qr', (qr) => {
     latestQr = qr;
@@ -210,8 +212,13 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    clientReady = true;
-    console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
+    // Give WhatsApp Web 10s to fully settle before accepting sends.
+    // Sending immediately after 'ready' causes detached frame errors.
+    console.log('🔗 WA connected — warming up for 10s...');
+    setTimeout(() => {
+        clientReady = true;
+        console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
+    }, 10000);
 });
 
 client.on('disconnected', (reason) => {
@@ -230,50 +237,95 @@ client.on('disconnected', (reason) => {
 // Uses message_create (fires for ALL messages incl. replies) instead of
 // just 'message' (which can miss quoted replies in some WA versions).
 // ─────────────────────────────────────────────
+/**
+ * Ask Gemini to classify a seller reply so the agent gets a useful summary.
+ * Returns a short label + one-line summary, or null if Gemini is unavailable.
+ */
+async function classifyReplyWithGemini(sellerMessage, orderContext) {
+    if (!GEMINI_API_KEY) return null;
+    try {
+        const prompt =
+            `You are a logistics dispatch assistant. A seller in a WhatsApp group replied to a delivery update.\n\n` +
+            `Order context: ${orderContext}\n` +
+            `Seller reply: "${sellerMessage}"\n\n` +
+            `Classify the reply into ONE of these categories:\n` +
+            `QUESTION | COMPLAINT | CONFIRMED_AVAILABLE | RESCHEDULE_REQUEST | ADDRESS_CHANGE | OTHER\n\n` +
+            `Then write one short sentence (max 15 words) summarising what the seller needs.\n` +
+            `Reply in this exact format:\nCATEGORY: <category>\nSUMMARY: <summary>`;
+
+        const resp = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+            { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 100 } },
+            { timeout: 8000 }
+        );
+        const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const category = (text.match(/CATEGORY:\s*(\w+)/) || [])[1] || 'OTHER';
+        const summary  = (text.match(/SUMMARY:\s*(.+)/)   || [])[1] || sellerMessage.slice(0, 80);
+        return { category, summary };
+    } catch (e) {
+        console.log('⚠️  Gemini classify failed:', e.message);
+        return null;
+    }
+}
+
 async function handleGroupMessage(msg) {
-    const chatId = msg.from || '';
-    if (chatId !== SAVED_GROUP_ID) return;
-
-    // Skip messages sent by the bot itself for caching purposes
-    const isFromMe = msg.fromMe || (msg.id && msg.id.fromMe);
-
-    // Cache any message body from group members (not our own)
-    if (msg.body && !isFromMe) {
-        cacheMessage(msg.id._serialized, msg.body);
+    // Resolve the chat ID — whatsapp-web.js puts it in different places
+    // depending on the message direction and WA Web version.
+    const chatId = msg.from || msg._data?.id?.remote || '';
+    if (!chatId.includes(SAVED_GROUP_ID.split('@')[0])) {
+        // Log unrecognised chats once so we can debug group ID mismatches
+        if (chatId && !chatId.endsWith('@c.us')) {
+            console.log(`📡 Message from unknown chat: ${chatId}`);
+        }
+        return;
     }
 
-    // Only forward to dashboard when the seller quotes one of the bot's
-    // update messages for a specific delivery — no broader matching.
-    if (msg.hasQuotedMsg) {
-        try {
-            const quoted = await msg.getQuotedMessage();
+    const isFromMe = msg.fromMe || msg.id?.fromMe || false;
+    if (isFromMe) return; // never process our own sent messages
 
-            // Match 1: quoted message contains "Order #97" (bot's update text)
-            let orderId = null;
-            const ids = extractOrderIds(quoted.body || '');
-            if (ids.length > 0) orderId = ids[0];
+    if (msg.body) cacheMessage(msg.id._serialized, msg.body);
 
-            // Match 2: quoted message ID is in our reverse map (bot's sent messages)
-            if (!orderId && msgToOrderId.has(quoted.id._serialized)) {
-                orderId = msgToOrderId.get(quoted.id._serialized);
-                console.log(`🔁 Reverse-mapped quoted message → Delivery #${orderId}`);
-            }
+    // Only act when seller explicitly quotes/replies to one of our updates
+    if (!msg.hasQuotedMsg) return;
 
-            if (orderId) {
-                console.log(`🔔 Seller replied to Delivery #${orderId} update — notifying dashboard...`);
-                const webhookRes = await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
-                    order_id:     orderId,
-                    comment:      msg.body,
-                    sender_phone: msg.author || msg.from,
-                }).catch(e => {
-                    console.log('⚠️  Could not reach Python app:', e.message);
-                    return null;
-                });
-                if (webhookRes) console.log(`✅ Dashboard notified for Delivery #${orderId} (HTTP ${webhookRes.status})`);
-            }
-        } catch (e) {
-            console.log('Error processing quoted reply:', e.message);
+    try {
+        const quoted = await msg.getQuotedMessage();
+
+        // Match 1: quoted text contains "Order #N"
+        let orderId = null;
+        const ids = extractOrderIds(quoted.body || '');
+        if (ids.length > 0) orderId = ids[0];
+
+        // Match 2: reverse map — quoted message was sent by the bot for a delivery
+        if (!orderId && msgToOrderId.has(quoted.id._serialized)) {
+            orderId = msgToOrderId.get(quoted.id._serialized);
+            console.log(`🔁 Reverse-mapped quoted msg → Delivery #${orderId}`);
         }
+
+        if (!orderId) return; // not related to any known delivery
+
+        // Use Gemini to classify and summarise the reply
+        const det = orderDetails.get(orderId);
+        const orderCtx = det
+            ? `Delivery #${orderId}, Customer: ${det.customerName}, Items: ${det.items}`
+            : `Delivery #${orderId}`;
+        const ai = await classifyReplyWithGemini(msg.body, orderCtx);
+
+        const comment = ai
+            ? `[${ai.category}] ${ai.summary}\n\nOriginal: "${msg.body}"`
+            : msg.body;
+
+        console.log(`🔔 Seller reply on Delivery #${orderId}${ai ? ` [${ai.category}]` : ''} — notifying dashboard...`);
+
+        const webhookRes = await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+            order_id:     orderId,
+            comment,
+            sender_phone: msg.author || msg.from,
+        }).catch(e => { console.log('⚠️  Webhook failed:', e.message); return null; });
+
+        if (webhookRes) console.log(`✅ Dashboard notified (HTTP ${webhookRes.status})`);
+    } catch (e) {
+        console.log('Error processing quoted reply:', e.message);
     }
 }
 
@@ -349,6 +401,21 @@ app.post('/send-group-feedback', async (req, res) => {
         return res.status(503).json({ success: false, error: 'WhatsApp client not ready. Try again in a moment.' });
     }
 
+    // Deduplicate: if a send is already in progress for this order, wait for it
+    // instead of firing a second identical message. Prevents button-spam doubles.
+    if (sendQueue.has(cleanId)) {
+        console.log(`⏳ Send already in progress for Order #${cleanId} — waiting...`);
+        try {
+            await sendQueue.get(cleanId);
+            return res.status(200).json({ success: true, quoted: false, deduped: true });
+        } catch (_) {
+            return res.status(503).json({ success: false, error: 'Previous send failed' });
+        }
+    }
+
+    let resolveSendQueue, rejectSendQueue;
+    sendQueue.set(cleanId, new Promise((res, rej) => { resolveSendQueue = res; rejectSendQueue = rej; }));
+
     try {
         const cachedId = findBestMatch(cleanId, customerName, customerPhone, items);
         let sentMsg;
@@ -382,13 +449,15 @@ app.post('/send-group-feedback', async (req, res) => {
             saveCache();
         }
 
+        resolveSendQueue();
+        sendQueue.delete(cleanId);
         res.status(200).json({ success: true, quoted: !!cachedId });
 
     } catch (error) {
         console.error('❌ Send Error:', error.message);
+        rejectSendQueue(error);
+        sendQueue.delete(cleanId);
 
-        // Detached frame = Puppeteer page died mid-send. The 'disconnected'
-        // event won't fire, so we must force a full reconnect ourselves.
         if (error.message && (error.message.includes('detached Frame') || error.message.includes('Execution context'))) {
             console.log('🔄 Detached frame — forcing reconnect...');
             clientReady = false;
