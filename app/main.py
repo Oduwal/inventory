@@ -636,6 +636,7 @@ def ensure_schema() -> None:
         )""")
         _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'bot'")
         _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS sender TEXT DEFAULT ''")
+        _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS group_jid TEXT DEFAULT ''")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_outbound_order ON whatsapp_outbound_map (order_id)")
 
 
@@ -6039,12 +6040,32 @@ async def send_agent_feedback(
     # making it obvious which order is being discussed regardless of how many updates
     # the agent has sent.
     orig_map = db.execute(text(
-        "SELECT message_id, body, sender FROM whatsapp_outbound_map "
+        "SELECT message_id, body, sender, group_jid FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
+
     quote_id     = orig_map.message_id if orig_map else None
     quote_body   = orig_map.body       if orig_map else None
     quote_sender = getattr(orig_map, 'sender', None) if orig_map else None
+
+    # ── STRICT CATEGORY ROUTING ──
+    CATEGORY_GROUP_MAP = {
+        "Daggo": "120363111111111111@g.us",
+        "Dangote": "120363222222222222@g.us",
+        "AnotherCategory": "120363333333333333@g.us"
+    }
+
+    delivery_category = db.execute(
+        select(Item.category)
+        .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+        .where(DeliveryItem.delivery_id == delivery.id)
+        .limit(1)
+    ).scalar()
+
+    if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
+        target_group = CATEGORY_GROUP_MAP[delivery_category]
+    else:
+        target_group = getattr(orig_map, 'group_jid', None) if orig_map else ""
 
     try:
         async with httpx.AsyncClient() as client:
@@ -6057,6 +6078,7 @@ async def send_agent_feedback(
                     "quoteMessageBody":   quote_body,
                     "quoteMessageSender": quote_sender,
                     "quoteMessageFromMe": False,
+                    "targetGroupJid":     target_group,
                 },
                 timeout=60,
             )
@@ -6073,16 +6095,16 @@ async def send_agent_feedback(
         if new_msg_id:
             if is_sqlite:
                 upsert_sql = (
-                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', '', {now_sql})"
+                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', '', :gjid, {now_sql})"
                 )
             else:
                 upsert_sql = (
-                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', '', {now_sql}) "
-                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender"
+                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', '', :gjid, {now_sql}) "
+                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
                 )
-            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message})
+            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group})
 
         # Save outbound comment for the chat thread UI
         db.execute(text(
@@ -6121,6 +6143,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quoted_msg_body     = data.get("quoted_message_body", "").strip()
     reply_text          = data.get("reply_text", "").strip()
     sender              = data.get("sender_phone", "")
+    group_jid           = data.get("groupJid", "").strip()
 
     if not reply_text:
         return {"status": "ignored"}
@@ -6162,9 +6185,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
                     try:
                         db.execute(text(
-                            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-                            f"VALUES (:mid, :oid, :body, 'group', {now_sql2}) {conflict}"
-                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body})
+                            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
+                            f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
+                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
                         db.commit()
                     except Exception:
                         pass
@@ -6248,6 +6271,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     message_id     = (data.get("message_id") or "").strip()
     body           = (data.get("body") or "").strip()
     sender         = (data.get("sender") or "").strip()
+    group_jid      = (data.get("groupJid") or "").strip()
     customer_name  = (data.get("customer_name") or "").strip().lower()
     customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
 
@@ -6290,16 +6314,16 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     # First seen wins — never overwrite the original group post mapping
     if is_sqlite:
         ignore_sql = (
-            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, {now_sql})"
+            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql})"
         )
     else:
         ignore_sql = (
-            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, {now_sql}) "
+            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql}) "
             f"ON CONFLICT (message_id) DO NOTHING"
         )
-    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body, "sender": sender})
+    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body, "sender": sender, "gjid": group_jid})
     db.commit()
 
     logging.getLogger("cache_wa").info(

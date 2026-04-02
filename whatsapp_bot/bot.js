@@ -69,7 +69,7 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
     }
 
     const result = await sock.sendMessage(jid, { text }, opts);
-    return result.key.id;   // Baileys message ID — returned to Python for persistence
+    return result.key.id;
 }
 
 /** Extract plain text body from any Baileys message object */
@@ -179,7 +179,9 @@ async function extractCustomerInfo(text) {
 // ─────────────────────────────────────────────
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
-    if (!jid.includes(GROUP_JID.split('@')[0])) return;
+    console.log(`\n\n🎯 GROUP ID IS: ${jid}\n\n`);
+    
+    // REMOVED the strict GROUP_JID check so it can listen to multiple groups!
     if (msg.key.fromMe) return;
 
     const text                  = extractText(msg);
@@ -191,8 +193,6 @@ async function handleInbound(msg) {
     if (!text) return;
     console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 80)}"`);
 
-    // B — seller replied to something; send the quoted body too so Python can
-    // fall back to name/phone matching if the quoted ID isn't in the map yet.
     if (quotedId) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
         axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
@@ -200,9 +200,26 @@ async function handleInbound(msg) {
             quoted_message_body: quotedBody || '',
             reply_text:          text,
             sender_phone:        sender,
+            groupJid:            jid,
         }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
     }
+
+    const info = await extractCustomerInfo(text);
+    if (!info.customer_name && !info.customer_phone) {
+        console.log(`📭 No customer info found — skipping cache`);
+        return;
+    }
+    console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
+    axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
+        message_id:      msgId,
+        body:            text,
+        sender:          sender,
+        customer_name:   info.customer_name,
+        customer_phone:  info.customer_phone,
+        groupJid:        jid,
+    }, { timeout: 8000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
+}
 
     // A — non-reply: use Gemini to extract customer details, let Python match to a delivery
     const info = await extractCustomerInfo(text);
@@ -333,7 +350,7 @@ app.get('/health', (_req, res) => {
  * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe } = req.body;
+    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid } = req.body;
 
     if (!orderId || !message) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
@@ -347,7 +364,7 @@ app.post('/send-group-feedback', async (req, res) => {
 
     try {
         const msgId = await humanizedSend(
-            GROUP_JID,
+            targetGroupJid || GROUP_JID,
             message,
             quoteMessageId   || null,
             quoteMessageBody || null,
@@ -358,7 +375,6 @@ app.post('/send-group-feedback', async (req, res) => {
         res.json({ success: true, message_id: msgId });
     } catch (e) {
         console.error('❌ Send error:', e.message);
-        // If the connection dropped mid-send, trigger reconnect
         if (!clientReady) {
             setTimeout(connectToWhatsApp, 2000);
         }
