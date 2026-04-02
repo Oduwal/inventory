@@ -16,10 +16,29 @@ const PYTHON_APP_URL = "https://inventory-production-d41e.up.railway.app";
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        headless: true,
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage', // ⬅️ THIS IS THE MAGIC BULLET FOR RAILWAY
+            '--disable-accelerated-2d-canvas', // ⬅️ Turns off heavy graphics
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu' // ⬅️ No GPU in Railway containers anyway
+        ],
         handleSIGINT: false,
         protocolTimeout: 0 
     }
+});
+
+// --- ADD THESE NEW LISTENERS RIGHT BELOW IT ---
+// These will act as alarms if the connection drops in the background!
+client.on('disconnected', (reason) => {
+    console.log('❌ WhatsApp Disconnected!', reason);
+});
+
+client.on('auth_failure', msg => {
+    console.error('❌ Authentication failed!', msg);
 });
 
 client.on('qr', (qr) => {
