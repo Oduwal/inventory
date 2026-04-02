@@ -1,6 +1,8 @@
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const axios = require('axios'); // For sending data back to Python
+
 console.log('🚀 Booting up Clawbot...');
 
 const app = express();
@@ -10,12 +12,12 @@ app.use(express.json());
 const groupCache = new Map();
 let isCaching = false;
 
-// Initialize the Clawbot (with infinite timeout to prevent crashes on large accounts)
+// Initialize the Clawbot
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        protocolTimeout: 9999999 // Disables the 3-minute crash limit
+        protocolTimeout: 9999999 
     }
 });
 
@@ -33,59 +35,123 @@ client.on('qr', (qr) => {
 client.on('ready', async () => {
     console.log('✅ Clawbot is online and linked to WhatsApp!');
     
-    // Build the cache in the background so API requests are INSTANT
-    console.log('⏳ Pre-loading groups into memory... (This might take a few minutes on large accounts)');
     isCaching = true;
     try {
+        console.log('⏳ Performing Targeted Sync for high-priority groups...');
         const chats = await client.getChats();
-        let groupCount = 0;
-        for (const chat of chats) {
+        
+        // 1. Prioritize the top 40 most recent chats (where your active group is)
+        const priorityLimit = Math.min(chats.length, 40);
+        for (let i = 0; i < priorityLimit; i++) {
+            const chat = chats[i];
             if (chat.isGroup) {
                 groupCache.set(chat.name, chat.id._serialized);
-                groupCount++;
+                console.log(`🎯 Priority Group Cached: "${chat.name}"`);
             }
         }
-        console.log(`✅ Background sync complete! Loaded ${groupCount} groups into memory.`);
+
+        console.log(`✅ Priority sync complete! Recent groups are now "Fast Path".`);
+        isCaching = false; // Unlock the API for the main groups immediately
+
+        // 2. Quietly load the rest of the archive in the background
+        if (chats.length > priorityLimit) {
+            console.log(`📦 Background syncing remaining ${chats.length - priorityLimit} chats...`);
+            for (let i = priorityLimit; i < chats.length; i++) {
+                const chat = chats[i];
+                if (chat.isGroup) {
+                    groupCache.set(chat.name, chat.id._serialized);
+                }
+            }
+            console.log(`🏁 Full history sync finished.`);
+        }
     } catch (err) {
-        console.error('❌ Background sync failed. Try restarting the bot in Railway.', err);
-    } finally {
+        console.error('❌ Sync failed:', err);
         isCaching = false;
     }
 });
 
-// Our custom API endpoint that Python will call
-app.post('/send-group-feedback', async (req, res) => {
-    const { groupName, message } = req.body;
-    console.log(`\n📥 Received request to message group: "${groupName}"`);
+// NEW: Listener for incoming comments/tags in the group
+client.on('message', async (msg) => {
+    if (msg.hasQuotedMsg) {
+        try {
+            const quotedMsg = await msg.getQuotedMessage();
+            // Regex to find "Order #123" or "Order#123"
+            const orderMatch = quotedMsg.body.match(/Order\s?#(\d+)/i);
+            
+            if (orderMatch) {
+                const orderId = orderMatch[1];
+                const sender = msg.author || msg.from;
+                const comment = msg.body;
 
-    // FAST PATH: If the group is already in memory, send instantly!
+                console.log(`\n🔔 New comment on Order #${orderId} from ${sender}: "${comment}"`);
+
+                // Send to Python Webhook (Update this URL to your Python Railway Public URL)
+                await axios.post("https://inventory-production-d41e.up.railway.app/api/whatsapp-webhook", {
+                    order_id: orderId,
+                    comment: comment,
+                    sender_phone: sender
+                }).catch(e => console.log("Python Webhook not ready yet."));
+            }
+        } catch (e) {
+            console.log("Error processing quote:", e.message);
+        }
+    }
+});
+
+// API endpoint for Python to trigger replies
+app.post('/send-group-feedback', async (req, res) => {
+    const { groupName, message, orderId } = req.body;
+    console.log(`\n📥 Request: "${groupName}" | Ref: ${orderId}`);
+
+    const handleSend = async (groupId) => {
+        const chat = await client.getChatById(groupId);
+        const recentMessages = await chat.fetchMessages({ limit: 50 });
+        
+        let targetMessage = null;
+        for (let i = recentMessages.length - 1; i >= 0; i--) {
+            if (recentMessages[i].body && recentMessages[i].body.includes(orderId)) {
+                targetMessage = recentMessages[i];
+                break;
+            }
+        }
+
+        if (targetMessage) {
+            console.log(`✅ Quoting original message for ${orderId}`);
+            await targetMessage.reply(message);
+        } else {
+            console.log(`⚠️ No original message found. Sending fresh message.`);
+            await client.sendMessage(groupId, message);
+        }
+    };
+
     if (groupCache.has(groupName)) {
         try {
-            const groupId = groupCache.get(groupName);
-            console.log(`✅ Found group "${groupName}" in memory! Sending message...`);
-            await client.sendMessage(groupId, message);
-            console.log(`🚀 Message dropped successfully!`);
-            return res.status(200).json({ success: true, message: `Sent to ${groupName}` });
+            await handleSend(groupCache.get(groupName));
+            return res.status(200).json({ success: true });
         } catch (error) {
-            console.error('❌ Crash while sending message:', error);
             return res.status(500).json({ success: false, error: error.toString() });
         }
     }
 
-    // If it's not in memory, check if the bot is still downloading history
-    if (isCaching) {
-        console.log(`⚠️ Bot is still syncing chats in the background. Rejecting request.`);
-        return res.status(503).json({ success: false, error: "The bot is still syncing your WhatsApp chats. Please wait 2-3 minutes and try again." });
-    }
+    if (isCaching) return res.status(503).json({ success: false, error: "Syncing..." });
 
-    // If it's not in memory and downloading is finished, the group doesn't exist.
-    console.log(`❌ Could not find a group named "${groupName}".`);
-    return res.status(404).json({ success: false, error: `Group '${groupName}' not found. Make sure the name matches exactly.` });
-}); 
+    // Final Fallback: Live check
+    try {
+        const chats = await client.getChats();
+        const target = chats.find(c => c.isGroup && c.name === groupName);
+        if (target) {
+            groupCache.set(groupName, target.id._serialized);
+            await handleSend(target.id._serialized);
+            return res.status(200).json({ success: true });
+        }
+        res.status(404).json({ success: false, error: "Group not found" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.toString() });
+    }
+});
 
 client.initialize();
 
-// Tell the bot to use Railway's assigned port, and listen on the internal network
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🤖 Clawbot API listening on port ${PORT}`);
