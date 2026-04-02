@@ -608,6 +608,15 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT ''")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_delivery_id ON call_logs (delivery_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_call_logs_created_at ON call_logs (created_at)")
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS wa_comments (
+            id           """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            delivery_id  INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            direction    VARCHAR(10) DEFAULT 'inbound',
+            sender       VARCHAR(80) DEFAULT '',
+            body         TEXT NOT NULL,
+            created_at   TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_comments_delivery_id ON wa_comments (delivery_id)")
 
 
 def seed_admin_if_missing() -> None:
@@ -2900,6 +2909,10 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             text("SELECT id, request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
             {"rid": pending_adj.id}
         ).fetchall()
+    wa_comments = db.execute(
+        text("SELECT direction, sender, body, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        {"did": d.id}
+    ).fetchall()
     return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": float(col), "expense_total": float(exp),
@@ -2907,6 +2920,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
         "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
         "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
         "pending_adj": pending_adj, "adj_items": adj_items,
+        "wa_comments": wa_comments,
     })
 
 
@@ -5878,9 +5892,10 @@ from sqlalchemy.orm import Session
 @app.post("/api/agent-feedback")
 async def send_agent_feedback(
     delivery_id: int = Form(...),
-    group_name: str = Form(...), 
     issue_type: str = Form(...),
-    db: Session = Depends(get_db)  # <-- This fixes the database crash!
+    custom_message: str = Form(""),
+    group_name: str = Form(""),
+    db: Session = Depends(get_db)
 ):
     # 1. Fetch the delivery from the database
     delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
@@ -5902,10 +5917,13 @@ async def send_agent_feedback(
         "NOT_PICKING":      f"📵 *Update: Customer Not Reachable*\nOrder #{delivery.id} - {delivery.customer_name}\nWe are unable to reach the customer. Please advise.",
         "DELIVERED":        f"✅ *Update: Delivered*\nOrder #{delivery.id} - {delivery.customer_name}\nOrder has been successfully delivered. Thank you!",
     }
-    message = update_templates.get(
-        issue_type,
-        f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
-    )
+    if issue_type == "CUSTOM" and custom_message.strip():
+        message = f"💬 *Note from Agent*\nOrder #{delivery.id} - {delivery.customer_name}\n{custom_message.strip()}"
+    else:
+        message = update_templates.get(
+            issue_type,
+            f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
+        )
 
     # 3. Send the command to your Clawbot via the Railway Internal URL
     try:
@@ -5924,6 +5942,12 @@ async def send_agent_feedback(
             )
             data = resp.json()
             if data.get("success"):
+                # Save outbound message so it shows on the delivery page
+                db.execute(text(
+                    "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+                    "VALUES (:did, 'outbound', 'Agent', :body, NOW())"
+                ), {"did": delivery.id, "body": message})
+                db.commit()
                 return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
             else:
                 return JSONResponse({"status": "error", "message": data.get("error")})
@@ -5934,21 +5958,35 @@ async def send_agent_feedback(
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     order_id = data.get("order_id")
-    comment = data.get("comment")
-    sender = data.get("sender_phone")
+    comment  = data.get("comment", "").strip()
+    sender   = data.get("sender_phone", "")
 
-    # 1. Find the delivery in the database
+    if not order_id or not comment:
+        return {"status": "ignored"}
+
     delivery = db.query(Delivery).filter(Delivery.id == order_id).first()
-    
-    if delivery and delivery.agent_id:
-        # 2. Trigger a notification for the specific Agent assigned to this order
-        # Assuming you have a notify_user function for your Web Push/Dashboard notifications
-        await create_notification(
-            user_id=delivery.agent_id,
-            title=f"New Comment on Order #{order_id}",
-            message=f"Someone replied in the group: '{comment}'",
-            link=f"/deliveries/{order_id}"
-        )
-        print(f"Agent {delivery.agent_id} notified of comment on Order {order_id}")
-    
+    if not delivery:
+        return {"status": "not_found"}
+
+    # Save inbound reply to wa_comments
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'inbound', :sender, :body, NOW())"
+    ), {"did": delivery.id, "sender": sender, "body": comment})
+    db.commit()
+
+    notif_title = f"💬 Seller Reply on Order #{order_id}"
+    notif_msg   = f"{sender or 'Seller'}: {comment[:120]}"
+    notif_link  = f"/deliveries/{order_id}"
+
+    # Notify the assigned agent
+    if delivery.agent_id:
+        await create_notification(user_id=delivery.agent_id, title=notif_title, message=notif_msg, link=notif_link)
+
+    # Also notify all admins so nothing is missed
+    admin_ids = db.execute(text("SELECT id FROM users WHERE role='ADMIN'")).scalars().all()
+    for aid in admin_ids:
+        if aid != delivery.agent_id:
+            await create_notification(user_id=aid, title=notif_title, message=notif_msg, link=notif_link)
+
     return {"status": "received"}

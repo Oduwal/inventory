@@ -60,6 +60,13 @@
           ✅ Delivered
         </button>
       </div>
+      <div style="margin-top:10px;display:flex;gap:6px;">
+        <textarea id="wa-custom-msg-{{ d.id }}" rows="2" placeholder="Type a custom message to the seller group…"
+          style="flex:1;background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:7px 10px;resize:none;font-family:inherit;"></textarea>
+        <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 10px;align-self:stretch;">
+          Send
+        </button>
+      </div>
       <div id="wa-update-status" style="font-size:12px;margin-top:8px;min-height:18px;"></div>
     </div>
   </div>
@@ -404,6 +411,27 @@
   </div>
 </div>
 
+{% if wa_comments %}
+<div class="card" style="margin-top:16px;">
+  <div class="badge b-blue" style="margin-bottom:14px;">💬 SELLER GROUP CHAT</div>
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    {% for c in wa_comments %}
+    <div style="display:flex;gap:10px;align-items:flex-start;{% if c.direction=='outbound' %}flex-direction:row-reverse;{% endif %}">
+      <div style="width:28px;height:28px;border-radius:50%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.2){% else %}rgba(34,197,94,.15){% endif %};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">
+        {% if c.direction=='outbound' %}🤖{% else %}💬{% endif %}
+      </div>
+      <div style="max-width:80%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.08){% else %}rgba(255,255,255,.04){% endif %};border:1px solid var(--border);border-radius:10px;padding:8px 12px;">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-family:var(--font-mono);">
+          {% if c.direction=='outbound' %}Agent → Group{% else %}{{ c.sender or 'Seller' }} → You{% endif %}&nbsp;·&nbsp;{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}
+        </div>
+        <div style="font-size:13px;white-space:pre-wrap;">{{ c.body }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <script>
 function addRejectionNote(form) {
   const note = prompt('Reason for rejection (optional):') || '';
@@ -417,15 +445,26 @@ async function sendWaUpdate(deliveryId, issueType) {
         'CALLED_CUSTOMER':  'Called Customer',
         'NOT_PICKING':      'Customer Not Picking',
         'DELIVERED':        'Delivered',
+        'CUSTOM':           'Custom message',
     };
     const statusEl = document.getElementById('wa-update-status');
+    const customEl = document.getElementById('wa-custom-msg-' + deliveryId);
+    const customText = customEl ? customEl.value.trim() : '';
+
+    if (issueType === 'CUSTOM' && !customText) {
+        statusEl.style.color = '#f59e0b';
+        statusEl.textContent = '⚠️ Please type a message first.';
+        return;
+    }
+
     statusEl.style.color = 'var(--muted)';
     statusEl.textContent = '⏳ Sending...';
 
     const formData = new FormData();
     formData.append("delivery_id", deliveryId);
-    formData.append("group_name", "");
     formData.append("issue_type", issueType);
+    formData.append("custom_message", customText);
+    formData.append("group_name", "");
 
     try {
         const response = await fetch('/api/agent-feedback', { method: 'POST', body: formData });
@@ -433,6 +472,7 @@ async function sendWaUpdate(deliveryId, issueType) {
         if (result.status === "success") {
             statusEl.style.color = '#22c55e';
             statusEl.textContent = '✅ "' + labels[issueType] + '" sent to seller group!';
+            if (issueType === 'CUSTOM' && customEl) customEl.value = '';
         } else {
             statusEl.style.color = '#f87171';
             statusEl.textContent = '❌ ' + result.message;
