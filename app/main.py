@@ -6112,7 +6112,7 @@ async def send_agent_feedback(
                 )
             db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group})
             db.commit()  # <--- THIS IS THE MISSING MAGIC LINE!
-            
+
         # Save outbound comment for the chat thread UI
         db.execute(text(
             f"INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
@@ -6157,49 +6157,60 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     _log = logging.getLogger("wa_webhook")
 
-    # ── Step 1: O(1) lookup by quoted message ID ──────────────────────────
+    import re
     order_id = None
-    row = db.execute(text(
-        "SELECT order_id FROM whatsapp_outbound_map WHERE message_id = :mid"
-    ), {"mid": quoted_msg_id}).first() if quoted_msg_id else None
-    if row:
-        order_id = row[0]  # Safe index access
-        _log.info("Matched by message_id → Order #%s", order_id)
 
-    # ── Step 2: Fallback — match quoted body by customer name/phone ───────
-    # Seller quoted the original order post but it wasn't cached yet (bot
-    # was offline when it was posted). Extract name/phone from the quoted
-    # body and fuzzy-match against active deliveries.
+    # ── Step 0: Direct Regex Match (100% Bulletproof) ─────────────────
+    # Check if the seller typed "Order 123" or quoted a bot message saying "Order #123"
+    combined_text = f"{reply_text} {quoted_msg_body}"
+    direct_match = re.search(r'order\s*#?\s*(\d+)', combined_text, re.IGNORECASE)
+    if direct_match:
+        extracted_id = int(direct_match.group(1))
+        valid = db.execute(text("SELECT id FROM deliveries WHERE id = :oid"), {"oid": extracted_id}).first()
+        if valid:
+            order_id = extracted_id
+            _log.info("Matched by explicit text regex → Order #%s", order_id)
+
+    # ── Step 1: O(1) lookup by quoted message ID ──────────────────────
+    if not order_id and quoted_msg_id:
+        row = db.execute(text(
+            "SELECT order_id FROM whatsapp_outbound_map WHERE message_id = :mid"
+        ), {"mid": quoted_msg_id}).first()
+        if row:
+            order_id = row[0]
+            _log.info("Matched by message_id → Order #%s", order_id)
+
+    # ── Step 2: Fallback — strict phone match ─────────────────────────
     if not order_id and quoted_msg_body:
-        _log.info("ID lookup missed — trying name/phone match on quoted body")
-        phone_m = __import__('re').search(r'(?:\+?234|0)[789]\d[\s\-]?\d{3,4}[\s\-]?\d{3,4}', quoted_msg_body)
+        _log.info("ID lookup missed — trying strict phone match on quoted body")
+        phone_m = re.search(r'(?:\+?234|0)[789]\d[\s\-]?\d{3,4}[\s\-]?\d{3,4}', quoted_msg_body)
         qphone  = phone_m.group(0).replace(' ', '').replace('-', '') if phone_m else ''
         qphone_digits = qphone.replace('+234', '0')[-10:] if qphone else ''
 
-        candidates = db.execute(text(
-            "SELECT id, customer_name, customer_phone FROM deliveries "
-            "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY created_at DESC LIMIT 200"
-        )).fetchall()
+        if qphone_digits:
+            candidates = db.execute(text(
+                "SELECT id, customer_phone FROM deliveries "
+                "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY id DESC LIMIT 200"
+            )).fetchall()
 
-        for c in candidates:
-            c_id, c_name, c_phone = c[0], c[1], c[2]
-            db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
-            if qphone_digits and db_phone and qphone_digits == db_phone:
-                order_id = c_id
-                _log.info("Matched by phone in quoted body → Order #%s", order_id)
-                # Cache this ID so future replies hit O(1) path
-                if quoted_msg_id:
-                    now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
-                    conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
-                    try:
-                        db.execute(text(
-                            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
-                            f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
-                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
-                        db.commit()
-                    except Exception:
-                        pass
-                break
+            for c in candidates:
+                c_id, c_phone = c[0], c[1]
+                db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
+                if db_phone and qphone_digits == db_phone:
+                    order_id = c_id
+                    _log.info("Matched by phone in quoted body → Order #%s", order_id)
+                    if quoted_msg_id:
+                        now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+                        conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
+                        try:
+                            db.execute(text(
+                                f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
+                                f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
+                            ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
+                            db.commit()
+                        except Exception:
+                            pass
+                    break
 
     if not order_id:
         _log.warning("Could not match reply to any delivery — quoted_id=%s", quoted_msg_id)
@@ -6299,16 +6310,24 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         db_name  = (r_name or "").lower()
         db_phone = (r_phone or "").replace(" ", "").replace("-", "")
 
-        # Phone match — last 8 digits (handles country code variations)
-        if customer_phone and db_phone:
-            if customer_phone[-8:] == db_phone[-8:]:
+        # 🛡️ THE ANTI-STEAL SAFEGUARD: 
+        # If this order ALREADY has an original group message linked to it, DO NOT steal it.
+        has_group_msg = db.execute(text(
+            "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND source = 'group'"
+        ), {"oid": r_id}).first()
+        if has_group_msg:
+            continue
+
+        # Strict Phone match (Require 10 digits to prevent accidental cross-matching)
+        if customer_phone and db_phone and len(customer_phone) >= 10:
+            if customer_phone[-10:] == db_phone[-10:]:
                 matched_order_id = r_id
                 break
 
-        # Name match — all words in extracted name must appear in db name or vice versa
-        if customer_name and db_name:
+        # Strict Name match
+        if customer_name and db_name and len(customer_name) > 3:
             words = [w for w in customer_name.split() if len(w) > 2]
-            if words and all(w in db_name for w in words):
+            if (words and all(w in db_name for w in words)) or customer_name == db_name:
                 matched_order_id = r_id
                 break
 
