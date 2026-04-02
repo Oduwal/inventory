@@ -447,6 +447,27 @@
 
   const es = new EventSource(`/api/stream/${delivId}`);
 
+  // Request browser notification permission on page load
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  // Audible ping using Web Audio API — no sound file needed
+  function playPing() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.4);
+    } catch(_) {}
+  }
+
   es.addEventListener('wa_comment', function(e) {
     // Remove empty-state placeholder on first real message
     const empty = document.getElementById('wa-empty-state');
@@ -457,13 +478,36 @@
     thread.appendChild(div.firstElementChild || div);
     thread.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-    // Flash the live dot to signal a new message arrived
+    // Flash live dot amber
     liveDot.style.background = '#f59e0b';
     liveDot.style.boxShadow  = '0 0 8px #f59e0b';
     setTimeout(() => {
       liveDot.style.background = '#22c55e';
       liveDot.style.boxShadow  = '0 0 6px #22c55e';
-    }, 1500);
+    }, 2000);
+
+    // Audible ping
+    playPing();
+
+    // Browser notification (works even if agent has scrolled away on the page)
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('💬 Seller replied — Order #{{ d.id }}', {
+        body: 'New message in seller group chat',
+        icon: '/static/icon-192.png',
+        tag:  'wa-reply-{{ d.id }}',   // replaces previous notification, no spam
+      });
+    }
+
+    // Also flash the page title so agent sees it in other tabs
+    let _titleFlash = null;
+    const orig = document.title;
+    let on = true;
+    clearInterval(_titleFlash);
+    _titleFlash = setInterval(() => {
+      document.title = on ? '🔔 Seller replied!' : orig;
+      on = !on;
+    }, 800);
+    setTimeout(() => { clearInterval(_titleFlash); document.title = orig; }, 8000);
   });
 
   es.onerror = function() {

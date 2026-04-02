@@ -106,35 +106,60 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 /**
- * Ask Gemini to extract customer name and phone number from a WhatsApp group message.
- * Returns { customer_name, customer_phone } — either field may be null if not found.
- * Falls back gracefully if GEMINI_KEY is missing or the call fails.
+ * Extract customer name and phone from a group message.
+ * Primary: Gemini AI (handles any format/language).
+ * Fallback: regex — catches Nigerian phone numbers and the line before/after them as name.
+ * This ensures matching works even without GEMINI_API_KEY on the bot service.
  */
 async function extractCustomerInfo(text) {
-    if (!GEMINI_KEY) return { customer_name: null, customer_phone: null };
-    try {
-        const prompt =
-            `You are reading a message from a Nigerian logistics WhatsApp group. ` +
-            `The message is a delivery order posted by a seller or dispatcher.\n\n` +
-            `Message:\n"${text}"\n\n` +
-            `Extract the CUSTOMER name and CUSTOMER phone number from this message. ` +
-            `The customer is the person receiving the delivery (not the sender/seller). ` +
-            `Reply ONLY with valid JSON, no markdown:\n` +
-            `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
+    // ── Gemini path ────────────────────────────────────────────────────────
+    if (GEMINI_KEY) {
+        try {
+            const prompt =
+                `You are reading a message from a Nigerian logistics WhatsApp group. ` +
+                `The message is a delivery order posted by a seller or dispatcher.\n\n` +
+                `Message:\n"${text}"\n\n` +
+                `Extract the CUSTOMER name and CUSTOMER phone number from this message. ` +
+                `The customer is the person receiving the delivery (not the sender/seller). ` +
+                `Reply ONLY with valid JSON, no markdown:\n` +
+                `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
 
-        const resp = await axios.post(
-            `${GEMINI_URL}?key=${GEMINI_KEY}`,
-            { contents: [{ role: 'user', parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 60 } },
-            { timeout: 6000 }
-        );
-        const raw = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
-        const clean = raw.startsWith('```') ? raw.replace(/```[a-z]*\n?/g, '').trim() : raw;
-        return JSON.parse(clean);
-    } catch (e) {
-        console.log('⚠️  Gemini extract failed:', e.message);
-        return { customer_name: null, customer_phone: null };
+            const resp = await axios.post(
+                `${GEMINI_URL}?key=${GEMINI_KEY}`,
+                { contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                  generationConfig: { temperature: 0, maxOutputTokens: 60 } },
+                { timeout: 6000 }
+            );
+            const raw   = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+            const clean = raw.startsWith('```') ? raw.replace(/```[a-z]*\n?/g, '').trim() : raw;
+            const result = JSON.parse(clean);
+            if (result.customer_name || result.customer_phone) {
+                console.log(`🤖 Gemini → name:"${result.customer_name}" phone:"${result.customer_phone}"`);
+                return result;
+            }
+        } catch (e) {
+            console.log('⚠️  Gemini extract failed:', e.message, '— falling back to regex');
+        }
     }
+
+    // ── Regex fallback — works without GEMINI_API_KEY ──────────────────────
+    // Nigerian phones: 07x, 08x, 09x, +234, 0-803 etc. (10-11 digits)
+    const phoneMatch = text.match(/(?:\+?234|0)[\s\-]?[789]\d[\s\-]?\d{3,4}[\s\-]?\d{3,4}/);
+    const customer_phone = phoneMatch ? phoneMatch[0].replace(/\D/g, '') : null;
+
+    // Name heuristic: first non-empty line that looks like a name
+    // (2+ words, mostly letters, not a label like "Phone:", "Address:")
+    const SKIP = /^(phone|address|item|product|qty|quantity|note|location|area|delivery|order|price|amount|date)/i;
+    let customer_name = null;
+    for (const line of text.split(/\n|\r/)) {
+        const t = line.trim();
+        if (!t || SKIP.test(t)) continue;
+        const words = t.split(/\s+/).filter(w => /^[A-Za-z'-]{2,}$/.test(w));
+        if (words.length >= 2) { customer_name = t; break; }
+    }
+
+    console.log(`🔍 Regex → name:"${customer_name}" phone:"${customer_phone}"`);
+    return { customer_name, customer_phone };
 }
 
 // ─────────────────────────────────────────────

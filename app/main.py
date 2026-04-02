@@ -6064,11 +6064,20 @@ async def send_agent_feedback(
         # and inbound replies can be routed back to this order in O(1).
         new_msg_id = data.get("message_id", "")
         now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+        is_sqlite = DATABASE_URL.startswith("sqlite")
         if new_msg_id:
-            db.execute(text(
-                f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-                f"VALUES (:mid, :oid, :body, 'bot', {now_sql})"
-            ), {"mid": new_msg_id, "oid": delivery.id, "body": message})
+            if is_sqlite:
+                upsert_sql = (
+                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', {now_sql})"
+                )
+            else:
+                upsert_sql = (
+                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+                    f"VALUES (:mid, :oid, :body, 'bot', {now_sql}) "
+                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source"
+                )
+            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message})
 
         # Save outbound comment for the chat thread UI
         db.execute(text(
@@ -6229,12 +6238,21 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         )
         return {"status": "no_match"}
 
-    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
-    # INSERT OR IGNORE — first seen wins; never overwrite the original post mapping
-    db.execute(text(
-        f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
-        f"VALUES (:mid, :oid, :body, 'group', {now_sql})"
-    ), {"mid": message_id, "oid": matched_order_id, "body": body})
+    now_sql   = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    # First seen wins — never overwrite the original group post mapping
+    if is_sqlite:
+        ignore_sql = (
+            f"INSERT OR IGNORE INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', {now_sql})"
+        )
+    else:
+        ignore_sql = (
+            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', {now_sql}) "
+            f"ON CONFLICT (message_id) DO NOTHING"
+        )
+    db.execute(text(ignore_sql), {"mid": message_id, "oid": matched_order_id, "body": body})
     db.commit()
 
     logging.getLogger("cache_wa").info(
