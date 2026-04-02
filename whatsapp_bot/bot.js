@@ -1,96 +1,67 @@
 const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const axios = require('axios'); // For sending data back to Python
+const axios = require('axios');
 
 console.log('🚀 Booting up Clawbot...');
 
 const app = express();
 app.use(express.json());
 
-// Memory cache to hold Group IDs for instant messaging
-const groupCache = new Map();
-let isCaching = false;
+// --- CONFIGURATION ---
+// 1. Once you see the ID in the logs, paste it here (e.g. "120363042123456789@g.us")
+const SAVED_GROUP_ID = "PASTE_YOUR_ID_HERE_LATER"; 
 
-// Initialize the Clawbot
+// 2. Your Python Dashboard URL
+const PYTHON_APP_URL = "https://inventory-production-d41e.up.railway.app";
+
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        protocolTimeout: 9999999 
+        handleSIGINT: false,
+        protocolTimeout: 0 
     }
 });
 
-// Generate QR Code for the Admin to scan
+// --- QR CODE STRATEGY ---
 client.on('qr', (qr) => {
     console.log('\n=========================================================');
     console.log('🤖 SCAN THIS QR CODE TO LINK THE BOT:');
     qrcode.generate(qr, { small: true });
-    console.log('\n⚠️ IF THE TERMINAL CODE ABOVE DOES NOT SCAN, CLICK THIS LINK FOR A PERFECT IMAGE:');
+    console.log('\n⚠️ LINK FOR PERFECT IMAGE:');
     console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
     console.log('=========================================================\n');
 });
 
-// When the bot successfully logs in
-client.on('ready', async () => {
-    console.log('✅ Clawbot is online and linked to WhatsApp!');
-    
-    isCaching = true;
-    try {
-        console.log('⏳ Performing Targeted Sync for high-priority groups...');
-        const chats = await client.getChats();
-        
-        // 1. Prioritize the top 40 most recent chats (where your active group is)
-        const priorityLimit = Math.min(chats.length, 40);
-        for (let i = 0; i < priorityLimit; i++) {
-            const chat = chats[i];
-            if (chat.isGroup) {
-                groupCache.set(chat.name, chat.id._serialized);
-                console.log(`🎯 Priority Group Cached: "${chat.name}"`);
-            }
-        }
-
-        console.log(`✅ Priority sync complete! Recent groups are now "Fast Path".`);
-        isCaching = false; // Unlock the API for the main groups immediately
-
-        // 2. Quietly load the rest of the archive in the background
-        if (chats.length > priorityLimit) {
-            console.log(`📦 Background syncing remaining ${chats.length - priorityLimit} chats...`);
-            for (let i = priorityLimit; i < chats.length; i++) {
-                const chat = chats[i];
-                if (chat.isGroup) {
-                    groupCache.set(chat.name, chat.id._serialized);
-                }
-            }
-            console.log(`🏁 Full history sync finished.`);
-        }
-    } catch (err) {
-        console.error('❌ Sync failed:', err);
-        isCaching = false;
-    }
+client.on('ready', () => {
+    console.log('✅ Clawbot is ONLINE and ready. No heavy sync needed.');
 });
 
-// NEW: Listener for incoming comments/tags in the group
+// --- THE LISTENER (Hear comments & find Group ID) ---
 client.on('message', async (msg) => {
+    const chat = await msg.getChat();
+    
+    // LOG EVERYTHING: This helps you find the ID for "BRO'S😎"
+    if (chat.isGroup) {
+        console.log(`🔍 Activity in Group: "${chat.name}" | ID: ${chat.id._serialized}`);
+    }
+
+    // Two-Way Sync: If someone replies to an order message
     if (msg.hasQuotedMsg) {
         try {
             const quotedMsg = await msg.getQuotedMessage();
-            // Regex to find "Order #123" or "Order#123"
             const orderMatch = quotedMsg.body.match(/Order\s?#(\d+)/i);
             
             if (orderMatch) {
                 const orderId = orderMatch[1];
-                const sender = msg.author || msg.from;
-                const comment = msg.body;
+                console.log(`🔔 Found comment on Order #${orderId}. Notifying Python...`);
 
-                console.log(`\n🔔 New comment on Order #${orderId} from ${sender}: "${comment}"`);
-
-                // Send to Python Webhook (Update this URL to your Python Railway Public URL)
-                await axios.post("https://inventory-production-d41e.up.railway.app/api/whatsapp-webhook", {
+                await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id: orderId,
-                    comment: comment,
-                    sender_phone: sender
-                }).catch(e => console.log("Python Webhook not ready yet."));
+                    comment: msg.body,
+                    sender_phone: msg.author || msg.from
+                }).catch(e => console.log("⚠️ Python Webhook error (Check your Python URL/Route)"));
             }
         } catch (e) {
             console.log("Error processing quote:", e.message);
@@ -98,55 +69,40 @@ client.on('message', async (msg) => {
     }
 });
 
-// API endpoint for Python to trigger replies
+// --- THE SENDER (Triggered by your Dashboard) ---
 app.post('/send-group-feedback', async (req, res) => {
     const { groupName, message, orderId } = req.body;
-    console.log(`\n📥 Request: "${groupName}" | Ref: ${orderId}`);
+    console.log(`\n📥 Outbound Request for ${orderId}`);
 
-    const handleSend = async (groupId) => {
-        const chat = await client.getChatById(groupId);
-        const recentMessages = await chat.fetchMessages({ limit: 50 });
+    try {
+        let groupId = SAVED_GROUP_ID;
         
-        let targetMessage = null;
-        for (let i = recentMessages.length - 1; i >= 0; i--) {
-            if (recentMessages[i].body && recentMessages[i].body.includes(orderId)) {
-                targetMessage = recentMessages[i];
-                break;
-            }
+        // Dynamic find if ID isn't hardcoded yet
+        if (groupId === "PASTE_YOUR_ID_HERE_LATER") {
+            const chats = await client.getChats();
+            const target = chats.find(c => c.name === groupName);
+            if (!target) return res.status(404).json({ error: "Group ID not found. Send a message to the group on your phone first." });
+            groupId = target.id._serialized;
         }
 
-        if (targetMessage) {
-            console.log(`✅ Quoting original message for ${orderId}`);
-            await targetMessage.reply(message);
+        const chat = await client.getChatById(groupId);
+        const messages = await chat.fetchMessages({ limit: 50 });
+        
+        // Search for the original message bubble to reply to
+        const targetMsg = messages.reverse().find(m => m.body && m.body.includes(orderId));
+
+        if (targetMsg) {
+            console.log(`✅ Replying to original Order ${orderId} message.`);
+            await targetMsg.reply(message);
         } else {
-            console.log(`⚠️ No original message found. Sending fresh message.`);
+            console.log(`⚠️ Order ${orderId} not found in recent chat. Sending fresh message.`);
             await client.sendMessage(groupId, message);
         }
-    };
-
-    if (groupCache.has(groupName)) {
-        try {
-            await handleSend(groupCache.get(groupName));
-            return res.status(200).json({ success: true });
-        } catch (error) {
-            return res.status(500).json({ success: false, error: error.toString() });
-        }
-    }
-
-    if (isCaching) return res.status(503).json({ success: false, error: "Syncing..." });
-
-    // Final Fallback: Live check
-    try {
-        const chats = await client.getChats();
-        const target = chats.find(c => c.isGroup && c.name === groupName);
-        if (target) {
-            groupCache.set(groupName, target.id._serialized);
-            await handleSend(target.id._serialized);
-            return res.status(200).json({ success: true });
-        }
-        res.status(404).json({ success: false, error: "Group not found" });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.toString() });
+        
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error("❌ Send Error:", error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
