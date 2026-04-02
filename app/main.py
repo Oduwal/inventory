@@ -5862,19 +5862,19 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     return PlainTextResponse("OK", status_code=200)
 
 import httpx
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 @app.post("/api/agent-feedback")
 async def send_agent_feedback(
     delivery_id: int = Form(...),
-    group_name: str = Form(...), # You can hardcode this or fetch it from your DB
-    issue_type: str = Form(...)
+    group_name: str = Form(...), 
+    issue_type: str = Form(...),
+    db: Session = Depends(get_db)  # <-- This fixes the database crash!
 ):
-    # 1. Fetch the delivery from the database (Using your existing DB logic)
-    db = SessionLocal()
+    # 1. Fetch the delivery from the database
     delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
-    db.close()
     
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
@@ -5887,7 +5887,7 @@ async def send_agent_feedback(
         f"Agent Note: The customer is currently unreachable or unavailable. Please advise."
     )
 
-    # 3. Send the command to your Clawbot (running on port 3000)
+    # 3. Send the command to your Clawbot via the Railway Internal URL
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
