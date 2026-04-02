@@ -6111,26 +6111,64 @@ async def send_agent_feedback(
 # ─────────────────────────────────────────────────────────────────
 @app.post("/api/whatsapp-webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
-    data             = await request.json()
-    quoted_msg_id    = data.get("quoted_message_id", "").strip()
-    reply_text       = data.get("reply_text", "").strip()
-    sender           = data.get("sender_phone", "")
+    data                = await request.json()
+    quoted_msg_id       = data.get("quoted_message_id", "").strip()
+    quoted_msg_body     = data.get("quoted_message_body", "").strip()
+    reply_text          = data.get("reply_text", "").strip()
+    sender              = data.get("sender_phone", "")
 
     if not reply_text:
         return {"status": "ignored"}
 
-    # O(1) lookup: find the delivery this message is replying to
+    _log = logging.getLogger("wa_webhook")
+
+    # ── Step 1: O(1) lookup by quoted message ID ──────────────────────────
+    order_id = None
     row = db.execute(text(
         "SELECT order_id FROM whatsapp_outbound_map WHERE message_id = :mid"
     ), {"mid": quoted_msg_id}).first() if quoted_msg_id else None
+    if row:
+        order_id = row.order_id
+        _log.info("Matched by message_id → Order #%s", order_id)
 
-    if not row:
-        logging.getLogger("wa_webhook").info(
-            "Unmatched quoted_message_id=%s — ignoring", quoted_msg_id
-        )
+    # ── Step 2: Fallback — match quoted body by customer name/phone ───────
+    # Seller quoted the original order post but it wasn't cached yet (bot
+    # was offline when it was posted). Extract name/phone from the quoted
+    # body and fuzzy-match against active deliveries.
+    if not order_id and quoted_msg_body:
+        _log.info("ID lookup missed — trying name/phone match on quoted body")
+        phone_m = __import__('re').search(r'(?:\+?234|0)[789]\d[\s\-]?\d{3,4}[\s\-]?\d{3,4}', quoted_msg_body)
+        qphone  = phone_m.group(0).replace(' ', '').replace('-', '') if phone_m else ''
+        qphone_digits = qphone.replace('+234', '0')[-10:] if qphone else ''
+
+        candidates = db.execute(text(
+            "SELECT id, customer_name, customer_phone FROM deliveries "
+            "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY created_at DESC LIMIT 200"
+        )).fetchall()
+
+        for c in candidates:
+            db_phone = (c.customer_phone or '').replace(' ', '').replace('-', '')[-10:]
+            if qphone_digits and db_phone and qphone_digits == db_phone:
+                order_id = c.id
+                _log.info("Matched by phone in quoted body → Order #%s", order_id)
+                # Cache this ID so future replies hit O(1) path
+                if quoted_msg_id:
+                    now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+                    conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
+                    try:
+                        db.execute(text(
+                            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, created_at) "
+                            f"VALUES (:mid, :oid, :body, 'group', {now_sql2}) {conflict}"
+                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body})
+                        db.commit()
+                    except Exception:
+                        pass
+                break
+
+    if not order_id:
+        _log.warning("Could not match reply to any delivery — quoted_id=%s", quoted_msg_id)
         return {"status": "unmatched"}
 
-    order_id = row.order_id
     delivery = db.query(Delivery).filter(Delivery.id == order_id).first()
     if not delivery:
         return {"status": "not_found"}

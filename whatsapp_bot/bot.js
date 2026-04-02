@@ -89,17 +89,25 @@ function extractText(msg) {
     );
 }
 
-/** Extract the quoted stanza ID if the message is a reply */
-function extractQuotedId(msg) {
+/** Extract quoted stanza ID AND the quoted message body */
+function extractQuoted(msg) {
     const m = msg.message;
-    if (!m) return null;
+    if (!m) return { id: null, body: null };
     const ctx =
         m.extendedTextMessage?.contextInfo ||
         m.imageMessage?.contextInfo ||
         m.videoMessage?.contextInfo ||
         m.documentMessage?.contextInfo ||
         null;
-    return ctx?.stanzaId || null;
+    if (!ctx) return { id: null, body: null };
+    const quotedMsg = ctx.quotedMessage;
+    const body = quotedMsg
+        ? (quotedMsg.conversation ||
+           quotedMsg.extendedTextMessage?.text ||
+           quotedMsg.imageMessage?.caption ||
+           quotedMsg.videoMessage?.caption || '')
+        : '';
+    return { id: ctx.stanzaId || null, body };
 }
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
@@ -178,21 +186,24 @@ async function handleInbound(msg) {
     if (!jid.includes(GROUP_JID.split('@')[0])) return;
     if (msg.key.fromMe) return;
 
-    const text     = extractText(msg);
-    const quotedId = extractQuotedId(msg);
-    const sender   = msg.key.participant || jid;
-    const msgId    = msg.key.id;
+    const text                  = extractText(msg);
+    const { id: quotedId,
+            body: quotedBody }  = extractQuoted(msg);
+    const sender                = msg.key.participant || jid;
+    const msgId                 = msg.key.id;
 
     if (!text) return;
     console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 80)}"`);
 
-    // B — seller replied to something
+    // B — seller replied to something; send the quoted body too so Python can
+    // fall back to name/phone matching if the quoted ID isn't in the map yet.
     if (quotedId) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
         axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
-            quoted_message_id: quotedId,
-            reply_text:        text,
-            sender_phone:      sender,
+            quoted_message_id:   quotedId,
+            quoted_message_body: quotedBody || '',
+            reply_text:          text,
+            sender_phone:        sender,
         }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
     }
