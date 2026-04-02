@@ -131,7 +131,7 @@ async function extractCustomerInfo(text) {
             const resp = await axios.post(
                 `${GEMINI_URL}?key=${GEMINI_KEY}`,
                 { contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                  generationConfig: { temperature: 0, maxOutputTokens: 60 } },
+                  generationConfig: { temperature: 0, maxOutputTokens: 1064 } },
                 { timeout: 6000 }
             );
             const raw   = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
