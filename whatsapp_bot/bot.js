@@ -200,7 +200,18 @@ const client = new Client({
 
 let clientReady = false;
 let latestQr    = null;
-const sendQueue = new Map(); // orderId → promise — deduplicates concurrent requests
+const sendQueue = new Map();
+
+/** Quick Puppeteer ping — returns false if the page/frame is in a bad state */
+async function isPageAlive() {
+    try {
+        if (!client.pupPage) return false;
+        await client.pupPage.evaluate(() => true);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
 
 client.on('qr', (qr) => {
     latestQr = qr;
@@ -421,6 +432,16 @@ app.post('/send-group-feedback', async (req, res) => {
     if (!clientReady) {
         console.log('⚠️  Client not ready yet — rejecting request.');
         return res.status(503).json({ success: false, error: 'WhatsApp client not ready. Try again in a moment.' });
+    }
+
+    // Guard: ping the Puppeteer page before any send attempt.
+    // Catches detached-frame state before it causes an error mid-send.
+    if (!await isPageAlive()) {
+        console.log('⚠️  Page unresponsive — triggering reconnect.');
+        clientReady = false;
+        try { await client.destroy(); } catch (_) {}
+        startClient();
+        return res.status(503).json({ success: false, error: 'WhatsApp page restarting — try again in a moment.' });
     }
 
     // Deduplicate: if a send is already in progress for this order, wait for it
