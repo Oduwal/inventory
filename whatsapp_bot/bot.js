@@ -135,6 +135,12 @@ loadCache();
 // ─────────────────────────────────────────────
 const client = new Client({
     authStrategy: new LocalAuth(),
+    // Pin a stable WhatsApp Web version — prevents mid-session navigation
+    // that destroys the Puppeteer execution context
+    webVersionCache: {
+        type: 'local',
+        strict: false,
+    },
     puppeteer: {
         headless: true,
         args: [
@@ -145,11 +151,17 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--disable-gpu',
-            '--single-process',          // critical for low-RAM containers
+            '--single-process',
             '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--no-default-browser-check',
+            '--window-size=1280,720',
         ],
         handleSIGINT: false,
-        protocolTimeout: 0,
+        protocolTimeout: 60000,   // 60s — not infinite (0 was causing hangs)
+        defaultViewport: null,
     }
 });
 
@@ -224,7 +236,7 @@ app.use(express.json());
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
-        cachedOrders: messageCache.size,
+        cachedOrders: orderIdIndex.size,
         waConnected: client.info ? true : false,
     });
 });
@@ -301,7 +313,16 @@ app.post('/send-group-feedback', async (req, res) => {
 // ─────────────────────────────────────────────
 // BOOT
 // ─────────────────────────────────────────────
-client.initialize();
+async function startClient(attempt = 1) {
+    try {
+        await client.initialize();
+    } catch (e) {
+        const wait = Math.min(attempt * 5000, 30000); // 5s → 10s → 15s … max 30s
+        console.log(`⚠️  Initialize failed (attempt ${attempt}): ${e.message}. Retrying in ${wait / 1000}s...`);
+        setTimeout(() => startClient(attempt + 1), wait);
+    }
+}
+startClient();
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
