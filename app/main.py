@@ -5906,3 +5906,26 @@ async def send_agent_feedback(
                 return JSONResponse({"status": "error", "message": data.get("error")})
     except Exception as e:
         return JSONResponse({"status": "error", "message": f"Clawbot is offline: {str(e)}"})
+
+@app.post("/api/whatsapp-webhook")
+async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
+    data = await request.json()
+    order_id = data.get("order_id")
+    comment = data.get("comment")
+    sender = data.get("sender_phone")
+
+    # 1. Find the delivery in the database
+    delivery = db.query(Delivery).filter(Delivery.id == order_id).first()
+    
+    if delivery and delivery.agent_id:
+        # 2. Trigger a notification for the specific Agent assigned to this order
+        # Assuming you have a notify_user function for your Web Push/Dashboard notifications
+        await create_notification(
+            user_id=delivery.agent_id,
+            title=f"New Comment on Order #{order_id}",
+            message=f"Someone replied in the group: '{comment}'",
+            link=f"/deliveries/{order_id}"
+        )
+        print(f"Agent {delivery.agent_id} notified of comment on Order {order_id}")
+    
+    return {"status": "received"}
