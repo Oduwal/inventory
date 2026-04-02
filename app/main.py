@@ -6039,16 +6039,21 @@ async def send_agent_feedback(
     # This anchors the reply thread to the seller's original message in the group,
     # making it obvious which order is being discussed regardless of how many updates
     # the agent has sent.
+    # 1. Safely read from the database using index numbers to prevent crashes
     orig_map = db.execute(text(
         "SELECT message_id, body, sender, group_jid FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
 
-    quote_id     = orig_map.message_id if orig_map else None
-    quote_body   = orig_map.body       if orig_map else None
-    quote_sender = getattr(orig_map, 'sender', None) if orig_map else None
+    if orig_map:
+        quote_id     = orig_map[0]
+        quote_body   = orig_map[1]
+        quote_sender = orig_map[2]
+        fallback_grp = orig_map[3] # <--- Extracts the group_jid safely
+    else:
+        quote_id = quote_body = quote_sender = fallback_grp = None
 
-    # ── STRICT CATEGORY ROUTING ──
+    # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
     CATEGORY_GROUP_MAP = {
         "DAGGO":   "120363418850903362@g.us",
         "NEXTILE": "120363304493232977@g.us",
@@ -6066,7 +6071,7 @@ async def send_agent_feedback(
     if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
         target_group = CATEGORY_GROUP_MAP[delivery_category]
     else:
-        target_group = getattr(orig_map, 'group_jid', None) if orig_map else ""
+        target_group = fallback_grp if fallback_grp else ""
 
     try:
         async with httpx.AsyncClient() as client:
@@ -6157,7 +6162,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         "SELECT order_id FROM whatsapp_outbound_map WHERE message_id = :mid"
     ), {"mid": quoted_msg_id}).first() if quoted_msg_id else None
     if row:
-        order_id = row.order_id
+        order_id = row[0]  # Safe index access
         _log.info("Matched by message_id → Order #%s", order_id)
 
     # ── Step 2: Fallback — match quoted body by customer name/phone ───────
@@ -6176,9 +6181,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         )).fetchall()
 
         for c in candidates:
-            db_phone = (c.customer_phone or '').replace(' ', '').replace('-', '')[-10:]
+            c_id, c_name, c_phone = c[0], c[1], c[2]
+            db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
             if qphone_digits and db_phone and qphone_digits == db_phone:
-                order_id = c.id
+                order_id = c_id
                 _log.info("Matched by phone in quoted body → Order #%s", order_id)
                 # Cache this ID so future replies hit O(1) path
                 if quoted_msg_id:
@@ -6207,7 +6213,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         "SELECT direction, body FROM wa_comments "
         "WHERE delivery_id = :did ORDER BY created_at DESC LIMIT 8"
     ), {"did": order_id}).fetchall()
-    thread = [{"direction": r.direction, "body": r.body} for r in reversed(thread_rows)]
+    thread = [{"direction": r[0], "body": r[1]} for r in reversed(thread_rows)]
 
     # Classify in a thread so we don't block the event loop
     loop = asyncio.get_event_loop()
@@ -6288,20 +6294,21 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
 
     matched_order_id = None
     for row in candidates:
-        db_name  = (row.customer_name  or "").lower()
-        db_phone = (row.customer_phone or "").replace(" ", "").replace("-", "")
+        r_id, r_name, r_phone = row[0], row[1], row[2]
+        db_name  = (r_name or "").lower()
+        db_phone = (r_phone or "").replace(" ", "").replace("-", "")
 
         # Phone match — last 8 digits (handles country code variations)
         if customer_phone and db_phone:
             if customer_phone[-8:] == db_phone[-8:]:
-                matched_order_id = row.id
+                matched_order_id = r_id
                 break
 
         # Name match — all words in extracted name must appear in db name or vice versa
         if customer_name and db_name:
             words = [w for w in customer_name.split() if len(w) > 2]
             if words and all(w in db_name for w in words):
-                matched_order_id = row.id
+                matched_order_id = r_id
                 break
 
     if not matched_order_id:

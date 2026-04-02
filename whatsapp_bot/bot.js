@@ -57,12 +57,20 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
 
     const opts = {};
     if (quotedKey && quotedBody) {
+        // STRICT PARTICIPANT LOGIC:
+        // If it's from the group (seller), we MUST use their explicit quoteSender ID.
+        // We only fall back to the Bot's ID if quoteFromMe is explicitly true.
+        let participantId = quoteSender;
+        if (!participantId) {
+            participantId = quoteFromMe ? (sock.user?.id || sock.user?.jid || '') : '';
+        }
+
         opts.quoted = {
             key: {
                 remoteJid:   jid,
                 fromMe:      quoteFromMe || false,
                 id:          quotedKey,
-                participant: quoteSender || sock.user?.id || sock.user?.jid || '',
+                participant: participantId,
             },
             message: { conversation: quotedBody },
         };
