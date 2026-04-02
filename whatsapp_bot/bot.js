@@ -73,10 +73,10 @@ function extractOrderIds(text) {
  * @param {boolean} indexOrders - false for bot-sent messages so we never
  *   overwrite the original group message in orderIdIndex.
  */
-function cacheMessage(serializedId, body, indexOrders = true) {
+function cacheMessage(serializedId, body, indexOrders = true, isSent = false) {
     if (!body || !serializedId) return;
 
-    messageStore.push({ id: serializedId, body, ts: Date.now() });
+    messageStore.push({ id: serializedId, body, ts: Date.now(), sent: isSent });
 
     if (indexOrders) {
         const ids = extractOrderIds(body);
@@ -112,9 +112,11 @@ function findBestMatch(orderId, customerName, customerPhone, items) {
     // Build name tokens (each word separately, skip short ones)
     const nameTokens  = nameLower.split(/\s+/).filter(t => t.length > 2);
 
-    // Search newest-first so we find the most recent relevant message
+    // Search newest-first, skipping bot-sent messages (they contain customer
+    // name/phone in their body but are not the original group order message)
     for (let i = messageStore.length - 1; i >= 0; i--) {
-        const { id, body } = messageStore[i];
+        const { id, body, sent } = messageStore[i];
+        if (sent) continue; // never match our own outbound messages
         const bodyLower = body.toLowerCase();
         const bodyDigits = body.replace(/\D/g, '');
 
@@ -223,62 +225,42 @@ client.on('disconnected', (reason) => {
 
 // ─────────────────────────────────────────────
 // INBOUND LISTENER
-// Passively caches every group message that mentions an order.
+// Passively caches every group message.
 // Also forwards replies-to-order-messages back to Python.
+// Uses message_create (fires for ALL messages incl. replies) instead of
+// just 'message' (which can miss quoted replies in some WA versions).
 // ─────────────────────────────────────────────
-client.on('message', async (msg) => {
-    // Only care about our target group
+async function handleGroupMessage(msg) {
     const chatId = msg.from || '';
     if (chatId !== SAVED_GROUP_ID) return;
 
-    // Cache any order IDs mentioned in this message body
-    if (msg.body) {
+    // Skip messages sent by the bot itself for caching purposes
+    const isFromMe = msg.fromMe || (msg.id && msg.id.fromMe);
+
+    // Cache any message body from group members (not our own)
+    if (msg.body && !isFromMe) {
         cacheMessage(msg.id._serialized, msg.body);
     }
 
-    // If this is a reply to another message, check if that original message
-    // had an order ID → notify Python dashboard
+    // Only forward to dashboard when the seller quotes one of the bot's
+    // update messages for a specific delivery — no broader matching.
     if (msg.hasQuotedMsg) {
-        console.log(`💬 Reply detected in group — checking for order ID...`);
         try {
             const quoted = await msg.getQuotedMessage();
-            if (quoted.body) cacheMessage(quoted.id._serialized, quoted.body);
 
-            // 1. Try to extract order ID from quoted text ("Order #97")
-            let ids = extractOrderIds(quoted.body || '');
+            // Match 1: quoted message contains "Order #97" (bot's update text)
+            let orderId = null;
+            const ids = extractOrderIds(quoted.body || '');
+            if (ids.length > 0) orderId = ids[0];
 
-            // 2. Fallback: reverse-map the quoted message ID → order ID
-            //    (covers replies to bot's own messages or previously matched originals)
-            if (ids.length === 0 && msgToOrderId.has(quoted.id._serialized)) {
-                ids = [msgToOrderId.get(quoted.id._serialized)];
-                console.log(`🔁 Reverse-mapped quoted message → Order #${ids[0]}`);
+            // Match 2: quoted message ID is in our reverse map (bot's sent messages)
+            if (!orderId && msgToOrderId.has(quoted.id._serialized)) {
+                orderId = msgToOrderId.get(quoted.id._serialized);
+                console.log(`🔁 Reverse-mapped quoted message → Delivery #${orderId}`);
             }
 
-            // 3. Deep fallback: scan quoted body against all known order details
-            //    (covers replies to original group messages the bot never saw)
-            if (ids.length === 0 && quoted.body) {
-                const qBody   = quoted.body.toLowerCase();
-                const qDigits = quoted.body.replace(/\D/g, '');
-                for (const [oid, det] of orderDetails.entries()) {
-                    const phoneClean = (det.customerPhone || '').replace(/\D/g, '').slice(-10);
-                    const nameLower  = (det.customerName  || '').toLowerCase().trim();
-                    const nameTokens = nameLower.split(/\s+/).filter(t => t.length > 2);
-                    if (phoneClean && qDigits.includes(phoneClean)) {
-                        ids = [oid];
-                        console.log(`🔁 Matched reply to Order #${oid} via phone in quoted body`);
-                        break;
-                    }
-                    if (nameTokens.length > 0 && nameTokens.every(t => qBody.includes(t))) {
-                        ids = [oid];
-                        console.log(`🔁 Matched reply to Order #${oid} via name in quoted body`);
-                        break;
-                    }
-                }
-            }
-
-            if (ids.length > 0) {
-                const orderId = ids[0];
-                console.log(`🔔 Reply to Order #${orderId} — notifying dashboard...`);
+            if (orderId) {
+                console.log(`🔔 Seller replied to Delivery #${orderId} update — notifying dashboard...`);
                 const webhookRes = await axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
                     order_id:     orderId,
                     comment:      msg.body,
@@ -287,15 +269,18 @@ client.on('message', async (msg) => {
                     console.log('⚠️  Could not reach Python app:', e.message);
                     return null;
                 });
-                if (webhookRes) console.log(`✅ Dashboard notified for Order #${orderId} (HTTP ${webhookRes.status})`);
-            } else {
-                console.log(`💬 Quoted message not linked to any order — ignoring.`);
+                if (webhookRes) console.log(`✅ Dashboard notified for Delivery #${orderId} (HTTP ${webhookRes.status})`);
             }
         } catch (e) {
-            console.log('Error processing quoted message:', e.message);
+            console.log('Error processing quoted reply:', e.message);
         }
     }
-});
+}
+
+// Listen on both events: 'message' (received) + 'message_create' (all incl. replies)
+// so we never miss a group reply regardless of WA Web version.
+client.on('message',        handleGroupMessage);
+client.on('message_create', handleGroupMessage);
 
 // ─────────────────────────────────────────────
 // EXPRESS API
@@ -386,10 +371,10 @@ app.post('/send-group-feedback', async (req, res) => {
             sentMsg = await client.sendMessage(SAVED_GROUP_ID, message);
         }
 
-        // Store sent message in history but do NOT update orderIdIndex —
-        // the original group message should remain the reply target.
+        // Store sent message in history but do NOT update orderIdIndex and
+        // mark as sent so findBestMatch never returns it as an original.
         if (sentMsg && sentMsg.id) {
-            cacheMessage(sentMsg.id._serialized, message, false);
+            cacheMessage(sentMsg.id._serialized, message, false, true);
             // Reverse map: both the found original msg and the bot's reply
             // point back to this order so replies to either get routed correctly.
             if (cachedId) msgToOrderId.set(cachedId, cleanId);
