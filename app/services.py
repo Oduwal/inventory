@@ -190,13 +190,20 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
     if len(locked_items) != len(item_ids):
         raise ValueError("One or more items are missing")
 
-    # Re-check stock AFTER locking
+    # Re-check stock AFTER locking — compute directly in the same session
+    # to avoid stale reads from a separate subquery
     for li in lines:
-        row = get_item_with_stock(db, li.item_id)
-        if not row:
-            raise ValueError("Item missing")
+        signed_qty = case(
+            (Transaction.type == "IN", Transaction.quantity),
+            (Transaction.type == "OUT", -Transaction.quantity),
+            else_=0,
+        )
+        stock = db.scalar(
+            select(func.coalesce(func.sum(signed_qty), 0))
+            .where(Transaction.item_id == li.item_id)
+            .where(Transaction.branch_id == delivery.branch_id)
+        ) or 0
 
-        _it, stock = row
         if int(stock) < int(li.quantity):
             raise ValueError("Insufficient stock for one or more items")
 

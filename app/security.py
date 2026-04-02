@@ -199,6 +199,35 @@ def verify_csrf_token(request: Request, form_token: Optional[str]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# [SEC-3b] JSON ORIGIN CHECK — extra CSRF defense for JSON POST endpoints
+#   SameSite=lax cookies already block most CSRF, this is defense-in-depth.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Paths exempt from Origin check (external webhooks authenticate via token)
+_ORIGIN_CHECK_EXEMPT = {"/api/call-webhook", "/api/whatsapp-webhook",
+                        "/api/cache-wa-message", "/api/whatsapp-reply", "/login"}
+
+def verify_origin_for_json(request: Request) -> None:
+    """For JSON POST endpoints: verify Origin header matches the app's host.
+    Skips webhook endpoints (they use token auth instead)."""
+    if request.url.path in _ORIGIN_CHECK_EXEMPT:
+        return
+    origin = request.headers.get("origin", "")
+    if not origin:
+        # No Origin header — could be a same-site request (some browsers omit it)
+        return
+    # Compare origin host with request host
+    from urllib.parse import urlparse
+    origin_host = urlparse(origin).netloc.split(":")[0]
+    request_host = (request.headers.get("host") or "").split(":")[0]
+    if origin_host and request_host and origin_host != request_host:
+        raise HTTPException(
+            status_code=403,
+            detail="Cross-origin request blocked.",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # [SEC-4] INPUT SANITIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -314,6 +343,14 @@ def audit_log(db, user_id: Optional[int], action: str, detail: str = "",
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
+        # [SEC-3b] Origin check on JSON POST/PUT/DELETE
+        if request.method in ("POST", "PUT", "DELETE"):
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                try:
+                    verify_origin_for_json(request)
+                except HTTPException as exc:
+                    return Response(content=exc.detail, status_code=exc.status_code)
         response = await call_next(request)
         response.headers["X-Frame-Options"]           = "DENY"
         response.headers["X-Content-Type-Options"]    = "nosniff"

@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 import os
+import html
 import json as _json
+import secrets
 import threading
 from datetime import datetime, date, timedelta
 
@@ -81,8 +83,31 @@ from .security import (
     validate_upload,
 )
 from .calling_service import trigger_call
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(app):
+    _run_startup()
+    yield
+
+app = FastAPI(lifespan=_lifespan)
+
+# ── Webhook shared secret ───────────────────────────────────────────────────
+# Set WEBHOOK_SECRET in env to require authentication on inbound webhooks.
+# If not set, webhooks remain open (backward-compatible).
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+def _verify_webhook_token(request: Request) -> None:
+    """Raise 403 if WEBHOOK_SECRET is configured but the request doesn't match."""
+    if not WEBHOOK_SECRET:
+        return  # not configured — allow all (backward-compatible)
+    token = (
+        request.headers.get("x-webhook-secret", "")
+        or request.query_params.get("token", "")
+    )
+    if not secrets.compare_digest(token, WEBHOOK_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid webhook token")
 
 
 # ── Notification helper ──────────────────────────────────────────────────────
@@ -158,7 +183,9 @@ def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: s
         import logging; logging.getLogger("notifications").warning(f"Notify branch failed: {e}")
 
 # [FIX-6] Trust the X-Forwarded-For header from Railway's proxy
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Use TRUSTED_PROXY_HOSTS env var for production; defaults to Railway's internal network.
+_trusted_hosts = os.getenv("TRUSTED_PROXY_HOSTS", "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[h.strip() for h in _trusted_hosts.split(",")])
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -184,7 +211,8 @@ if os.path.isdir(static_dir):
 def service_worker_root():
     sw_path = os.path.join(BASE_DIR, "static", "sw.js")
     try:
-        content = open(sw_path).read()
+        with open(sw_path) as f:
+            content = f.read()
     except FileNotFoundError:
         content = ""
     return PlainTextResponse(
@@ -639,6 +667,19 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE whatsapp_outbound_map ADD COLUMN IF NOT EXISTS group_jid TEXT DEFAULT ''")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_outbound_order ON whatsapp_outbound_map (order_id)")
 
+        # Holding table for WhatsApp group messages that arrived BEFORE the
+        # delivery was created in the dashboard.  On delivery creation we scan
+        # this table and promote matches into whatsapp_outbound_map.
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS wa_pending_cache (
+            message_id      TEXT PRIMARY KEY,
+            body            TEXT NOT NULL DEFAULT '',
+            sender          TEXT DEFAULT '',
+            group_jid       TEXT DEFAULT '',
+            customer_name   TEXT DEFAULT '',
+            customer_phone  TEXT DEFAULT '',
+            created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+
 
 def seed_admin_if_missing() -> None:
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
@@ -724,8 +765,7 @@ def seed_default_branch_if_missing() -> None:
         gen.close()
 
 
-@app.on_event("startup")
-def _startup() -> None:
+def _run_startup() -> None:
     ensure_schema()
     seed_default_branch_if_missing()
     seed_admin_if_missing()
@@ -839,6 +879,10 @@ async def login(
         })
 
     account_lockout.clear(username_clean)  # [SEC-5] reset on success
+    # Auto-rehash legacy bcrypt passwords to current scheme (pbkdf2_sha256)
+    if (u.password_hash or "").startswith("$2"):
+        u.password_hash = hash_password(password)
+        db.commit()
     audit_log(db, u.id, "LOGIN", f"username={username_clean}", ip=ip)
     request.session["user_id"] = u.id
     request.session["role"] = u.role
@@ -886,19 +930,29 @@ def home(request: Request, db: Session = Depends(get_db)):
     low_stock_count = len([(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id])
 
     stale_cutoff = datetime.utcnow() - timedelta(days=7)
-    stale_items = db.execute(select(Item).where(Item.branch_id == branch_id)).scalars().all()
-    stale_count = 0
-    for _item in stale_items:
-        _stock = db.scalar(
-            select(func.coalesce(
-                func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)), 0
-            )).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id)
-        ) or 0
-        if _stock <= 0:
-            continue
-        _last = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == _item.id).where(Transaction.branch_id == branch_id))
-        if _last is None or _last < stale_cutoff:
-            stale_count += 1
+    # Single query: items with positive stock whose last transaction is older than cutoff
+    _signed = case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)
+    _stale_q = (
+        select(func.count())
+        .select_from(
+            select(
+                Item.id,
+                func.coalesce(func.sum(_signed), 0).label("stock"),
+                func.max(Transaction.created_at).label("last_tx"),
+            )
+            .select_from(Item)
+            .join(Transaction, and_(Transaction.item_id == Item.id, Transaction.branch_id == branch_id), isouter=True)
+            .where(Item.branch_id == branch_id)
+            .group_by(Item.id)
+            .having(func.coalesce(func.sum(_signed), 0) > 0)
+            .having(
+                (func.max(Transaction.created_at) == None) |
+                (func.max(Transaction.created_at) < stale_cutoff)
+            )
+            .subquery()
+        )
+    )
+    stale_count = db.scalar(_stale_q) or 0
 
     recent_transactions = db.scalars(
         select(Transaction).where(Transaction.branch_id == branch_id)
@@ -1140,6 +1194,7 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
 @app.post("/api/call-webhook", response_class=JSONResponse)
 async def vapi_call_webhook(request: Request, db: Session = Depends(get_db)):
     """VAPI end-of-call webhook — updates call log with summary and duration."""
+    _verify_webhook_token(request)
     try:
         body = await request.json()
         msg_type = body.get("message", {}).get("type", "")
@@ -1367,7 +1422,8 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
 
     # All-branch inventory & agent totals for the enhanced overview
     all_items_count = db.scalar(select(func.count(func.distinct(func.lower(Item.name))))) or 0
-    all_low_items = [(item, stock) for (item, stock) in get_low_stock(db)]
+    _all_low_stock_cached = list(get_low_stock(db))
+    all_low_items = _all_low_stock_cached
     all_low_stock_count = len(all_low_items)
     all_agents_count = db.scalar(select(func.count(User.id)).where(User.role == "AGENT")) or 0
     all_admins_count = db.scalar(select(func.count(User.id)).where(User.role == "ADMIN")) or 0
@@ -1395,7 +1451,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_cat_items_json = {cat: sorted(items.values(), key=lambda x: x["stock"], reverse=True)
                           for cat, items in all_cat_items_map.items()}
     all_top_rows = sorted(all_top_rows_raw, key=lambda x: x[1], reverse=True)[:5]
-    all_low_rows = [(item, stock) for (item, stock) in get_low_stock(db)]
+    all_low_rows = _all_low_stock_cached
     all_in7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.type == "IN")
@@ -2731,17 +2787,71 @@ async def delivery_create(
                     "UPDATE transactions SET delivery_id = :did WHERE id = :txid"
                 ), {"did": d.id, "txid": asgn_tx_id})
 
-    db.commit()
     # Notify branch admins of new order
     notify_branch_admins(db, d.branch_id, "🆕 New Order Created",
         f"New delivery for {cust} created{' by supervisor' if is_supervisor(user) else ''}.",
         f"/deliveries/{d.id}", "info")
-    # ... existing code ...
     if is_admin(user) and target_agent_id and target_agent_id != user.id:
         notify(db, target_agent_id, "📦 New Delivery Assigned",
                f"A new delivery for {cust} has been assigned to you.",
                f"/deliveries/{d.id}", "info")
     db.commit()
+
+    # ── Check wa_pending_cache for WhatsApp messages that arrived before this order ──
+    try:
+        db_name_lower = (d.customer_name or "").lower()
+        db_phone_clean = (d.customer_phone or "").replace(" ", "").replace("-", "")
+        db_phone_digits = db_phone_clean[-10:] if db_phone_clean else ""
+
+        pending_rows = db.execute(text(
+            "SELECT message_id, body, sender, group_jid, customer_name, customer_phone "
+            "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 50"
+        )).fetchall()
+
+        for pr in pending_rows:
+            p_mid, p_body, p_sender, p_gjid, p_cname, p_cphone = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]
+            matched = False
+
+            # Phone match
+            p_phone_digits = (p_cphone or "").replace(" ", "").replace("-", "")[-10:]
+            if db_phone_digits and p_phone_digits and len(p_phone_digits) >= 10 and db_phone_digits == p_phone_digits:
+                matched = True
+
+            # Name match (require 2+ words)
+            if not matched and p_cname and db_name_lower and len(p_cname) > 3:
+                p_words = [w for w in p_cname.split() if len(w) > 2]
+                if len(p_words) >= 2 and all(w in db_name_lower for w in p_words):
+                    matched = True
+                elif p_cname == db_name_lower:
+                    matched = True
+
+            if matched:
+                _now = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+                _is_sqlite = DATABASE_URL.startswith("sqlite")
+                if _is_sqlite:
+                    _upsert = (
+                        f"INSERT OR REPLACE INTO whatsapp_outbound_map "
+                        f"(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {_now})"
+                    )
+                else:
+                    _upsert = (
+                        f"INSERT INTO whatsapp_outbound_map "
+                        f"(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {_now}) "
+                        f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id"
+                    )
+                db.execute(text(_upsert), {
+                    "mid": p_mid, "oid": d.id, "body": p_body, "sender": p_sender, "gjid": p_gjid
+                })
+                db.execute(text("DELETE FROM wa_pending_cache WHERE message_id = :mid"), {"mid": p_mid})
+                db.commit()
+                logging.getLogger("cache_wa").info(
+                    "Linked pending WA message %s → new Order #%s", p_mid[:20], d.id
+                )
+                break  # One original message per delivery
+    except Exception as e:
+        logging.getLogger("cache_wa").warning("Pending WA cache scan failed: %s", e)
 
     # Build item summary and trigger AI call on new order
     call_items = []
@@ -3016,7 +3126,6 @@ async def delivery_assign_agent(
     if not agent or agent.branch_id != d.branch_id:
         return redirect(f"/deliveries/{delivery_id}?error=Agent+not+found+or+not+in+this+branch")
     d.agent_id = agent_id
-    db.commit()
     notify(db, agent_id, "📦 New Delivery Assigned",
            f"Delivery #{d.id} for {d.customer_name} has been assigned to you.",
            f"/deliveries/{d.id}", "info")
@@ -3114,7 +3223,6 @@ async def request_adjustment(
     db.commit()
     audit_log(db, user.id, "ADJUSTMENT_REQUESTED", f"delivery_id={d.id} request_id={req_id}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
-    db.commit()
     return redirect(f"/deliveries/{delivery_id}?success=Adjustment+request+submitted+awaiting+admin+approval")
 
 
@@ -3205,7 +3313,6 @@ async def review_adjustment(
         db.commit()
         audit_log(db, user.id, "ADJUSTMENT_APPROVED", f"delivery_id={d.id} request_id={pending.id}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
-        db.commit()
         return redirect(f"/deliveries/{delivery_id}?success=Adjustment+approved+agent+can+now+mark+delivered")
     else:
         note = (rejection_note or "").strip()[:400] or "Rejected by admin"
@@ -3220,7 +3327,6 @@ async def review_adjustment(
         db.commit()
         audit_log(db, user.id, "ADJUSTMENT_REJECTED", f"delivery_id={d.id} request_id={pending.id}",
                   ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
-        db.commit()
         return redirect(f"/deliveries/{delivery_id}?success=Adjustment+rejected+agent+notified")
 
 
@@ -5780,6 +5886,7 @@ from .calling_service import _build_script
 @app.post("/api/call-webhook")
 async def call_webhook(request: Request, db: Session = Depends(get_db)):
     """Receives the end-of-call report from Vapi and updates the delivery notes."""
+    _verify_webhook_token(request)
     try:
         payload = await request.json()
         message = payload.get("message", {})
@@ -6017,7 +6124,7 @@ async def send_agent_feedback(
     group_name: str = Form(""),
     db: Session = Depends(get_db)
 ):
-    delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
+    delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
 
@@ -6054,12 +6161,18 @@ async def send_agent_feedback(
         quote_id = quote_body = quote_sender = fallback_grp = None
 
     # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
-    CATEGORY_GROUP_MAP = {
+    # Configurable via CATEGORY_GROUP_MAP env var as JSON, e.g.:
+    # {"DAGGO":"120363418850903362@g.us","NEXTILE":"120363304493232977@g.us"}
+    _default_cgm = {
         "DAGGO":   "120363418850903362@g.us",
         "NEXTILE": "120363304493232977@g.us",
         "NEWLIFE": "120363287198677451@g.us",
         "LOCO":    "120363239510350827@g.us"
     }
+    try:
+        CATEGORY_GROUP_MAP = _json.loads(os.getenv("CATEGORY_GROUP_MAP", "")) or _default_cgm
+    except (ValueError, TypeError):
+        CATEGORY_GROUP_MAP = _default_cgm
 
     delivery_category = db.execute(
         select(Item.category)
@@ -6076,7 +6189,7 @@ async def send_agent_feedback(
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                "http://adventurous-flow.railway.internal:3000/send-group-feedback",
+                os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000") + "/send-group-feedback",
                 json={
                     "orderId":            str(delivery.id),
                     "message":            message,
@@ -6122,6 +6235,7 @@ async def send_agent_feedback(
 
         # SSE broadcast so open tabs update immediately
         now_str  = datetime.utcnow().strftime("%d %b %H:%M")
+        _sse_msg = html.escape(message)
         fragment = (
             f'<div style="display:flex;gap:10px;align-items:flex-start;flex-direction:row-reverse;">'
             f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(79,124,255,.2);'
@@ -6129,7 +6243,7 @@ async def send_agent_feedback(
             f'<div style="max-width:80%;background:rgba(79,124,255,.08);border:1px solid rgba(255,255,255,.07);'
             f'border-radius:10px;padding:8px 12px;">'
             f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">Agent → Group · {now_str}</div>'
-            f'<div style="font-size:13px;white-space:pre-wrap;">{message}</div>'
+            f'<div style="font-size:13px;white-space:pre-wrap;">{_sse_msg}</div>'
             f'</div></div>'
         )
         _sse_broadcast(delivery.id, fragment)
@@ -6145,6 +6259,7 @@ async def send_agent_feedback(
 # ─────────────────────────────────────────────────────────────────
 @app.post("/api/whatsapp-webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
+    _verify_webhook_token(request)
     data                = await request.json()
     quoted_msg_id       = data.get("quoted_message_id", "").strip()
     quoted_msg_body     = data.get("quoted_message_body", "").strip()
@@ -6193,30 +6308,45 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY id DESC LIMIT 200"
             )).fetchall()
 
+            # Prefer deliveries already linked to the SAME WhatsApp group
+            # This prevents cross-group mismatches (e.g. DAGGO reply matching NEXTILE order)
+            same_group_match = None
+            any_phone_match = None
             for c in candidates:
                 c_id, c_phone = c[0], c[1]
                 db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
                 if db_phone and qphone_digits == db_phone:
-                    order_id = c_id
-                    _log.info("Matched by phone in quoted body → Order #%s", order_id)
-                    if quoted_msg_id:
-                        now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
-                        conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
-                        try:
-                            db.execute(text(
-                                f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
-                                f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
-                            ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
-                            db.commit()
-                        except Exception:
-                            pass
-                    break
+                    if not any_phone_match:
+                        any_phone_match = c_id
+                    # Check if this delivery is linked to the same group
+                    if group_jid:
+                        grp_row = db.execute(text(
+                            "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND group_jid = :gjid LIMIT 1"
+                        ), {"oid": c_id, "gjid": group_jid}).first()
+                        if grp_row:
+                            same_group_match = c_id
+                            break
+
+            order_id = same_group_match or any_phone_match
+            if order_id:
+                _log.info("Matched by phone in quoted body → Order #%s (same_group=%s)", order_id, bool(same_group_match))
+                if quoted_msg_id:
+                    now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+                    conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
+                    try:
+                        db.execute(text(
+                            f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
+                            f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
+                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
+                        db.commit()
+                    except Exception:
+                        pass
 
     if not order_id:
         _log.warning("Could not match reply to any delivery — quoted_id=%s", quoted_msg_id)
         return {"status": "unmatched"}
 
-    delivery = db.query(Delivery).filter(Delivery.id == order_id).first()
+    delivery = db.execute(select(Delivery).where(Delivery.id == order_id)).scalar_one_or_none()
     if not delivery:
         return {"status": "not_found"}
 
@@ -6250,6 +6380,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # SSE — push fragment to any open delivery detail tabs
     now_str  = datetime.utcnow().strftime("%d %b %H:%M")
     action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION NEEDED</span>' if ai.get("action_required") else ""
+    _sse_sender = html.escape(sender or "Seller")
+    _sse_body   = html.escape(comment_body)
     fragment = (
         f'<div style="display:flex;gap:10px;align-items:flex-start;">'
         f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(34,197,94,.15);'
@@ -6257,8 +6389,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         f'<div style="max-width:80%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);'
         f'border-radius:10px;padding:8px 12px;">'
         f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">'
-        f'{sender or "Seller"} → You · {now_str}{action_badge}</div>'
-        f'<div style="font-size:13px;white-space:pre-wrap;">{comment_body}</div>'
+        f'{_sse_sender} → You · {now_str}{action_badge}</div>'
+        f'<div style="font-size:13px;white-space:pre-wrap;">{_sse_body}</div>'
         f'</div></div>'
     )
     _sse_broadcast(order_id, fragment)
@@ -6286,6 +6418,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     Stores (message_id → order_id, source='group') so agent-feedback can always
     quote the ORIGINAL group post when sending updates.
     """
+    _verify_webhook_token(request)
     data           = await request.json()
     message_id     = (data.get("message_id") or "").strip()
     body           = (data.get("body") or "").strip()
@@ -6324,17 +6457,67 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
                 matched_order_id = r_id
                 break
 
-        # Strict Name match
+        # Strict Name match — require at least 2 words to prevent
+        # common single names ("Ade", "John") from matching the wrong delivery
         if customer_name and db_name and len(customer_name) > 3:
             words = [w for w in customer_name.split() if len(w) > 2]
-            if (words and all(w in db_name for w in words)) or customer_name == db_name:
+            db_words = [w for w in db_name.split() if len(w) > 2]
+            if len(words) >= 2 and words and all(w in db_name for w in words):
+                matched_order_id = r_id
+                break
+            # Exact full-name match (covers single-word names safely)
+            if customer_name == db_name:
                 matched_order_id = r_id
                 break
 
     if not matched_order_id:
         logging.getLogger("cache_wa").info(
-            "cache-wa-message: no delivery matched name='%s' phone='%s'", customer_name, customer_phone
+            "cache-wa-message: no delivery matched name='%s' phone='%s' — saving to pending cache", customer_name, customer_phone
         )
-        return {"status": "no_match"}
+        # Save to pending cache so it can be matched when the delivery IS created
+        _pend_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+        _pend_conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else "OR IGNORE"
+        try:
+            db.execute(text(
+                f"INSERT {_pend_conflict} INTO wa_pending_cache "
+                f"(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
+                f"VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, {_pend_sql})"
+            ), {"mid": message_id, "body": body, "sender": sender, "gjid": group_jid,
+                "cname": customer_name, "cphone": customer_phone})
+            db.commit()
+        except Exception:
+            db.rollback()
+        return {"status": "pending"}
 
-    cache_wa_message
+    # ── Persist the mapping so replies and agent-feedback can find this order ──
+    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    if is_sqlite:
+        upsert_sql = (
+            f"INSERT OR REPLACE INTO whatsapp_outbound_map "
+            f"(message_id, order_id, body, source, sender, group_jid, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql})"
+        )
+    else:
+        upsert_sql = (
+            f"INSERT INTO whatsapp_outbound_map "
+            f"(message_id, order_id, body, source, sender, group_jid, created_at) "
+            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql}) "
+            f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, "
+            f"body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
+        )
+    try:
+        db.execute(text(upsert_sql), {
+            "mid": message_id, "oid": matched_order_id,
+            "body": body, "sender": sender, "gjid": group_jid
+        })
+        db.commit()
+        logging.getLogger("cache_wa").info(
+            "cache-wa-message: saved message_id=%s → Order #%s (group=%s)",
+            message_id[:20], matched_order_id, group_jid[:20] if group_jid else ""
+        )
+    except Exception as e:
+        logging.getLogger("cache_wa").error("cache-wa-message: failed to save mapping: %s", e)
+        db.rollback()
+
+    return {"status": "matched", "order_id": matched_order_id}

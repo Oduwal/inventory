@@ -5,6 +5,8 @@ import random
 from datetime import datetime
 import httpx
 
+from .utils import format_nigerian_phone
+
 logger = logging.getLogger("calling")
 
 VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")
@@ -23,16 +25,6 @@ AVAILABLE_AGENTS = [
     {"name": "Samuel",  "voiceId": "ddDFRErfhdc2asyySOG5"},
     {"name": "John",  "voiceId": "3mwVS2Cu52S8MzAVx66c"}
 ]
-# Note: You can replace these Voice IDs ywith your custom ElevenLabs ones!
-
-def format_nigerian_phone(phone: str) -> str:
-    """Automatically cleans and formats phone numbers to E.164 (+234...)."""
-    if not phone: return ""
-    clean = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").strip()
-    if clean.startswith("0") and len(clean) == 11: return "+234" + clean[1:]
-    if clean.startswith("234") and len(clean) == 13: return "+" + clean
-    if clean.startswith("+"): return clean
-    return clean
 # ==============================================================
 # RESTORED HELPER FUNCTION (Prevents main.py from crashing)
 # ==============================================================

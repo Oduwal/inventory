@@ -2,20 +2,13 @@ import os
 import logging
 from twilio.rest import Client
 
+from .utils import format_nigerian_phone
+
 logger = logging.getLogger("whatsapp")
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "")
-
-def format_nigerian_phone(phone: str) -> str:
-    """Automatically cleans and formats phone numbers to E.164 (+234...)."""
-    if not phone: return ""
-    clean = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").strip()
-    if clean.startswith("0") and len(clean) == 11: return "+234" + clean[1:]
-    if clean.startswith("234") and len(clean) == 13: return "+" + clean
-    if clean.startswith("+"): return clean
-    return clean
 
 def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, items: str):
     """Sends a WhatsApp message when the AI call goes to voicemail or fails."""
