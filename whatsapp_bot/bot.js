@@ -221,22 +221,6 @@ async function handleInbound(msg) {
     }, { timeout: 8000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
 }
 
-    // A — non-reply: use Gemini to extract customer details, let Python match to a delivery
-    const info = await extractCustomerInfo(text);
-    if (!info.customer_name && !info.customer_phone) {
-        console.log(`📭 No customer info found — skipping cache`);
-        return;
-    }
-    console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
-    axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
-        message_id:      msgId,
-        body:            text,
-        sender:          sender,
-        customer_name:   info.customer_name,
-        customer_phone:  info.customer_phone,
-    }, { timeout: 8000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
-}
-
 // ─────────────────────────────────────────────
 // BAILEYS CONNECTION
 // ─────────────────────────────────────────────
