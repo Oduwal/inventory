@@ -4656,12 +4656,13 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     target_agent_id = None
     if is_agent(user): target_agent_id = int(user.id)
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
-    # Use delivered_at (when actually marked delivered) so "today" shows today's deliveries
-    # Fall back to delivery_date if delivered_at is null (older records)
+    # Use delivered_at (when actually marked delivered) so "today" shows today's deliveries.
+    # Fall back to delivery_date, then created_at for old records where both may be null.
+    _effective_date = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
     filters = [
         Delivery.status == "DELIVERED",
-        func.coalesce(Delivery.delivered_at, Delivery.delivery_date) >= start_dt,
-        func.coalesce(Delivery.delivered_at, Delivery.delivery_date) <= end_dt,
+        _effective_date >= start_dt,
+        _effective_date <= end_dt,
     ]
     if not is_supervisor(user): filters.append(Delivery.branch_id == branch_id)
     if target_agent_id: filters.append(Delivery.agent_id == target_agent_id)
@@ -4824,10 +4825,11 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     target_agent_id = None
     if is_agent(user): target_agent_id = int(user.id)
     elif is_admin(user) and (agent_id or "").isdigit(): target_agent_id = int(agent_id)
-    filters = [Delivery.created_at >= start_dt, Delivery.created_at <= end_dt, Delivery.status == "DELIVERED"]
+    _eff_date = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
+    filters = [_eff_date >= start_dt, _eff_date <= end_dt, Delivery.status == "DELIVERED"]
     if not is_supervisor(user): filters.append(Delivery.branch_id == branch_id)
     if target_agent_id is not None: filters.append(Delivery.agent_id == target_agent_id)
-    deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(Delivery.created_at.asc())).scalars().all()
+    deliveries = db.execute(select(Delivery).where(and_(*filters)).order_by(_eff_date.asc())).scalars().all()
     delivery_ids = [d.id for d in deliveries]
     items_by_delivery: dict[int, list] = {}
     if delivery_ids:
