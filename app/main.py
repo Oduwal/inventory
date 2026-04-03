@@ -2810,20 +2810,30 @@ async def delivery_create(
 
         for pr in pending_rows:
             p_mid, p_body, p_sender, p_gjid, p_cname, p_cphone = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]
-            matched = False
 
-            # Phone match
+            # Phone check
             p_phone_digits = (p_cphone or "").replace(" ", "").replace("-", "")[-10:]
-            if db_phone_digits and p_phone_digits and len(p_phone_digits) >= 10 and db_phone_digits == p_phone_digits:
-                matched = True
+            phone_ok = (db_phone_digits and p_phone_digits and len(p_phone_digits) >= 10
+                        and db_phone_digits == p_phone_digits)
 
-            # Name match (require 2+ words)
-            if not matched and p_cname and db_name_lower and len(p_cname) > 3:
+            # Name check
+            name_ok = False
+            if p_cname and db_name_lower and len(p_cname) > 3:
                 p_words = [w for w in p_cname.split() if len(w) > 2]
                 if len(p_words) >= 2 and all(w in db_name_lower for w in p_words):
-                    matched = True
+                    name_ok = True
                 elif p_cname == db_name_lower:
-                    matched = True
+                    name_ok = True
+
+            # Both available → require both; only one → that one is enough
+            if p_cphone and p_cname:
+                matched = phone_ok and name_ok
+            elif p_cphone:
+                matched = phone_ok
+            elif p_cname:
+                matched = name_ok
+            else:
+                matched = False
 
             if matched:
                 _now = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
@@ -6303,31 +6313,59 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         qphone_digits = qphone.replace('+234', '0')[-10:] if qphone else ''
 
         if qphone_digits:
+            # Also try to extract a name from the quoted body for stricter matching
+            # Typical format: "Customer Name\nPhone: 080...\nItems: ..."
+            qname_lines = [ln.strip() for ln in quoted_msg_body.split('\n') if ln.strip()]
+            q_name = ""
+            _SKIP_RE = re.compile(r'^(phone|address|item|product|qty|quantity|note|location|area|delivery|order|price|amount|date|status)', re.IGNORECASE)
+            for ln in qname_lines:
+                if _SKIP_RE.match(ln) or re.match(r'^[\d\+\(]', ln):
+                    continue
+                name_words = [w for w in ln.split() if re.match(r'^[A-Za-z\'-]{2,}$', w)]
+                if len(name_words) >= 2:
+                    q_name = ln.strip().lower()
+                    break
+
             candidates = db.execute(text(
-                "SELECT id, customer_phone FROM deliveries "
+                "SELECT id, customer_phone, customer_name FROM deliveries "
                 "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY id DESC LIMIT 200"
             )).fetchall()
 
-            # Prefer deliveries already linked to the SAME WhatsApp group
-            # This prevents cross-group mismatches (e.g. DAGGO reply matching NEXTILE order)
+            # Prefer: same-group > phone+name > phone-only
             same_group_match = None
-            any_phone_match = None
+            phone_and_name_match = None
+            phone_only_match = None
             for c in candidates:
-                c_id, c_phone = c[0], c[1]
+                c_id, c_phone, c_name = c[0], c[1], c[2]
                 db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
-                if db_phone and qphone_digits == db_phone:
-                    if not any_phone_match:
-                        any_phone_match = c_id
-                    # Check if this delivery is linked to the same group
-                    if group_jid:
-                        grp_row = db.execute(text(
-                            "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND group_jid = :gjid LIMIT 1"
-                        ), {"oid": c_id, "gjid": group_jid}).first()
-                        if grp_row:
-                            same_group_match = c_id
-                            break
+                if not (db_phone and qphone_digits == db_phone):
+                    continue
 
-            order_id = same_group_match or any_phone_match
+                # Check name match if we extracted one from the quoted body
+                c_name_lower = (c_name or '').lower()
+                name_match = False
+                if q_name and c_name_lower:
+                    q_words = [w for w in q_name.split() if len(w) > 2]
+                    if len(q_words) >= 2 and all(w in c_name_lower for w in q_words):
+                        name_match = True
+                    elif q_name == c_name_lower:
+                        name_match = True
+
+                # Same-group is highest priority
+                if group_jid:
+                    grp_row = db.execute(text(
+                        "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND group_jid = :gjid LIMIT 1"
+                    ), {"oid": c_id, "gjid": group_jid}).first()
+                    if grp_row:
+                        same_group_match = c_id
+                        break
+
+                if q_name and name_match and not phone_and_name_match:
+                    phone_and_name_match = c_id
+                if not phone_only_match:
+                    phone_only_match = c_id
+
+            order_id = same_group_match or phone_and_name_match or phone_only_match
             if order_id:
                 _log.info("Matched by phone in quoted body → Order #%s (same_group=%s)", order_id, bool(same_group_match))
                 if quoted_msg_id:
@@ -6451,22 +6489,33 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         if has_group_msg:
             continue
 
-        # Strict Phone match (Require 10 digits to prevent accidental cross-matching)
+        # Match logic: use BOTH phone+name when both are available to avoid
+        # conflicts when the same phone number appears on multiple orders.
+        phone_ok = False
         if customer_phone and db_phone and len(customer_phone) >= 10:
-            if customer_phone[-10:] == db_phone[-10:]:
-                matched_order_id = r_id
-                break
+            phone_ok = (customer_phone[-10:] == db_phone[-10:])
 
-        # Strict Name match — require at least 2 words to prevent
-        # common single names ("Ade", "John") from matching the wrong delivery
+        name_ok = False
         if customer_name and db_name and len(customer_name) > 3:
             words = [w for w in customer_name.split() if len(w) > 2]
-            db_words = [w for w in db_name.split() if len(w) > 2]
-            if len(words) >= 2 and words and all(w in db_name for w in words):
+            if len(words) >= 2 and all(w in db_name for w in words):
+                name_ok = True
+            elif customer_name == db_name:
+                name_ok = True
+
+        # When we have BOTH phone and name from WhatsApp → require both to match
+        if customer_phone and customer_name:
+            if phone_ok and name_ok:
                 matched_order_id = r_id
                 break
-            # Exact full-name match (covers single-word names safely)
-            if customer_name == db_name:
+        # Only phone available → phone-only is fine
+        elif customer_phone:
+            if phone_ok:
+                matched_order_id = r_id
+                break
+        # Only name available → name-only is fine
+        elif customer_name:
+            if name_ok:
                 matched_order_id = r_id
                 break
 

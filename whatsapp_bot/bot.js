@@ -37,6 +37,17 @@ const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-producti
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
 const PORT           = process.env.PORT            || 3000;
 
+// Only process messages from these seller groups (comma-separated env var or hardcoded defaults)
+// Set WA_SELLER_GROUPS="group1@g.us,group2@g.us" to override
+const SELLER_GROUPS = new Set(
+    (process.env.WA_SELLER_GROUPS || [
+        '120363418850903362@g.us',  // DAGGO
+        '120363304493232977@g.us',  // NEXTILE
+        '120363287198677451@g.us',  // NEWLIFE
+        '120363239510350827@g.us',  // LOCO
+    ].join(',')).split(',').map(s => s.trim()).filter(Boolean)
+);
+
 // ─────────────────────────────────────────────
 // STATE
 // ─────────────────────────────────────────────
@@ -188,8 +199,10 @@ async function extractCustomerInfo(text) {
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
     console.log(`\n\n🎯 GROUP ID IS: ${jid}\n\n`);
-    
-    // REMOVED the strict GROUP_JID check so it can listen to multiple groups!
+
+    // Only process messages from known seller groups — ignore personal chats,
+    // family groups, etc. so they don't pollute the pending cache or match wrong orders.
+    if (!SELLER_GROUPS.has(jid)) return;
     if (msg.key.fromMe) return;
 
     const text                  = extractText(msg);
