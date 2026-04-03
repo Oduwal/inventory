@@ -272,7 +272,12 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     """
 
     # --- Delivery collections by day (optionally filtered by agent) ---
-    d_day = func.date(Delivery.created_at).label("day")
+    # Use delivered_at (actual delivery time) not created_at, because:
+    #  - orders may be readjusted before delivery (line_amount changes)
+    #  - money is collected on delivery day, not creation day
+    # Fall back to delivery_date then created_at for older records.
+    _effective_dt = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
+    d_day = func.date(_effective_dt).label("day")
 
     delivery_stmt = (
         select(
@@ -289,9 +294,9 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     if agent_id:
         delivery_stmt = delivery_stmt.where(Delivery.agent_id == agent_id)
     if start:
-        delivery_stmt = delivery_stmt.where(Delivery.created_at >= start)
+        delivery_stmt = delivery_stmt.where(_effective_dt >= start)
     if end:
-        delivery_stmt = delivery_stmt.where(Delivery.created_at < end)
+        delivery_stmt = delivery_stmt.where(_effective_dt < end)
 
     delivery_rows = db.execute(delivery_stmt).all()
 

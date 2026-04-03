@@ -2289,9 +2289,10 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         net_position        = remittance + operating_balance
         rows = []  # no per-day rows for branch summary
 
-        d_stmt = select(Delivery).where(Delivery.branch_id == branch_id_for_admin).order_by(desc(Delivery.created_at)).limit(300)
-        if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
-        if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+        _eff_a = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
+        d_stmt = select(Delivery).where(Delivery.branch_id == branch_id_for_admin).order_by(desc(_eff_a)).limit(300)
+        if start_dt: d_stmt = d_stmt.where(_eff_a >= start_dt)
+        if end_dt: d_stmt = d_stmt.where(_eff_a < end_dt)
         deliveries = db.execute(d_stmt).scalars().all()
         branch_agents = db.execute(
             select(User).where(User.role == "AGENT").where(User.branch_id == branch_id_for_admin)
@@ -2308,9 +2309,10 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
         remittance = float(total_collections) - float(total_office_expenses)
         net_position = remittance + operating_balance
-        d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(Delivery.created_at)).limit(300)
-        if start_dt: d_stmt = d_stmt.where(Delivery.created_at >= start_dt)
-        if end_dt: d_stmt = d_stmt.where(Delivery.created_at < end_dt)
+        _eff = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
+        d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(_eff)).limit(300)
+        if start_dt: d_stmt = d_stmt.where(_eff >= start_dt)
+        if end_dt: d_stmt = d_stmt.where(_eff < end_dt)
         deliveries = db.execute(d_stmt).scalars().all()
 
     delivery_ids = [d.id for d in deliveries]
