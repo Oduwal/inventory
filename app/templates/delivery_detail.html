@@ -416,7 +416,7 @@
     <div class="badge b-blue">💬 SELLER GROUP CHAT</div>
     <span id="wa-live-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e;" title="Live"></span>
   </div>
-  <div id="wa-chat-thread" style="display:flex;flex-direction:column;gap:8px;">
+  <div id="wa-chat-thread" style="display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;padding-right:4px;scroll-behavior:smooth;">
     {% if wa_comments %}
       {% for c in wa_comments %}
       <div style="display:flex;gap:10px;align-items:flex-start;{% if c.direction=='outbound' %}flex-direction:row-reverse;{% endif %}">
@@ -444,6 +444,11 @@
   const thread   = document.getElementById('wa-chat-thread');
   const liveDot  = document.getElementById('wa-live-dot');
   const delivId  = {{ d.id }};
+
+  // Auto-scroll chat to latest message on load
+  if (thread.lastElementChild) {
+    thread.scrollTop = thread.scrollHeight;
+  }
 
   const es = new EventSource(`/api/stream/${delivId}`);
 
@@ -476,7 +481,7 @@
     const div = document.createElement('div');
     div.innerHTML = e.data;
     thread.appendChild(div.firstElementChild || div);
-    thread.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
 
     // Flash live dot amber
     liveDot.style.background = '#f59e0b';
