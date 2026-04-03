@@ -17,7 +17,12 @@
 <div class="alert alert-danger">⚠ {{ error or request.query_params.get('error')|replace('+',' ') }}</div>
 {% endif %}
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+<style>
+  @media(max-width:860px){
+    .detail-grid { grid-template-columns:1fr !important; }
+  }
+</style>
+<div class="detail-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div class="card">
     <div class="badge b-blue" style="margin-bottom:14px;">CUSTOMER</div>
     <div style="font-size:20px;font-weight:800;margin-bottom:10px;">{{ d.customer_name }}</div>

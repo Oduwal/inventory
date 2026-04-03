@@ -281,6 +281,7 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
         )
         .select_from(Delivery)
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.id)
+        .where(Delivery.status == "DELIVERED")
         .group_by(d_day)
         .order_by(d_day.asc())
     )

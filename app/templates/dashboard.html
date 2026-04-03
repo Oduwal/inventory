@@ -5,6 +5,18 @@
 {% set active = 'dashboard' %}
 
 {% block content %}
+<style>
+  /* Mobile-friendly dashboard */
+  @media(max-width:860px){
+    .dash-stats-grid { grid-template-columns: repeat(2, 1fr) !important; gap:10px !important; }
+    .dash-stats-grid .card { padding:12px !important; }
+    .dash-stats-grid .card div:first-child + div { font-size:20px !important; }
+    .dash-charts-grid { grid-template-columns:1fr !important; }
+    .dash-two-col { grid-template-columns:1fr !important; }
+    .dash-two-col table { font-size:12px; }
+    .dash-two-col .badge { font-size:10px !important; padding:3px 8px !important; }
+  }
+</style>
 <div class="card" style="margin-bottom:14px;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
         <div>
@@ -19,7 +31,7 @@
     </div>
 </div>
 
-<div style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;">
+<div class="dash-stats-grid" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;">
     <div class="card">
         <div class="muted small">Items</div>
         <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ items_count }}</div>
@@ -46,7 +58,7 @@
 </div>
 
 {% if chart_labels %}
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;margin-bottom:4px;">
+<div class="dash-charts-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;margin-bottom:4px;">
     <div class="card" style="border-top:3px solid #4f7cff;">
         <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">
             📦 Daily Deliveries — Last 14 Days
@@ -62,7 +74,7 @@
 </div>
 {% endif %}
 
-<div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
+<div class="dash-two-col" style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
     <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <span class="badge b-blue">LAST 7 DAYS</span>
@@ -92,7 +104,7 @@
     </div>
 </div>
 
-<div style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
+<div class="dash-two-col" style="display:grid; grid-template-columns: 1.2fr .8fr; gap:14px; margin-top:14px;">
     <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center;">
             <span class="badge b-purple">TOP ITEMS BY STOCK</span>
