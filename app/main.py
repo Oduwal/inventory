@@ -6170,9 +6170,8 @@ async def send_agent_feedback(
     else:
         quote_id = quote_body = quote_sender = fallback_grp = None
 
-    # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
-    # Configurable via CATEGORY_GROUP_MAP env var as JSON, e.g.:
-    # {"DAGGO":"120363418850903362@g.us","NEXTILE":"120363304493232977@g.us"}
+    # 2. GROUP ROUTING — trust the ACTUAL group the seller posted in first.
+    # Only fall back to category-based guessing if we don't have the original group.
     _default_cgm = {
         "DAGGO":   "120363418850903362@g.us",
         "NEXTILE": "120363304493232977@g.us",
@@ -6184,17 +6183,18 @@ async def send_agent_feedback(
     except (ValueError, TypeError):
         CATEGORY_GROUP_MAP = _default_cgm
 
-    delivery_category = db.execute(
-        select(Item.category)
-        .join(DeliveryItem, DeliveryItem.item_id == Item.id)
-        .where(DeliveryItem.delivery_id == delivery.id)
-        .limit(1)
-    ).scalar()
-
-    if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
-        target_group = CATEGORY_GROUP_MAP[delivery_category]
+    if fallback_grp:
+        # We KNOW which group the seller originally posted in — use that.
+        target_group = fallback_grp
     else:
-        target_group = fallback_grp if fallback_grp else ""
+        # No original group saved — fall back to category lookup
+        delivery_category = db.execute(
+            select(Item.category)
+            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .limit(1)
+        ).scalar()
+        target_group = CATEGORY_GROUP_MAP.get(delivery_category, "") if delivery_category else ""
 
     try:
         async with httpx.AsyncClient() as client:
