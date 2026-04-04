@@ -96,7 +96,11 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
 /** Extract plain text body from any Baileys message object */
 function extractText(msg) {
     const m = msg.message;
-    if (!m) return '';
+    if (!m) {
+        console.log(`⚠️ msg.message is NULL — keys on msg: ${Object.keys(msg).join(', ')}`);
+        console.log(`⚠️ msg.messageStubType: ${msg.messageStubType}, msg.messageTimestamp: ${msg.messageTimestamp}`);
+        return '';
+    }
 
     // Debug: log the message keys so we can see what Baileys gives us
     console.log(`📋 Message keys: ${Object.keys(m).join(', ')}`);
