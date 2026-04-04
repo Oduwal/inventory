@@ -39,29 +39,16 @@ const PORT           = process.env.PORT            || 3000;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET  || '';
 
 // Only process messages from these seller groups.
-// WhatsApp now uses BOTH @g.us (legacy) and @lid (Linked ID) formats for the
-// same group.  We whitelist BOTH so messages are never silently dropped.
-// Set WA_SELLER_GROUPS="group1@g.us,group2@g.us,lid1@lid" to override ALL.
+// Set WA_SELLER_GROUPS="group1@g.us,group2@g.us" in env to override.
+// Check Railway logs for "NEW GROUP DETECTED" to discover new group IDs.
 const SELLER_GROUPS = new Set(
     (process.env.WA_SELLER_GROUPS || [
-        '120363418850903362@g.us',  // DAGGO  (@g.us)
-        '120363304493232977@g.us',  // NEXTILE (@g.us)
-        '120363287198677451@g.us',  // NEWLIFE (@g.us)
-        '120363239510350827@g.us',  // LOCO   (@g.us)
-        '229136824016931@lid',      // Seller group (@lid format)
-        '100571088421115@lid',      // Seller group (@lid format)
-        '120363030365682740@g.us',  // Seller group (@g.us)
-        '2348107485219-1543485672@g.us', // Seller group (@g.us)
+        '120363418850903362@g.us',  // DAGGO
+        '120363304493232977@g.us',  // NEXTILE
+        '120363287198677451@g.us',  // NEWLIFE
+        '120363239510350827@g.us',  // LOCO
     ].join(',')).split(',').map(s => s.trim()).filter(Boolean)
 );
-
-// Map @lid JIDs back to their @g.us equivalent so Python's category routing
-// and quoting always uses a consistent group identifier.
-// Update this map as you discover new @lid ↔ @g.us pairs.
-const LID_TO_GUS = {
-    // '229136824016931@lid': '120363418850903362@g.us',   // example: DAGGO
-    // '100571088421115@lid': '120363304493232977@g.us',   // example: NEXTILE
-};
 
 // ─────────────────────────────────────────────
 // STATE
@@ -212,27 +199,27 @@ async function extractCustomerInfo(text) {
 //     the original post OR a bot update, since both are in whatsapp_outbound_map.
 // ─────────────────────────────────────────────
 async function handleInbound(msg) {
-    const rawJid = msg.key.remoteJid || '';
-    console.log(`\n\n🎯 GROUP ID IS: ${rawJid}\n\n`);
+    const jid = msg.key.remoteJid || '';
+
+    // Log EVERY group/lid message so you can discover new IDs in Railway logs
+    if (jid.endsWith('@g.us') || jid.endsWith('@lid')) {
+        console.log(`\n🎯 GROUP MESSAGE FROM: ${jid}\n`);
+    }
 
     // Only process messages from known seller groups — ignore personal chats,
     // family groups, etc. so they don't pollute the pending cache or match wrong orders.
-    if (!SELLER_GROUPS.has(rawJid)) {
-        // Log skipped groups (except status broadcasts) so missing groups are visible
-        if (!rawJid.includes('status@broadcast') && (rawJid.endsWith('@g.us') || rawJid.endsWith('@lid'))) {
-            console.log(`⏭️  SKIPPED group ${rawJid} — not in SELLER_GROUPS`);
+    if (!SELLER_GROUPS.has(jid)) {
+        if (!jid.includes('status@broadcast') && (jid.endsWith('@g.us') || jid.endsWith('@lid'))) {
+            console.log(`🆕 NEW GROUP DETECTED: ${jid} — add to WA_SELLER_GROUPS env var if this is a seller group`);
         }
         return;
     }
     if (msg.key.fromMe) return;
 
-    // Normalise @lid → @g.us so Python always stores a consistent group_jid
-    const jid = LID_TO_GUS[rawJid] || rawJid;
-
     const text                  = extractText(msg);
     const { id: quotedId,
             body: quotedBody }  = extractQuoted(msg);
-    const sender                = msg.key.participant || rawJid;
+    const sender                = msg.key.participant || jid;
     const msgId                 = msg.key.id;
 
     if (!text) return;
