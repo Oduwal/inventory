@@ -34,14 +34,20 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         if not delivery_id:
             return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
 
-        summary = message.get("summary", "No summary provided by AI.")
-        ended_reason = call_data.get("endedReason", "")
+        # Vapi usually provides the summary inside the 'analysis' object
+        analysis = message.get("analysis", {}) or call_data.get("analysis", {})
+        summary = analysis.get("summary") or message.get("summary") or "No summary provided by AI."
+        
+        # Vapi can put endedReason in the root message or inside message.call
+        ended_reason = message.get("endedReason") or call_data.get("endedReason") or ""
 
         d = db.get(Delivery, int(delivery_id))
         if d:
             existing_note = d.note or ""
             d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
             
+            logging.getLogger("webhook").info(f"Call {delivery_id} ended with reason: '{ended_reason}'")
+
             # Trigger fallback logic if call failed
             if ended_reason in [
                 "voicemail", "customer-hung-up", "customer-ended-call", 
@@ -80,8 +86,12 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
 
                         send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
                         d.note += "\n[System]: All numbers failed. WhatsApp Fallback message triggered."
+                        logging.getLogger("webhook").info(f"Fallback WhatsApp message triggered for delivery {d.id} to {d.customer_phone}")
                     except Exception as wa_err:
                         logging.getLogger("webhook").error(f"WhatsApp fallback error: {wa_err}")
+
+            else:
+                logging.getLogger("webhook").info(f"Call {delivery_id} ended reason '{ended_reason}' did not trigger fallback.")
 
             db.commit()
             
