@@ -612,6 +612,9 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
         if stock <= 0:
             continue
         last_tx = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == item.id).where(Transaction.branch_id == item_branch_id))
+        if last_tx is not None and last_tx.tzinfo is None:
+            last_tx = last_tx.replace(tzinfo=timezone.utc)
+            
         if last_tx is None or last_tx < cutoff:
             stale_rows.append({"item": item, "stock": int(stock), "last_tx": last_tx,
                                "days_since": (datetime.now(timezone.utc) - last_tx).days if last_tx else 9999})
