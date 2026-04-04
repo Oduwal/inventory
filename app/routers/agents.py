@@ -108,6 +108,7 @@ async def remove_agent_picture(
 async def edit_agent_profile(
     request: Request,
     agent_id: int,
+    username: str = Form(""),
     full_name: str = Form(""),
     phone: str = Form(""),
     csrf_token: str = Form(""),
@@ -132,10 +133,21 @@ async def edit_agent_profile(
         if target.role != "AGENT":
             return HTMLResponse("Forbidden — admins can only edit agent profiles", status_code=403)
 
+    # Username change — validate uniqueness
+    new_username = sanitize_username(username)
+    if new_username != target.username:
+        existing = db.scalar(select(User).where(User.username == new_username))
+        if existing:
+            return redirect(f"/agents/{agent_id}?error=Username+'{new_username}'+is+already+taken")
+        old_username = target.username
+        target.username = new_username
+    else:
+        old_username = target.username
+
     target.full_name = sanitize_text(full_name, 140, "Full name") or None
     target.phone = sanitize_phone(phone) or None
     db.commit()
-    audit_log(db, user.id, "PROFILE_EDITED", f"user_id={agent_id} name={target.full_name} phone={target.phone}",
+    audit_log(db, user.id, "PROFILE_EDITED", f"user_id={agent_id} username={target.username} name={target.full_name} phone={target.phone}",
               ip=request.client.host if request.client else "")
     return redirect(f"/agents/{agent_id}?success=Profile+updated+successfully")
 

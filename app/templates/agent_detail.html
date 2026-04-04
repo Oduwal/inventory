@@ -11,6 +11,13 @@
 
 {% block content %}
 
+{% if request.query_params.get('error') %}
+<div class="alert alert-danger" style="margin-bottom:14px;">❌ {{ request.query_params.get('error') }}</div>
+{% endif %}
+{% if request.query_params.get('success') %}
+<div class="alert alert-success" style="margin-bottom:14px;">✅ {{ request.query_params.get('success') }}</div>
+{% endif %}
+
 {# ── Profile info — always shown ───────────────────────────────────────── #}
 <div class="card" style="margin-bottom:14px;">
   <div class="badge {% if is_admin_profile %}b-purple{% else %}b-blue{% endif %}" style="margin-bottom:12px;">
@@ -52,6 +59,11 @@
   <form method="post" action="/agents/{{ agent.id }}/edit-profile">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
     <div class="inputs" style="flex-wrap:wrap;">
+      <div>
+        <label>Username</label>
+        <input type="text" name="username" value="{{ agent.username }}" maxlength="80" required
+               pattern="[\w.\-]{1,80}" title="Letters, numbers, dots, underscores, hyphens only" placeholder="Username" />
+      </div>
       <div>
         <label>Full Name</label>
         <input type="text" name="full_name" value="{{ agent.full_name or '' }}" maxlength="140" placeholder="Enter full name" />
