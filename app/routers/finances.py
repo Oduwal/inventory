@@ -1115,30 +1115,37 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
                 reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"
             ))
     # Reverse send-side expense cash entry if recorded
-    if transfer.expense_amount and transfer.expense_amount > 0:
-        exp_kind = "OFFICE_EXPENSE" if (transfer.expense_kind == "COLLECTION_DEDUCTION" and transfer.delegated_agent_id is None) else "EXPENSE"
-        # Find and delete the original expense entry
-        orig_exp = db.scalar(
-            select(CashEntry).where(CashEntry.branch_id == transfer.from_branch_id)
-            .where(CashEntry.note.like(f"Transfer #{transfer.id} expense:%"))
-            .order_by(CashEntry.created_at.asc())
-        )
-        if orig_exp:
-            db.delete(orig_exp)
+    if transfer.expense_amount and float(transfer.expense_amount) > 0:
+        to_branch_name = transfer.to_branch.name if transfer.to_branch else f"Branch {transfer.to_branch_id}"
+        # Add a reversal (negative) cash entry so the books balance
+        reversal_agent = transfer.delegated_agent_id or user.id
+        reversal_kind = "OFFICE_EXPENSE" if not transfer.delegated_agent_id else "EXPENSE"
+        db.add(CashEntry(
+            branch_id=transfer.from_branch_id,
+            agent_id=reversal_agent,
+            kind=reversal_kind,
+            amount=-float(transfer.expense_amount),
+            note=f"REVERSED — waybill to {to_branch_name} (transfer #{transfer.id} cancelled)",
+        ))
     # Reverse receive-side expense cash entry if recorded
-    if transfer.receive_expense_amount and transfer.receive_expense_amount > 0:
-        orig_recv_exp = db.scalar(
-            select(CashEntry).where(CashEntry.branch_id == transfer.to_branch_id)
-            .where(CashEntry.note.like(f"Transfer #{transfer.id} receive expense:%"))
-            .order_by(CashEntry.created_at.asc())
-        )
-        if orig_recv_exp:
-            db.delete(orig_recv_exp)
+    if transfer.receive_expense_amount and float(transfer.receive_expense_amount) > 0:
+        from_branch_name = transfer.from_branch.name if transfer.from_branch else f"Branch {transfer.from_branch_id}"
+        recv_reversal_agent = transfer.delegated_receiver_id or user.id
+        recv_reversal_kind = "OFFICE_EXPENSE" if not transfer.delegated_receiver_id else "EXPENSE"
+        db.add(CashEntry(
+            branch_id=transfer.to_branch_id,
+            agent_id=recv_reversal_agent,
+            kind=recv_reversal_kind,
+            amount=-float(transfer.receive_expense_amount),
+            note=f"REVERSED — waybill from {from_branch_name} (transfer #{transfer.id} cancelled)",
+        ))
     transfer.status = "CANCELLED"
     transfer.cancelled_by_id = user.id
     transfer.cancelled_at = datetime.now(timezone.utc)
     db.commit()
-    return redirect(f"/transfers/{transfer_id}")
+    audit_log(db, user.id, "TRANSFER_CANCELLED", f"transfer_id={transfer_id}",
+              ip=request.client.host if request.client else "")
+    return redirect(f"/transfers/{transfer_id}?success=Transfer+cancelled+and+expenses+reversed")
 
 
 # ────────────────────────────────────────────────
