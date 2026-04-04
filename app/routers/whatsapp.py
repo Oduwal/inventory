@@ -322,10 +322,13 @@ async def send_agent_feedback(
         .limit(1)
     ).scalar()
 
-    if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
+    # Priority: original group from DB (most accurate) → category guess → empty
+    if fallback_grp:
+        target_group = fallback_grp
+    elif delivery_category and delivery_category in CATEGORY_GROUP_MAP:
         target_group = CATEGORY_GROUP_MAP[delivery_category]
     else:
-        target_group = fallback_grp if fallback_grp else ""
+        target_group = ""
 
     try:
         async with httpx.AsyncClient() as client:

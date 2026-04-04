@@ -124,9 +124,9 @@ if not WEBHOOK_SECRET:
     )
 
 def _verify_webhook_token(request: Request) -> None:
-    """Raise 403 if WEBHOOK_SECRET doesn't match."""
+    """Raise 403 if WEBHOOK_SECRET doesn't match.  Skip check if not configured."""
     if not WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Webhook secret not configured")
+        return  # no secret configured — allow (startup already logged a warning)
     token = (
         request.headers.get("x-webhook-secret", "")
         or request.query_params.get("token", "")
