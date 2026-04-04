@@ -397,8 +397,29 @@ app.post('/send-group-feedback', async (req, res) => {
 // ─────────────────────────────────────────────
 // BOOT
 // ─────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🤖 API listening on port ${PORT}`);
 });
 
 connectToWhatsApp();
+
+// Graceful shutdown safety net to prevent Bad MAC errors
+const exitHandler = () => {
+    console.log('🛑 Railway shutting down... saving WhatsApp session safely.');
+    if (sock) {
+        sock.ws?.close(); // Safely closing websocket flushes current memory states to file
+    }
+    server.close(() => {
+        console.log('✅ Server closed. Exiting process safely.');
+        process.exit(0);
+    });
+    // Fallback: forcefully turn off if it is taking too long
+    setTimeout(() => {
+        console.log('⚠️ Forced shutdown after 5s.');
+        process.exit(1);
+    }, 5000);
+};
+
+// Listen for Railway shut down signals
+process.on('SIGINT', exitHandler);
+process.on('SIGTERM', exitHandler);
