@@ -1573,7 +1573,7 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
         # Strip markdown fences if Gemini wraps anyway
         if text_out.startswith("```"):
             text_out = text_out.strip("`").lstrip("json").strip()
-        return _json.loads(text_out)
+        return json.loads(text_out)
     except Exception as e:
         logging.getLogger("gemini").warning("Gemini classify failed: %s", e)
         return {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
@@ -1641,7 +1641,7 @@ async def send_agent_feedback(
         "LOCO":    "120363239510350827@g.us"
     }
     try:
-        CATEGORY_GROUP_MAP = _json.loads(os.getenv("CATEGORY_GROUP_MAP", "")) or _default_cgm
+        CATEGORY_GROUP_MAP = json.loads(os.getenv("CATEGORY_GROUP_MAP", "")) or _default_cgm
     except (ValueError, TypeError):
         CATEGORY_GROUP_MAP = _default_cgm
 
@@ -1858,7 +1858,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # Classify in a thread so we don't block the event loop
     loop = asyncio.get_event_loop()
     ai   = await loop.run_in_executor(None, _call_gemini_classify, thread, reply_text)
-    classification_json = _json.dumps(ai)
+    classification_json = json.dumps(ai)
 
     # Render comment body: show AI summary prominently, raw text below
     label   = ai.get("classification", "OTHER")
