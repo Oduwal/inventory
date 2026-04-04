@@ -11,6 +11,7 @@ from app.routers import finances
 from app.routers import admin
 from app.routers import static
 from app.routers import transfers
+from app.routers import whatsapp
 
 app.include_router(auth.router)
 app.include_router(dashboard.router)
@@ -24,6 +25,7 @@ app.include_router(finances.router)
 app.include_router(admin.router)
 app.include_router(static.router)
 app.include_router(transfers.router)
+app.include_router(whatsapp.router)
 
 if __name__ == '__main__':
     import uvicorn
