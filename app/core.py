@@ -19,7 +19,7 @@ __all__: list[str] = []   # populated at module end; see _EXPORT_PRIVATE below
 _EXPORT_PRIVATE = [
     "_now", "_ngn", "_parse_iso_date",
     "_range_dates_from_inputs", "_dt_range_from_dates",
-    "_verify_webhook_token",
+    "_verify_webhook_token", "_send_web_push",
 ]
 import os
 import html
