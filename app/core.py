@@ -432,6 +432,17 @@ def ensure_schema() -> None:
         # Profile picture columns
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture BYTEA NULL")
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture_mime VARCHAR(50) NULL")
+        # Username change history — preserves audit trail when accounts change hands
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS username_history (
+            id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            old_username VARCHAR(80) NOT NULL,
+            new_username VARCHAR(80) NOT NULL,
+            changed_by   INTEGER REFERENCES users(id),
+            reason       VARCHAR(200) DEFAULT '',
+            changed_at   TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_username_history_user ON username_history (user_id)")
         _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP NULL")

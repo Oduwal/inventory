@@ -78,6 +78,27 @@
       </div>
     </div>
   </form>
+
+  {% if username_history and username_history|length > 0 %}
+  <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">
+      🕐 Username History
+    </div>
+    <div style="font-size:12px;color:var(--muted);">
+      {% for h in username_history %}
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;flex-wrap:wrap;
+                  {% if not loop.last %}border-bottom:1px solid rgba(255,255,255,.04);{% endif %}">
+        <span style="color:var(--danger);font-weight:600;text-decoration:line-through;">{{ h.old_username }}</span>
+        <span>→</span>
+        <span style="color:var(--accent2);font-weight:600;">{{ h.new_username }}</span>
+        <span style="margin-left:auto;font-size:11px;opacity:.7;">
+          by {{ h.changed_by_name or '?' }} · {{ h.changed_at.strftime('%d %b %Y %H:%M') if h.changed_at else '—' }}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 {# ── Branch agents list — admin profile only ────────────────────────────── #}

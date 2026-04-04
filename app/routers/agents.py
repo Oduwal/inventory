@@ -140,6 +140,11 @@ async def edit_agent_profile(
         if existing:
             return redirect(f"/agents/{agent_id}?error=Username+'{new_username}'+is+already+taken")
         old_username = target.username
+        # Record the change permanently so historical records can be traced
+        db.execute(text(
+            "INSERT INTO username_history (user_id, old_username, new_username, changed_by, changed_at) "
+            "VALUES (:uid, :old, :new, :by, :now)"
+        ), {"uid": agent_id, "old": old_username, "new": new_username, "by": user.id, "now": _now()})
         target.username = new_username
     else:
         old_username = target.username
@@ -336,6 +341,12 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
     cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
     csrf_token = get_csrf_token(request)
+    # Load username change history for this account
+    username_history = db.execute(text(
+        "SELECT uh.old_username, uh.new_username, uh.changed_at, u.username as changed_by_name "
+        "FROM username_history uh LEFT JOIN users u ON u.id = uh.changed_by "
+        "WHERE uh.user_id = :uid ORDER BY uh.changed_at DESC"
+    ), {"uid": agent_id}).fetchall()
     return tpl(request, "agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
         "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
@@ -348,6 +359,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         "start_date": sd.isoformat() if sd else "",
         "end_date": ed.isoformat() if ed else "",
         "active": "agents", "csrf_token": csrf_token,
+        "username_history": username_history,
     })
 
 
