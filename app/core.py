@@ -98,6 +98,8 @@ from .security import (
     validate_push_endpoint,
     verify_origin_for_json,
     verify_twilio_signature_with_params,
+    validate_image_upload,
+    process_profile_image,
 )
 from .calling_service import trigger_call
 from contextlib import asynccontextmanager
@@ -427,6 +429,9 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(140) NULL")
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(40) NULL")
+        # Profile picture columns
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture BYTEA NULL")
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture_mime VARCHAR(50) NULL")
         _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP NULL")

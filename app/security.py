@@ -464,6 +464,74 @@ def validate_upload(filename: str, content: bytes) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# [SEC-9b] PROFILE IMAGE UPLOAD VALIDATION & PROCESSING
+# ─────────────────────────────────────────────────────────────────────────────
+
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_IMAGE_UPLOAD_BYTES   = 10 * 1024 * 1024  # Accept up to 10 MB raw (we compress it down)
+PROFILE_IMAGE_MAX_DIM    = 400               # Max width/height in pixels
+PROFILE_IMAGE_QUALITY    = 80                # JPEG compression quality
+
+# Magic bytes for common image formats
+_IMAGE_MAGIC = {
+    b"\xff\xd8\xff": "image/jpeg",           # JPEG
+    b"\x89PNG\r\n\x1a\n": "image/png",       # PNG
+    b"RIFF": "image/webp",                   # WebP (starts with RIFF)
+}
+
+def validate_image_upload(filename: str, content: bytes) -> None:
+    """Raise HTTPException if the uploaded image fails validation."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image type '{ext}' is not allowed. Upload .jpg, .png, or .webp only.",
+        )
+    if len(content) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image is too large ({len(content) // (1024*1024)}MB). Maximum upload size is 10MB.",
+        )
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
+    # Check magic bytes to make sure it's actually an image
+    is_valid = False
+    for magic in _IMAGE_MAGIC:
+        if content[:len(magic)] == magic:
+            is_valid = True
+            break
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="File does not appear to be a valid image.")
+
+
+def process_profile_image(content: bytes) -> tuple[bytes, str]:
+    """Resize and compress a profile image. Returns (jpeg_bytes, mime_type).
+    Automatically shrinks any image to max 400x400 and compresses to JPEG."""
+    from PIL import Image
+    import io as _io
+
+    img = Image.open(_io.BytesIO(content))
+
+    # Convert to RGB (handles PNG with transparency, RGBA, etc.)
+    if img.mode in ("RGBA", "LA", "P"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Resize to fit within max dimensions, keeping aspect ratio
+    img.thumbnail((PROFILE_IMAGE_MAX_DIM, PROFILE_IMAGE_MAX_DIM), Image.LANCZOS)
+
+    # Compress to JPEG
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=PROFILE_IMAGE_QUALITY, optimize=True)
+    return buf.getvalue(), "image/jpeg"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # [SEC-10] PUSH SUBSCRIPTION ENDPOINT VALIDATION
 # ─────────────────────────────────────────────────────────────────────────────
 

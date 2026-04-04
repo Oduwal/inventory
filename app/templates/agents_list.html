@@ -24,6 +24,7 @@
             <thead>
                 <tr>
                     <th>ID</th>
+                    <th></th>
                     <th>Username</th>
                     <th>Full Name</th>
                     <th>Phone</th>
@@ -39,6 +40,11 @@
                 {% for a in agents %}
                 <tr>
                     <td>#{{ a.id }}</td>
+                    <td>
+                      <img src="/users/{{ a.id }}/avatar" alt=""
+                           style="width:30px;height:30px;border-radius:50%;object-fit:cover;
+                                  border:2px solid var(--border);vertical-align:middle;" />
+                    </td>
                     <td>{{ a.username }}</td>
                     <td>{{ a.full_name or "-" }}</td>
                     <td>{{ a.phone or "-" }}</td>
@@ -57,7 +63,7 @@
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="{% if user.role == 'SUPERVISOR' %}7{% else %}6{% endif %}" class="muted">
+                    <td colspan="{% if user.role == 'SUPERVISOR' %}8{% else %}7{% endif %}" class="muted">
                         {% if user.role == "SUPERVISOR" %}No admins found.{% else %}No agents found.{% endif %}
                     </td>
                 </tr>

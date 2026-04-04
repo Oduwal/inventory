@@ -11,3 +11,4 @@ itsdangerous
 httpx
 pywebpush
 twilio
+Pillow

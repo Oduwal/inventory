@@ -15,6 +15,7 @@ from sqlalchemy import (
     CheckConstraint,
     Index,
     Text,
+    LargeBinary,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,6 +64,9 @@ class User(Base):
     full_name:     Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone:         Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at:    Mapped[datetime]   = mapped_column(DateTime, default=_utcnow, nullable=False)
+    # Profile picture — stored as compressed binary in DB
+    profile_picture:      Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    profile_picture_mime: Mapped[str | None]   = mapped_column(String(50), nullable=True)
 
     branch:       Mapped["Branch | None"]   = relationship(back_populates="users")
     deliveries:   Mapped[list["Delivery"]]  = relationship(back_populates="agent")

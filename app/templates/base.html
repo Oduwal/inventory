@@ -365,8 +365,36 @@
     </div>
 
     <div class="userbox">
-      <div class="name">{{ user.username if user else "Guest" }}</div>
-      <div class="role">{{ user.role if user else "—" }}</div>
+      {% if user %}
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="position:relative;flex-shrink:0;" id="avatar-wrap">
+          <img src="/users/{{ user.id }}/avatar?v={{ range(10000)|random }}"
+               alt="avatar"
+               style="width:42px;height:42px;border-radius:50%;object-fit:cover;
+                      border:2px solid var(--accent);box-shadow:0 0 12px rgba(79,124,255,.3);
+                      cursor:pointer;transition:all .25s cubic-bezier(0.34,1.56,0.64,1);"
+               onclick="document.getElementById('avatar-modal').style.display='flex'"
+               onmouseover="this.style.transform='scale(1.1)';this.style.boxShadow='0 0 20px rgba(79,124,255,.5)'"
+               onmouseout="this.style.transform='scale(1)';this.style.boxShadow='0 0 12px rgba(79,124,255,.3)'"
+               id="sidebar-avatar" />
+          <div onclick="document.getElementById('avatar-modal').style.display='flex'"
+               style="position:absolute;bottom:-2px;right:-2px;width:18px;height:18px;
+                      border-radius:50%;background:var(--accent);display:flex;
+                      align-items:center;justify-content:center;cursor:pointer;
+                      font-size:10px;border:2px solid var(--bg);
+                      transition:transform .2s;"
+               onmouseover="this.style.transform='scale(1.15)'"
+               onmouseout="this.style.transform='scale(1)'">📷</div>
+        </div>
+        <div style="min-width:0;">
+          <div class="name">{{ user.username }}</div>
+          <div class="role">{{ user.role }}</div>
+        </div>
+      </div>
+      {% else %}
+      <div class="name">Guest</div>
+      <div class="role">—</div>
+      {% endif %}
     </div>
 
     <nav class="nav">
@@ -970,6 +998,78 @@ function dismissCele() {
     window.history.replaceState({}, '', clean);
   }
 })();
+
 </script>
+
+{% if user %}
+<!-- Profile Picture Upload Modal -->
+<div id="avatar-modal" onclick="if(event.target===this)this.style.display='none'"
+     style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);
+            backdrop-filter:blur(8px);align-items:center;justify-content:center;">
+  <div style="background:var(--bg);border:1px solid var(--border);border-radius:20px;
+              padding:28px;width:340px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.5);
+              animation:springFadeIn .4s cubic-bezier(0.16,1,0.3,1) both;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:800;margin:0;">Update Profile Picture</h3>
+      <button onclick="document.getElementById('avatar-modal').style.display='none'"
+              style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:18px;">✕</button>
+    </div>
+
+    <!-- Preview -->
+    <div id="avatar-preview-wrap"
+         style="width:120px;height:120px;margin:0 auto 20px;border-radius:50%;overflow:hidden;
+                border:3px solid var(--accent);box-shadow:0 0 24px rgba(79,124,255,.3);
+                display:flex;align-items:center;justify-content:center;
+                background:rgba(255,255,255,.04);">
+      <img id="avatar-preview" src="/users/{{ user.id }}/avatar?v={{ range(10000)|random }}"
+           style="width:100%;height:100%;object-fit:cover;" />
+    </div>
+
+    <form method="post" action="/profile/upload-picture" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <div style="position:relative;margin-bottom:16px;">
+        <input type="file" name="file" id="avatar-file-input" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+               required
+               onchange="previewAvatar(this)"
+               style="width:100%;padding:10px 14px;border-radius:12px;border:1px solid var(--border);
+                      background:rgba(0,0,0,.2);color:var(--text);font-size:13px;cursor:pointer;" />
+      </div>
+      <p id="avatar-size-info" style="color:var(--muted);font-size:11px;margin-bottom:14px;text-align:center;display:none;">
+        📐 Large images will be automatically resized and compressed
+      </p>
+      <button type="submit" class="btnPrimary" style="width:100%;justify-content:center;padding:12px;">
+        📷 Upload Picture
+      </button>
+    </form>
+
+    <p style="color:var(--muted);font-size:11px;text-align:center;margin-top:12px;">
+      Accepts JPG, PNG, or WebP · Auto-resized to fit
+    </p>
+  </div>
+</div>
+
+<script>
+function previewAvatar(input) {
+  if (input.files && input.files[0]) {
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      document.getElementById('avatar-preview').src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+    const info = document.getElementById('avatar-size-info');
+    info.style.display = 'block';
+    if (file.size > 2 * 1024 * 1024) {
+      info.textContent = `📐 ${sizeMB}MB — will be automatically compressed`;
+    } else {
+      info.textContent = `✅ ${sizeMB}MB — looking good!`;
+    }
+  }
+}
+</script>
+{% endif %}
+
 </body>
 </html>
+

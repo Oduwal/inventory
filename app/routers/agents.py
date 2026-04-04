@@ -11,6 +11,99 @@ from app.security import *
 
 router = APIRouter()
 
+# ────────────────────────────────────────────────
+#  PROFILE PICTURE ENDPOINTS
+# ────────────────────────────────────────────────
+
+# Default avatar SVG — a nice person silhouette
+_DEFAULT_AVATAR_SVG = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+<rect width="400" height="400" rx="200" fill="#1e2a4a"/>
+<circle cx="200" cy="155" r="72" fill="#3b5998"/>
+<ellipse cx="200" cy="340" rx="120" ry="100" fill="#3b5998"/>
+</svg>'''
+
+
+@router.get("/users/{user_id}/avatar")
+def user_avatar(user_id: int, db: Session = Depends(get_db)):
+    """Serve a user's profile picture, or a default SVG placeholder."""
+    from sqlalchemy.orm import undefer
+    u = db.execute(
+        select(User).where(User.id == user_id).options(undefer(User.profile_picture))
+    ).scalar()
+    if u and u.profile_picture:
+        return Response(
+            content=u.profile_picture,
+            media_type=u.profile_picture_mime or "image/jpeg",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+    return Response(
+        content=_DEFAULT_AVATAR_SVG,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.post("/profile/upload-picture")
+async def upload_profile_picture(
+    request: Request,
+    file: UploadFile = File(...),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Upload and auto-resize a profile picture for the currently logged-in user."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    verify_csrf_token(request, csrf_token)
+
+    file_bytes = await file.read()
+    validate_image_upload(file.filename or "", file_bytes)
+
+    # Auto-resize and compress (even a 10MB photo becomes ~50-100KB)
+    compressed_bytes, mime_type = process_profile_image(file_bytes)
+
+    from sqlalchemy.orm import undefer
+    u = db.execute(
+        select(User).where(User.id == user.id).options(undefer(User.profile_picture))
+    ).scalar()
+    u.profile_picture = compressed_bytes
+    u.profile_picture_mime = mime_type
+    db.commit()
+
+    # Redirect back to wherever they came from
+    referer = request.headers.get("referer", "/")
+    return redirect(referer.split("?")[0] + "?success=Profile+picture+updated")
+
+
+@router.post("/agents/{agent_id}/remove-picture")
+async def remove_agent_picture(
+    request: Request,
+    agent_id: int,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Admin/supervisor removes a user's profile picture."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user) and not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+
+    from sqlalchemy.orm import undefer
+    target = db.execute(
+        select(User).where(User.id == agent_id).options(undefer(User.profile_picture))
+    ).scalar()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.profile_picture = None
+    target.profile_picture_mime = None
+    db.commit()
+    return redirect(f"/agents/{agent_id}?success=Profile+picture+removed")
+
+
 #  AGENTS
 # ────────────────────────────────────────────────
 
