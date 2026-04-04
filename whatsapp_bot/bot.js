@@ -228,7 +228,10 @@ async function handleInbound(msg) {
         }
         return;
     }
-    if (msg.key.fromMe) return;
+    if (msg.key.fromMe) {
+        console.log(`⏭️ Skipping own message (fromMe=true)`);
+        return;
+    }
 
     const text                  = extractText(msg);
     const { id: quotedId,
