@@ -11,6 +11,16 @@
 #   [FIX-8] /admin/reset-system converted to POST with confirmation token
 
 from __future__ import annotations
+
+# Explicit exports — Python's `import *` skips underscore-prefixed names
+# unless they appear in __all__.  Every router does `from app.core import *`,
+# so any helper starting with _ MUST be listed here.
+__all__: list[str] = []   # populated at module end; see _EXPORT_PRIVATE below
+_EXPORT_PRIVATE = [
+    "_now", "_ngn", "_parse_iso_date",
+    "_range_dates_from_inputs", "_dt_range_from_dates",
+    "_verify_webhook_token",
+]
 import os
 import html
 import json as _json
@@ -858,11 +868,13 @@ def _dt_range_from_dates(preset, start_date, end_date):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AUTH
+# Populate __all__ so `from app.core import *` includes underscore helpers.
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-# ────────────────────────────────────────────────
-#  AUTH
-# ────────────────────────────────────────────────
-
+# Collect every public name defined in this module, plus the private helpers
+# that routers rely on.
+import types as _types
+__all__ = [
+    name for name, obj in globals().items()
+    if not name.startswith("_")
+    and not isinstance(obj, _types.ModuleType)
+] + _EXPORT_PRIVATE
