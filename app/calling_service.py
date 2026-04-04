@@ -2,8 +2,9 @@ import os
 import logging
 import threading
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
+from sqlalchemy import text as sa_text
 
 from .utils import format_nigerian_phone
 
@@ -156,11 +157,11 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         db = SessionLocal()
         try:
             db.execute(
-                __import__("sqlalchemy").text(
+                sa_text(
                     "INSERT INTO call_logs (delivery_id, call_id, phone, trigger_status, call_status, error_msg, created_at) "
                     "VALUES (:did, :cid, :phone, :ts, :cs, :err, :now)"
                 ),
-                {"did": delivery_id, "cid": call_id, "phone": formatted_phone, "ts": status, "cs": call_status, "err": error_msg, "now": datetime.utcnow()}
+                {"did": delivery_id, "cid": call_id, "phone": formatted_phone, "ts": status, "cs": call_status, "err": error_msg, "now": datetime.now(timezone.utc)}
             )
             db.commit()
         finally:

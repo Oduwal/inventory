@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case, desc
 from sqlalchemy.orm import Session
 
@@ -121,7 +121,7 @@ def stock_by_category(db: Session, branch_id: int | None = None):
 
 
 def in_out_last_7_days(db: Session, branch_id: int | None = None):
-    since = datetime.utcnow() - timedelta(days=7)
+    since = datetime.now(timezone.utc) - timedelta(days=7)
 
     in_sum = func.coalesce(func.sum(case((Transaction.type == "IN", Transaction.quantity), else_=0)), 0)
     out_sum = func.coalesce(func.sum(case((Transaction.type == "OUT", Transaction.quantity), else_=0)), 0)
@@ -226,7 +226,7 @@ def create_out_transactions_for_delivery_if_needed(db: Session, delivery_id: int
 
 
 def cash_range_from_preset(preset: str | None):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     today = now.date()
 
     if preset == "today":
@@ -405,7 +405,7 @@ from sqlalchemy import case as sa_case
 def supervisor_date_range(preset: str | None, start_str: str | None, end_str: str | None):
     """Return (start_dt, end_dt) datetimes or (None, None) for all-time."""
     from datetime import date as _date
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
 
     if preset == "today":
         s = datetime.combine(today, datetime.min.time())

@@ -16,7 +16,7 @@ import html
 import json as _json
 import secrets
 import threading
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 try:
     from pywebpush import webpush as _webpush, WebPushException as _WebPushException
@@ -81,6 +81,8 @@ from .security import (
     audit_log,
     SecurityHeadersMiddleware,
     validate_upload,
+    validate_push_endpoint,
+    verify_origin_for_json,
 )
 from .calling_service import trigger_call
 from contextlib import asynccontextmanager
@@ -97,6 +99,12 @@ app = FastAPI(lifespan=_lifespan)
 # Set WEBHOOK_SECRET in env to require authentication on inbound webhooks.
 # If not set, webhooks remain open (backward-compatible).
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+if not WEBHOOK_SECRET:
+    logging.getLogger("inventory_keeper.security").warning(
+        "WEBHOOK_SECRET is not set — webhook endpoints (/api/call-webhook, "
+        "/api/whatsapp-webhook, /api/cache-wa-message) are UNPROTECTED. "
+        "Set WEBHOOK_SECRET in your environment variables for production."
+    )
 
 def _verify_webhook_token(request: Request) -> None:
     """Raise 403 if WEBHOOK_SECRET is configured but the request doesn't match."""
@@ -163,8 +171,8 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
     try:
         db.execute(text(
             "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
-            "VALUES (:uid, :title, :body, :link, :kind, NOW())"
-        ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind})
+            "VALUES (:uid, :title, :body, :link, :kind, :now)"
+        ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
         threading.Thread(
             target=_send_web_push, args=(user_id, title, body, link), daemon=True
         ).start()
@@ -207,21 +215,8 @@ static_dir = os.path.join(BASE_DIR, "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-@app.get("/sw.js", response_class=PlainTextResponse)
-def service_worker_root():
-    sw_path = os.path.join(BASE_DIR, "static", "sw.js")
-    try:
-        with open(sw_path) as f:
-            content = f.read()
-    except FileNotFoundError:
-        content = ""
-    return PlainTextResponse(
-        content,
-        headers={
-            "Content-Type": "application/javascript",
-            "Service-Worker-Allowed": "/",
-        }
-    )
+# NOTE: /sw.js handler is defined further below with inline service worker code.
+# Duplicate file-based handler removed to avoid shadowing.
 
 # [FIX-1] get_session_secret() raises RuntimeError at startup if SECRET is missing or < 32 chars
 SESSION_SECRET = get_session_secret()
@@ -240,6 +235,14 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Minimum password length — [FIX-7] raised from 4 to 8
 MIN_PASSWORD_LENGTH = 8
+
+
+# [FIX-9] Portable timestamp for raw SQL — works on both SQLite and PostgreSQL.
+# Instead of NOW() (PostgreSQL-only) or CURRENT_TIMESTAMP (varies by engine),
+# pass the timestamp as a bind parameter so it always works.
+def _now():
+    """Return current UTC datetime for use as a SQL bind parameter."""
+    return datetime.now(timezone.utc)
 
 
 def redirect(path: str) -> RedirectResponse:
@@ -929,7 +932,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     low_rows = [(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id][:5]
     low_stock_count = len([(item, stock) for (item, stock) in low_rows_all if item.branch_id == branch_id])
 
-    stale_cutoff = datetime.utcnow() - timedelta(days=7)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     # Single query: items with positive stock whose last transaction is older than cutoff
     _signed = case((Transaction.type == "IN", Transaction.quantity), else_=-Transaction.quantity)
     _stale_q = (
@@ -982,12 +985,12 @@ def home(request: Request, db: Session = Depends(get_db)):
     in7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.branch_id == branch_id).where(Transaction.type == "IN")
-        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        .where(Transaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     ) or 0)
     out7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.branch_id == branch_id).where(Transaction.type == "OUT")
-        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        .where(Transaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     ) or 0)
 
     branches = []
@@ -1001,7 +1004,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     for d in db.execute(
         select(Delivery).where(Delivery.branch_id == branch_id)
         .where(Delivery.status == "DELIVERED")
-        .where(Delivery.delivered_at >= datetime.utcnow() - timedelta(days=14))
+        .where(Delivery.delivered_at >= datetime.now(timezone.utc) - timedelta(days=14))
     ).scalars().all():
         k = d.delivered_at.date().isoformat() if d.delivered_at else None
         if k: del_by_day[k] = del_by_day.get(k, 0) + 1
@@ -1009,7 +1012,7 @@ def home(request: Request, db: Session = Depends(get_db)):
     for e in db.execute(
         select(CashEntry).where(CashEntry.branch_id == branch_id)
         .where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE", "COLLECTION_EXPENSE"]))
-        .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
+        .where(CashEntry.created_at >= datetime.now(timezone.utc) - timedelta(days=14))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
         if k: exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
@@ -1125,12 +1128,12 @@ async def confirm_cash(request: Request, db: Session = Depends(get_db)):
     except ValueError:
         return JSONResponse({"error": "invalid date"}, status_code=400)
     db.execute(text(
-        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() "
+        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=:_now "
         "WHERE agent_id=:aid AND branch_id=:bid "
         "AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT') "
         "AND created_at >= :start AND created_at < :end "
         "AND confirmed_by_admin=FALSE"
-    ), {"aid": agent_id, "bid": user.branch_id, "start": day_start, "end": day_end})
+    ), {"aid": agent_id, "bid": user.branch_id, "start": day_start, "end": day_end, "_now": _now()})
     db.commit()
     audit_log(db, user.id, "CASH_CONFIRMED", f"agent_id={agent_id} date={date_str}",
               ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
@@ -1149,14 +1152,14 @@ async def confirm_cash_entry(request: Request, db: Session = Depends(get_db)):
     if not entry_id:
         return JSONResponse({"error": "missing entry_id"}, status_code=400)
     row = db.execute(text(
-        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() "
+        "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=:_now "
         "WHERE id=:eid AND branch_id=:bid AND confirmed_by_admin=FALSE RETURNING id"
-    ), {"eid": entry_id, "bid": user.branch_id}).fetchone()
+    ), {"eid": entry_id, "bid": user.branch_id, "_now": _now()}).fetchone()
     if not row:
         # Try without branch filter (already confirmed or different branch)
         db.execute(text(
-            "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=NOW() WHERE id=:eid"
-        ), {"eid": entry_id})
+            "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=:_now WHERE id=:eid"
+        ), {"eid": entry_id, "_now": _now()})
     db.commit()
     return JSONResponse({"ok": True})
 
@@ -1191,30 +1194,9 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
     })
 
 
-@app.post("/api/call-webhook", response_class=JSONResponse)
-async def vapi_call_webhook(request: Request, db: Session = Depends(get_db)):
-    """VAPI end-of-call webhook — updates call log with summary and duration."""
-    _verify_webhook_token(request)
-    try:
-        body = await request.json()
-        msg_type = body.get("message", {}).get("type", "")
-        if msg_type != "end-of-call-report":
-            return JSONResponse({"ok": True})
-        msg = body.get("message", {})
-        call_id   = msg.get("call", {}).get("id", "")
-        summary   = msg.get("summary", "")
-        duration  = int(msg.get("durationSeconds") or msg.get("call", {}).get("duration") or 0)
-        end_reason = msg.get("endedReason", "")
-        call_status = "completed" if end_reason not in ("error", "assistant-error") else "failed"
-        if call_id:
-            db.execute(text(
-                "UPDATE call_logs SET summary=:s, duration=:d, call_status=:cs WHERE call_id=:cid"
-            ), {"s": summary[:1000], "d": duration, "cs": call_status, "cid": call_id})
-            db.commit()
-        return JSONResponse({"ok": True})
-    except Exception as e:
-        logging.getLogger("calling").error("Webhook error: %s", e)
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=200)
+
+# NOTE: /api/call-webhook handler is defined further below (near line ~5900)
+# with full backup-call + WhatsApp fallback logic. Duplicate removed.
 
 
 @app.get("/admin/audit-log", response_class=HTMLResponse)
@@ -1402,8 +1384,8 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
 
     # Daily expenses across all branches for the chart
     # Exclude "waybill - from ..." entries (receiver side) to avoid double-counting transfer expenses
-    _range_start = start_dt or datetime.utcnow() - timedelta(days=30)
-    _range_end   = end_dt   or datetime.utcnow()
+    _range_start = start_dt or datetime.now(timezone.utc) - timedelta(days=30)
+    _range_end   = end_dt   or datetime.now(timezone.utc)
     exp_by_day: dict = {}
     for e in db.execute(
         select(CashEntry).where(CashEntry.kind.in_(["EXPENSE", "OFFICE_EXPENSE", "COLLECTION_EXPENSE"]))
@@ -1455,12 +1437,12 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_in7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.type == "IN")
-        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        .where(Transaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     ) or 0)
     all_out7 = int(db.scalar(
         select(func.coalesce(func.sum(Transaction.quantity), 0))
         .where(Transaction.type == "OUT")
-        .where(Transaction.created_at >= datetime.utcnow() - timedelta(days=7))
+        .where(Transaction.created_at >= datetime.now(timezone.utc) - timedelta(days=7))
     ) or 0)
 
     return tpl(request, "supervisor_dashboard.html", {
@@ -1922,9 +1904,9 @@ async def flag_faulty_stock(
 
     db.execute(text(
         "INSERT INTO faulty_stock (item_id, branch_id, qty_faulty, reason, flagged_by, flagged_at, resolved, resolve_note) "
-        "VALUES (:iid, :bid, :qty, :reason, :uid, NOW(), FALSE, '')"
+        "VALUES (:iid, :bid, :qty, :reason, :uid, :_now, FALSE, '')"
     ), {"iid": item_id, "bid": user.branch_id, "qty": qty_faulty,
-        "reason": reason_clean, "uid": user.id})
+        "reason": reason_clean, "uid": user.id, "_now": _now()})
 
     audit_log(db, user.id, "FAULTY_STOCK_FLAGGED",
               f"item={item.name} qty={qty_faulty} reason={reason_clean}",
@@ -1989,8 +1971,8 @@ async def resolve_faulty_stock(
     # Mark faulty record resolved
     db.execute(text(
         "UPDATE faulty_stock SET resolved=TRUE, resolve_action=:act, "
-        "resolved_at=NOW(), resolved_by=:uid, resolve_note=:note WHERE id=:fid"
-    ), {"act": action, "uid": user.id, "note": resolve_note, "fid": faulty_id})
+        "resolved_at=:_now, resolved_by=:uid, resolve_note=:note WHERE id=:fid"
+    ), {"act": action, "uid": user.id, "note": resolve_note, "fid": faulty_id, "_now": _now()})
 
     audit_log(db, user.id, "FAULTY_STOCK_RESOLVED",
               f"item={item.name} qty={qty_faulty} action={action}",
@@ -2111,7 +2093,7 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
     if not (is_admin(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
     branch_id = get_selected_branch_id(request, user)
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # Supervisor sees all branches; admin sees their own branch only
     items_stmt = select(Item).order_by(Item.name)
     if not is_supervisor(user):
@@ -2129,7 +2111,7 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db)):
         last_tx = db.scalar(select(func.max(Transaction.created_at)).where(Transaction.item_id == item.id).where(Transaction.branch_id == item_branch_id))
         if last_tx is None or last_tx < cutoff:
             stale_rows.append({"item": item, "stock": int(stock), "last_tx": last_tx,
-                               "days_since": (datetime.utcnow() - last_tx).days if last_tx else 9999})
+                               "days_since": (datetime.now(timezone.utc) - last_tx).days if last_tx else 9999})
     stale_rows.sort(key=lambda r: r["days_since"], reverse=True)
     return tpl(request, "stale_stock.html", {
         "request": request, "user": user, "rows": stale_rows, "days": days, "active": "stale",
@@ -2577,7 +2559,8 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
             return JSONResponse({"error": f"Could not read Gemini response | raw: {raw_text[:300]}"}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logging.getLogger("parse_order").error("Parse order failed: %s", e)
+        return JSONResponse({"error": "Failed to process order. Check server logs."}, status_code=500)
 
 
 @app.get("/parse-order", response_class=HTMLResponse)
@@ -2704,9 +2687,9 @@ async def delivery_create(
     if not branch_id:
         raise HTTPException(status_code=400, detail="No branch assigned")
     try:
-        d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.utcnow()
+        d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.now(timezone.utc)
     except ValueError:
-        d_date = datetime.utcnow()
+        d_date = datetime.now(timezone.utc)
     d = Delivery(
         branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
         customer_phone=sanitize_phone(customer_phone) or None,
@@ -2776,9 +2759,9 @@ async def delivery_create(
                 db.execute(text(
                     "INSERT INTO agent_stock_assignments "
                     "(agent_id, item_id, branch_id, qty_assigned, note, assigned_by, assigned_at, returned, qty_returned) "
-                    "VALUES (:agent, :item, :branch, :qty, :note, :by, NOW(), FALSE, 0)"
+                    "VALUES (:agent, :item, :branch, :qty, :note, :by, :_now, FALSE, 0)"
                 ), {"agent": asgn[1], "item": asgn_item_id, "branch": asgn_branch_id,
-                    "qty": remainder, "note": (asgn_note or '') + f' (split from #{asgn_id})', "by": asgn_by})
+                    "qty": remainder, "note": (asgn_note or '') + f' (split from #{asgn_id})', "by": asgn_by, "_now": _now()})
             else:
                 # Full assignment used or no delivery item match — link whole thing
                 db.execute(text(
@@ -2838,23 +2821,22 @@ async def delivery_create(
                 matched = False
 
             if matched:
-                _now = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
                 _is_sqlite = DATABASE_URL.startswith("sqlite")
                 if _is_sqlite:
                     _upsert = (
-                        f"INSERT OR REPLACE INTO whatsapp_outbound_map "
-                        f"(message_id, order_id, body, source, sender, group_jid, created_at) "
-                        f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {_now})"
+                        "INSERT OR REPLACE INTO whatsapp_outbound_map "
+                        "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now)"
                     )
                 else:
                     _upsert = (
-                        f"INSERT INTO whatsapp_outbound_map "
-                        f"(message_id, order_id, body, source, sender, group_jid, created_at) "
-                        f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {_now}) "
-                        f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id"
+                        "INSERT INTO whatsapp_outbound_map "
+                        "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now) "
+                        "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id"
                     )
                 db.execute(text(_upsert), {
-                    "mid": p_mid, "oid": d.id, "body": p_body, "sender": p_sender, "gjid": p_gjid
+                    "mid": p_mid, "oid": d.id, "body": p_body, "sender": p_sender, "gjid": p_gjid, "_now": _now()
                 })
                 db.execute(text("DELETE FROM wa_pending_cache WHERE message_id = :mid"), {"mid": p_mid})
                 db.commit()
@@ -2916,7 +2898,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
     expenses_raw = db.execute(
         select(CashEntry).where(CashEntry.agent_id == user.id)
         .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
-        .where(CashEntry.created_at >= datetime.utcnow() - timedelta(days=14))
+        .where(CashEntry.created_at >= datetime.now(timezone.utc) - timedelta(days=14))
     ).scalars().all()
     for e in expenses_raw:
         k = e.created_at.date().isoformat() if e.created_at else None
@@ -3196,8 +3178,8 @@ async def request_adjustment(
     db.execute(text("UPDATE adjustment_requests SET status='CANCELLED' WHERE delivery_id=:did AND status='PENDING'"), {"did": d.id})
     # Create new request
     result = db.execute(
-        text("INSERT INTO adjustment_requests (delivery_id, requested_by, reason, status, created_at) VALUES (:did, :uid, :reason, 'PENDING', NOW()) RETURNING id"),
-        {"did": d.id, "uid": user.id, "reason": (reason or "").strip()[:400]}
+        text("INSERT INTO adjustment_requests (delivery_id, requested_by, reason, status, created_at) VALUES (:did, :uid, :reason, 'PENDING', :_now) RETURNING id"),
+        {"did": d.id, "uid": user.id, "reason": (reason or "").strip()[:400], "_now": _now()}
     )
     req_id = result.fetchone()[0]
     # Save item adjustments
@@ -3272,8 +3254,8 @@ async def review_adjustment(
                     db.execute(text(
                         "INSERT INTO stock_return_vettings "
                         "(delivery_id, delivery_item_id, vetted_by, qty_returned, created_at, resolved) "
-                        "VALUES (:did, :diid, NULL, 0, NOW(), FALSE)"
-                    ), {"did": d.id, "diid": di.id})
+                        "VALUES (:did, :diid, NULL, 0, :_now, FALSE)"
+                    ), {"did": d.id, "diid": di.id, "_now": _now()})
                     # Zero out amount but keep the item record for vetting reference
                     db.execute(
                         text("UPDATE delivery_items SET line_amount=0 WHERE id=:did"),
@@ -3312,11 +3294,11 @@ async def review_adjustment(
                                 db.execute(text(
                                     "INSERT INTO stock_return_vettings "
                                     "(delivery_id, delivery_item_id, vetted_by, qty_returned, created_at, resolved) "
-                                    "VALUES (:did, :diid, NULL, 0, NOW(), FALSE)"
-                                ), {"did": d.id, "diid": new_di_id})
+                                    "VALUES (:did, :diid, NULL, 0, :_now, FALSE)"
+                                ), {"did": d.id, "diid": new_di_id, "_now": _now()})
         db.execute(
-            text("UPDATE adjustment_requests SET status='APPROVED', reviewed_by=:uid, reviewed_at=NOW() WHERE id=:rid"),
-            {"uid": user.id, "rid": pending.id}
+            text("UPDATE adjustment_requests SET status='APPROVED', reviewed_by=:uid, reviewed_at=:_now WHERE id=:rid"),
+            {"uid": user.id, "rid": pending.id, "_now": _now()}
         )
         d.status = "OUT_FOR_DELIVERY"
         notify(db, d.agent_id, "✅ Adjustment Approved",
@@ -3329,8 +3311,8 @@ async def review_adjustment(
     else:
         note = (rejection_note or "").strip()[:400] or "Rejected by admin"
         db.execute(
-            text("UPDATE adjustment_requests SET status='REJECTED', reviewed_by=:uid, reviewed_at=NOW(), rejection_note=:note WHERE id=:rid"),
-            {"uid": user.id, "rid": pending.id, "note": note}
+            text("UPDATE adjustment_requests SET status='REJECTED', reviewed_by=:uid, reviewed_at=:_now, rejection_note=:note WHERE id=:rid"),
+            {"uid": user.id, "rid": pending.id, "note": note, "_now": _now()}
         )
         d.status = "OUT_FOR_DELIVERY"
         notify(db, d.agent_id, "❌ Adjustment Rejected",
@@ -3369,13 +3351,13 @@ async def delivery_collect(
     # Mark delivered
     create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
     d.status = "DELIVERED"
-    d.delivered_at = datetime.utcnow()
+    d.delivered_at = datetime.now(timezone.utc)
 
     # Remove any existing collection entries for this delivery
     db.execute(text(
         "DELETE FROM cash_entries WHERE delivery_id = :did AND kind IN ('COLLECTION','CASH_PAYMENT','TRANSFER_PAYMENT')"
     ), {"did": d.id})
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Record cash portion
     if cash_amt > 0:
         db.add(CashEntry(
@@ -3449,15 +3431,15 @@ async def update_delivery_status(
         try:
             create_out_transactions_for_delivery_if_needed(db, d.id, performed_by=user.username)
             d.status = "DELIVERED"
-            d.delivered_at = datetime.utcnow()
+            d.delivered_at = datetime.now(timezone.utc)
             audit_log(db, user.id, "DELIVERY_DELIVERED", f"delivery_id={d.id}",
                       ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
 
             # Auto-close any linked assignment — stock was used for this delivery
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=qty_assigned, "
-                "vetted_at=NOW() WHERE delivery_id=:did AND returned=FALSE"
-            ), {"did": d.id})
+                "vetted_at=:_now WHERE delivery_id=:did AND returned=FALSE"
+            ), {"did": d.id, "_now": _now()})
 
             # Auto-create COLLECTION cash entry from delivery order total
             existing_col = db.scalar(
@@ -3561,11 +3543,11 @@ async def notifications_dismiss(request: Request, db: Session = Depends(get_db))
     body = await request.json()
     notif_id = body.get("id")  # None = dismiss all
     if notif_id:
-        db.execute(text("UPDATE notifications SET read_at=NOW() WHERE id=:id AND user_id=:uid"),
-                   {"id": notif_id, "uid": user.id})
+        db.execute(text("UPDATE notifications SET read_at=:_now WHERE id=:id AND user_id=:uid"),
+                   {"id": notif_id, "uid": user.id, "_now": _now()})
     else:
-        db.execute(text("UPDATE notifications SET read_at=NOW() WHERE user_id=:uid AND read_at IS NULL"),
-                   {"uid": user.id})
+        db.execute(text("UPDATE notifications SET read_at=:_now WHERE user_id=:uid AND read_at IS NULL"),
+                   {"uid": user.id, "_now": _now()})
     db.commit()
     return JSONResponse({"ok": True})
 
@@ -3602,12 +3584,13 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
     auth     = keys.get("auth", "")
     if not endpoint or not p256dh or not auth:
         return JSONResponse({"error": "invalid subscription"}, status_code=400)
+    validate_push_endpoint(endpoint)  # [SEC] Reject non-HTTPS or bogus endpoints
     # Upsert: delete old entry for this endpoint, then insert fresh
     db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": endpoint})
     db.execute(text(
         "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
-        "VALUES (:uid, :ep, :p256dh, :auth, NOW())"
-    ), {"uid": user.id, "ep": endpoint, "p256dh": p256dh, "auth": auth})
+        "VALUES (:uid, :ep, :p256dh, :auth, :_now)"
+    ), {"uid": user.id, "ep": endpoint, "p256dh": p256dh, "auth": auth, "_now": _now()})
     db.commit()
     return JSONResponse({"ok": True})
 
@@ -3681,9 +3664,9 @@ async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db))
     db.execute(text(
         "INSERT INTO agent_stock_assignments "
         "(agent_id, item_id, branch_id, qty_assigned, note, assigned_by, assigned_at, returned, qty_returned, transaction_out_id) "
-        "VALUES (:aid, :iid, :bid, :qty, :note, :uid, NOW(), FALSE, 0, :txid)"
+        "VALUES (:aid, :iid, :bid, :qty, :note, :uid, :_now, FALSE, 0, :txid)"
     ), {"aid": agent_id, "iid": item_id, "bid": branch_id, "qty": qty,
-        "note": note, "uid": user.id, "txid": tx.id})
+        "note": note, "uid": user.id, "txid": tx.id, "_now": _now()})
 
     audit_log(db, user.id, "STOCK_ASSIGNED_TO_AGENT",
               f"agent={agent.username} item={item.name} qty={qty}",
@@ -3743,14 +3726,14 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
         # Full return — mark complete
         db.execute(text(
             "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
-            "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
-        ), {"qty": min(qty_returned, qty_assigned), "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
+            "vetted_by=:uid, vetted_at=:_now, transaction_in_id=:txid WHERE id=:aid"
+        ), {"qty": min(qty_returned, qty_assigned), "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
     else:
         # Partial — update qty_returned but keep returned=FALSE for shortfall resolution
         db.execute(text(
             "UPDATE agent_stock_assignments SET qty_returned=:qty, "
-            "vetted_by=:uid, vetted_at=NOW(), transaction_in_id=:txid WHERE id=:aid"
-        ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id})
+            "vetted_by=:uid, vetted_at=:_now, transaction_in_id=:txid WHERE id=:aid"
+        ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
 
     audit_log(db, user.id, "ASSIGNED_STOCK_RETURNED",
               f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}/{qty_assigned}",
@@ -3809,8 +3792,8 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         if remaining == 0:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
-                "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
-            ), {"qty": new_total, "uid": user.id, "aid": asgn_id})
+                "vetted_by=:uid, vetted_at=:_now WHERE id=:aid"
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now()})
         else:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET qty_returned=:qty WHERE id=:aid"
@@ -3835,8 +3818,8 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         if remaining == 0:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
-                "vetted_by=:uid, vetted_at=NOW() WHERE id=:aid"
-            ), {"qty": new_total, "uid": user.id, "aid": asgn_id})
+                "vetted_by=:uid, vetted_at=:_now WHERE id=:aid"
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now()})
         else:
             # Partial write-off — reduce shortfall but keep record open
             db.execute(text(
@@ -3916,9 +3899,9 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
     db.execute(text(
         "INSERT INTO stock_return_vettings "
         "(delivery_id, delivery_item_id, vetted_by, qty_returned, transaction_id, created_at, resolved) "
-        "VALUES (:did, :diid, :uid, :qty, :txid, NOW(), :resolved)"
+        "VALUES (:did, :diid, :uid, :qty, :txid, :_now, :resolved)"
     ), {"did": delivery_id, "diid": delivery_item_id, "uid": user.id,
-        "qty": qty_returned, "txid": tx_id, "resolved": is_full})
+        "qty": qty_returned, "txid": tx_id, "resolved": is_full, "_now": _now()})
 
     audit_log(db, user.id, "STOCK_RETURN_VETTED",
               f"delivery_id={delivery_id} item={item.name} returned={qty_returned}/{original_qty} shortfall={shortfall}",
@@ -4009,8 +3992,8 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
             # All accounted for — mark resolved
             db.execute(text(
                 "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='returned', "
-                "qty_returned=:newqty, resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
-            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id})
+                "qty_returned=:newqty, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id, "_now": _now()})
         else:
             # Still some missing — update qty_returned, keep unresolved
             db.execute(text(
@@ -4046,8 +4029,8 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         if is_fully_resolved:
             db.execute(text(
                 "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-                "qty_returned=:newqty, resolved_at=NOW(), resolved_by=:uid WHERE id=:vid"
-            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id})
+                "qty_returned=:newqty, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id, "_now": _now()})
         else:
             # Partial write-off — reduce shortfall but keep record open for further action
             db.execute(text(
@@ -4399,7 +4382,7 @@ async def vetting_confirm(request: Request, db: Session = Depends(get_db)):
     if entry_ids:
         q = q.where(CashEntry.id.in_(entry_ids))
     entries = db.execute(q).scalars().all()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for e in entries:
         e.confirmed_by_admin = True
         e.confirmed_at = now
@@ -4911,10 +4894,12 @@ async def wipe_all_data(request: Request, db: Session = Depends(get_db)):
     items, notifications, audit logs, assignments, faulty stock, vettings.
     Keeps: users, branches.
     """
+    limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
     user = user_or
     if not is_supervisor(user): return JSONResponse({"error": "forbidden — supervisor only"}, status_code=403)
+    verify_origin_for_json(request)  # [SEC] CSRF defense for JSON endpoint
     body = await request.json()
     if body.get("confirm") != "WIPE ALL DATA":
         return JSONResponse({"error": "type WIPE ALL DATA to confirm"}, status_code=400)
@@ -4939,7 +4924,8 @@ async def wipe_all_data(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"ok": True, "message": "All data wiped. Users and branches preserved."})
     except Exception as e:
         db.rollback()
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logging.getLogger("admin").error("Wipe data failed: %s", e)
+        return JSONResponse({"error": "An internal error occurred. Check server logs."}, status_code=500)
 
 
 @app.get("/admin/reset-system", response_class=HTMLResponse)
@@ -4975,6 +4961,7 @@ async def reset_system_execute(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
+    limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse):
         return user_or
@@ -5446,7 +5433,7 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
         return redirect(f"/transfers/{transfer_id}?error=Please+record+your+receiving+expenses+before+confirming+receipt")
     transfer.status = "RECEIVED"
     transfer.received_by_id = user.id
-    transfer.received_at = datetime.utcnow()
+    transfer.received_at = datetime.now(timezone.utc)
     notify_branch_admins(db, transfer.from_branch_id,
         "✅ Stock Transfer Received",
         f"{transfer.to_branch.name} has confirmed receipt of stock transfer #{transfer_id}.",
@@ -5491,7 +5478,7 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
                 note=f"Stock sent to {transfer.to_branch.name}"
             ))
     transfer.packed_by_id = user.id
-    transfer.packed_at = datetime.utcnow()
+    transfer.packed_at = datetime.now(timezone.utc)
     transfer.status = "OUT_FOR_DELIVERY"
     notify_branch_admins(db, transfer.to_branch_id,
         "📦 Stock Transfer On Its Way",
@@ -5696,7 +5683,7 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
             db.delete(orig_recv_exp)
     transfer.status = "CANCELLED"
     transfer.cancelled_by_id = user.id
-    transfer.cancelled_at = datetime.utcnow()
+    transfer.cancelled_at = datetime.now(timezone.utc)
     db.commit()
     return redirect(f"/transfers/{transfer_id}")
 
@@ -5980,12 +5967,16 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         import logging
         logging.getLogger("webhook").error(f"Webhook error: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Internal webhook processing error."}, status_code=500)
 
 
 @app.post("/api/whatsapp-reply")
 async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
-    """Receives replies from customers via Twilio WhatsApp."""
+    """Receives replies from customers via Twilio WhatsApp.
+    NOTE: No _verify_webhook_token here — Twilio sends form data and cannot
+    send custom headers. Twilio has its own signature-based authentication.
+    This endpoint is also listed in _ORIGIN_CHECK_EXEMPT in security.py.
+    """
     form_data = await request.form()
     
     sender = form_data.get("From", "").replace("whatsapp:", "")
@@ -6048,11 +6039,15 @@ def _sse_broadcast(delivery_id: int, html_fragment: str):
             pass
 
 @app.get("/api/stream/{delivery_id}")
-async def sse_stream(delivery_id: int, request: Request):
+async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(get_db)):
     """
     Server-Sent Events endpoint.  The delivery detail page connects here
     and receives new wa_comments HTML fragments in real time.
     """
+    # [SEC] Require authentication — prevent unauthenticated data leaks
+    user = get_current_user(db, request)
+    if not user:
+        return PlainTextResponse("Unauthorized", status_code=401)
     q: asyncio.Queue = asyncio.Queue(maxsize=50)
     _sse_queues.setdefault(delivery_id, []).append(q)
 
@@ -6132,12 +6127,18 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 @app.post("/api/agent-feedback")
 async def send_agent_feedback(
+    request: Request,
     delivery_id: int = Form(...),
     issue_type: str = Form(...),
     custom_message: str = Form(""),
     group_name: str = Form(""),
     db: Session = Depends(get_db)
 ):
+    # [SEC] Require login — prevent unauthenticated users from sending messages
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
+
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
@@ -6223,32 +6224,31 @@ async def send_agent_feedback(
         # Persist the new Baileys message_id so future sends can quote it,
         # and inbound replies can be routed back to this order in O(1).
         new_msg_id = data.get("message_id", "")
-        now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
         is_sqlite = DATABASE_URL.startswith("sqlite")
         if new_msg_id:
             if is_sqlite:
                 upsert_sql = (
-                    f"INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', '', :gjid, {now_sql})"
+                    "INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now)"
                 )
             else:
                 upsert_sql = (
-                    f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    f"VALUES (:mid, :oid, :body, 'bot', '', :gjid, {now_sql}) "
-                    f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
+                    "INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now) "
+                    "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
                 )
-            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group})
-            db.commit()  # <--- THIS IS THE MISSING MAGIC LINE!
+            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group, "_now": _now()})
+            db.commit()
 
         # Save outbound comment for the chat thread UI
         db.execute(text(
-            f"INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-            f"VALUES (:did, 'outbound', 'Agent', :body, {now_sql})"
-        ), {"did": delivery.id, "body": message})
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+            "VALUES (:did, 'outbound', 'Agent', :body, :_now)"
+        ), {"did": delivery.id, "body": message, "_now": _now()})
         db.commit()
 
         # SSE broadcast so open tabs update immediately
-        now_str  = datetime.utcnow().strftime("%d %b %H:%M")
+        now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
         _sse_msg = html.escape(message)
         fragment = (
             f'<div style="display:flex;gap:10px;align-items:flex-start;flex-direction:row-reverse;">'
@@ -6373,13 +6373,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if order_id:
                 _log.info("Matched by phone in quoted body → Order #%s (same_group=%s)", order_id, bool(same_group_match))
                 if quoted_msg_id:
-                    now_sql2 = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
                     conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else ""
                     try:
                         db.execute(text(
                             f"INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, group_jid, created_at) "
-                            f"VALUES (:mid, :oid, :body, 'group', :gjid, {now_sql2}) {conflict}"
-                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid})
+                            f"VALUES (:mid, :oid, :body, 'group', :gjid, :_now) {conflict}"
+                        ), {"mid": quoted_msg_id, "oid": order_id, "body": quoted_msg_body, "gjid": group_jid, "_now": _now()})
                         db.commit()
                     except Exception:
                         pass
@@ -6412,15 +6411,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
     comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
-    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
     db.execute(text(
-        f"INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
-        f"VALUES (:did, 'inbound', :sender, :body, :clf, {now_sql})"
-    ), {"did": order_id, "sender": sender, "body": comment_body, "clf": classification_json})
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
+        "VALUES (:did, 'inbound', :sender, :body, :clf, :_now)"
+    ), {"did": order_id, "sender": sender, "body": comment_body, "clf": classification_json, "_now": _now()})
     db.commit()
 
     # SSE — push fragment to any open delivery detail tabs
-    now_str  = datetime.utcnow().strftime("%d %b %H:%M")
+    now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
     action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION NEEDED</span>' if ai.get("action_required") else ""
     _sse_sender = html.escape(sender or "Seller")
     _sse_body   = html.escape(comment_body)
@@ -6528,41 +6526,39 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             "cache-wa-message: no delivery matched name='%s' phone='%s' — saving to pending cache", customer_name, customer_phone
         )
         # Save to pending cache so it can be matched when the delivery IS created
-        _pend_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
         _pend_conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else "OR IGNORE"
         try:
             db.execute(text(
                 f"INSERT {_pend_conflict} INTO wa_pending_cache "
                 f"(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
-                f"VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, {_pend_sql})"
+                f"VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now)"
             ), {"mid": message_id, "body": body, "sender": sender, "gjid": group_jid,
-                "cname": customer_name, "cphone": customer_phone})
+                "cname": customer_name, "cphone": customer_phone, "_now": _now()})
             db.commit()
         except Exception:
             db.rollback()
         return {"status": "pending"}
 
     # ── Persist the mapping so replies and agent-feedback can find this order ──
-    now_sql = "CURRENT_TIMESTAMP" if DATABASE_URL.startswith("sqlite") else "NOW()"
     is_sqlite = DATABASE_URL.startswith("sqlite")
     if is_sqlite:
         upsert_sql = (
-            f"INSERT OR REPLACE INTO whatsapp_outbound_map "
-            f"(message_id, order_id, body, source, sender, group_jid, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql})"
+            "INSERT OR REPLACE INTO whatsapp_outbound_map "
+            "(message_id, order_id, body, source, sender, group_jid, created_at) "
+            "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now)"
         )
     else:
         upsert_sql = (
-            f"INSERT INTO whatsapp_outbound_map "
-            f"(message_id, order_id, body, source, sender, group_jid, created_at) "
-            f"VALUES (:mid, :oid, :body, 'group', :sender, :gjid, {now_sql}) "
-            f"ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, "
-            f"body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
+            "INSERT INTO whatsapp_outbound_map "
+            "(message_id, order_id, body, source, sender, group_jid, created_at) "
+            "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now) "
+            "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, "
+            "body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
         )
     try:
         db.execute(text(upsert_sql), {
             "mid": message_id, "oid": matched_order_id,
-            "body": body, "sender": sender, "gjid": group_jid
+            "body": body, "sender": sender, "gjid": group_jid, "_now": _now()
         })
         db.commit()
         logging.getLogger("cache_wa").info(

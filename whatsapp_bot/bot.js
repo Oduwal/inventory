@@ -36,6 +36,7 @@ const GROUP_JID      = process.env.WA_GROUP_ID    || '120363239510350827@g.us';
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
 const PORT           = process.env.PORT            || 3000;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET  || '';
 
 // Only process messages from these seller groups (comma-separated env var or hardcoded defaults)
 // Set WA_SELLER_GROUPS="group1@g.us,group2@g.us" to override
@@ -222,7 +223,10 @@ async function handleInbound(msg) {
             reply_text:          text,
             sender_phone:        sender,
             groupJid:            jid,
-        }, { timeout: 10000 }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
+        }, {
+            timeout: 10000,
+            headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+        }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
     }
 
@@ -239,7 +243,10 @@ async function handleInbound(msg) {
         customer_name:   info.customer_name,
         customer_phone:  info.customer_phone,
         groupJid:        jid,
-    }, { timeout: 8000 }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
+    }, {
+        timeout: 8000,
+        headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+    }).catch(e => console.log('⚠️  Cache POST failed:', e.message));
 }
 
 // ─────────────────────────────────────────────

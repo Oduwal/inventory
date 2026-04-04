@@ -15,7 +15,7 @@ import re
 import secrets
 import html
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from threading import Lock
 from typing import Optional
@@ -58,7 +58,7 @@ class InMemoryRateLimiter:
         self._call_count = 0
 
     def is_allowed(self, ip: str, max_requests: int, window_seconds: int) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=window_seconds)
         with self._lock:
             self._store[ip] = [t for t in self._store[ip] if t > cutoff]
@@ -103,12 +103,12 @@ class AccountLockout:
         self._lock = Lock()
 
     def record_failure(self, username: str) -> None:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         with self._lock:
             self._failures[username].append(now)
 
     def is_locked(self, username: str) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
         with self._lock:
             self._failures[username] = [t for t in self._failures[username] if t > cutoff]
@@ -119,7 +119,7 @@ class AccountLockout:
             self._failures.pop(username, None)
 
     def remaining_attempts(self, username: str) -> int:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
         with self._lock:
             recent = [t for t in self._failures[username] if t > cutoff]
@@ -141,7 +141,7 @@ class PasswordResetTokenStore:
 
     def create(self, user_id: int) -> str:
         token = secrets.token_urlsafe(32)
-        expires_at = datetime.utcnow() + timedelta(seconds=_RESET_TOKEN_EXPIRY)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=_RESET_TOKEN_EXPIRY)
         with self._lock:
             # Revoke any existing tokens for this user
             self._tokens = {t: (uid, exp) for t, (uid, exp) in self._tokens.items() if uid != user_id}
@@ -155,7 +155,7 @@ class PasswordResetTokenStore:
             if not entry:
                 return None
             user_id, expires_at = entry
-            if datetime.utcnow() > expires_at:
+            if datetime.now(timezone.utc) > expires_at:
                 del self._tokens[token]
                 return None
             return user_id
@@ -209,13 +209,20 @@ _ORIGIN_CHECK_EXEMPT = {"/api/call-webhook", "/api/whatsapp-webhook",
 
 def verify_origin_for_json(request: Request) -> None:
     """For JSON POST endpoints: verify Origin header matches the app's host.
-    Skips webhook endpoints (they use token auth instead)."""
+    Skips webhook endpoints (they use token auth instead).
+    Modern browsers ALWAYS send Origin with fetch() — missing Origin on a
+    JSON request is suspicious and blocked as defense-in-depth."""
     if request.url.path in _ORIGIN_CHECK_EXEMPT:
         return
     origin = request.headers.get("origin", "")
     if not origin:
-        # No Origin header — could be a same-site request (some browsers omit it)
-        return
+        # Modern browsers always send Origin with fetch().  Missing Origin
+        # on a JSON POST is either a server-to-server call (no cookies, so
+        # harmless) or a CSRF attempt.  Block it for JSON content types.
+        raise HTTPException(
+            status_code=403,
+            detail="Missing Origin header on JSON request.",
+        )
     # Compare origin host with request host
     from urllib.parse import urlparse
     origin_host = urlparse(origin).netloc.split(":")[0]
@@ -234,14 +241,13 @@ def verify_origin_for_json(request: Request) -> None:
 _SCRIPT_PATTERN = re.compile(r"<[^>]+>", re.IGNORECASE)
 
 def sanitize_text(value: str, max_length: int = 400, field_name: str = "") -> str:
-    """Strip HTML tags, escape special chars, and truncate. SQL injection is
-    prevented by parameterized queries — a keyword blocklist would produce
-    false positives on legitimate note content."""
+    """Strip HTML tags and truncate. SQL injection is prevented by parameterized
+    queries. We do NOT call html.escape() here because Jinja2 auto-escapes
+    template output — double-escaping would turn '&' into '&amp;amp;'."""
     if not value:
         return ""
     cleaned = value.strip()
     cleaned = _SCRIPT_PATTERN.sub("", cleaned)
-    cleaned = html.escape(cleaned, quote=True)
     return cleaned[:max_length]
 
 def sanitize_username(value: str) -> str:
@@ -326,7 +332,7 @@ def audit_log(db, user_id: Optional[int], action: str, detail: str = "",
                 action=action[:100],
                 detail=human_detail[:500],
                 ip=ip[:45],
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             _db.add(entry)
             _db.commit()
@@ -392,3 +398,18 @@ def validate_upload(filename: str, content: bytes) -> None:
         )
     if len(content) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SEC-10] PUSH SUBSCRIPTION ENDPOINT VALIDATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate_push_endpoint(endpoint: str) -> None:
+    """Reject push subscription endpoints that aren't HTTPS push service URLs."""
+    from urllib.parse import urlparse
+    parsed = urlparse(endpoint)
+    if parsed.scheme != "https":
+        raise HTTPException(status_code=400, detail="Push endpoint must use HTTPS.")
+    # Push services use well-known domains; reject obviously bogus endpoints
+    if not parsed.netloc or "." not in parsed.netloc:
+        raise HTTPException(status_code=400, detail="Invalid push endpoint domain.")

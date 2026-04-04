@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 from sqlalchemy import (
     String,
     Integer,
@@ -28,7 +32,7 @@ class Branch(Base):
     name:       Mapped[str]          = mapped_column(String(120), nullable=False, unique=True)
     code:       Mapped[str | None]   = mapped_column(String(20), unique=True, nullable=True)
     address:    Mapped[str | None]   = mapped_column(String(200), nullable=True)
-    created_at: Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime]     = mapped_column(DateTime, default=_utcnow, nullable=False)
 
     users:         Mapped[list["User"]]         = relationship(back_populates="branch")
     items:         Mapped[list["Item"]]         = relationship(back_populates="branch")
@@ -58,7 +62,7 @@ class User(Base):
     branch_id:     Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     full_name:     Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone:         Mapped[str | None] = mapped_column(String(40), nullable=True)
-    created_at:    Mapped[datetime]   = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:    Mapped[datetime]   = mapped_column(DateTime, default=_utcnow, nullable=False)
 
     branch:       Mapped["Branch | None"]   = relationship(back_populates="users")
     deliveries:   Mapped[list["Delivery"]]  = relationship(back_populates="agent")
@@ -84,9 +88,9 @@ class Item(Base):
     reorder_level: Mapped[int]        = mapped_column(Integer, default=0, nullable=False)
     cost_price:    Mapped[float]      = mapped_column(Numeric(12, 2), default=0, nullable=False)
     selling_price: Mapped[float]      = mapped_column(Numeric(12, 2), default=0, nullable=False)
-    created_at:    Mapped[datetime]   = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:    Mapped[datetime]   = mapped_column(DateTime, default=_utcnow, nullable=False)
     updated_at:    Mapped[datetime]   = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
     branch:         Mapped["Branch"]             = relationship(back_populates="items")
@@ -121,7 +125,7 @@ class Delivery(Base):
     note:           Mapped[str | None]   = mapped_column(Text, nullable=True)
     
     delivery_date:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at:     Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:     Mapped[datetime]     = mapped_column(DateTime, default=_utcnow, nullable=False)
     delivered_at:   Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     branch:       Mapped["Branch"]             = relationship(back_populates="deliveries")
@@ -169,7 +173,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id:          Mapped[int]          = mapped_column(Integer, primary_key=True)
-    created_at:  Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:  Mapped[datetime]     = mapped_column(DateTime, default=_utcnow, nullable=False)
     branch_id:   Mapped[int]          = mapped_column(ForeignKey("branches.id"), nullable=False)
     item_id:     Mapped[int]          = mapped_column(ForeignKey("items.id"), nullable=False)
     delivery_id: Mapped[int | None]   = mapped_column(ForeignKey("deliveries.id"), nullable=True)
@@ -197,7 +201,7 @@ class CashEntry(Base):
     __tablename__ = "cash_entries"
 
     id:                 Mapped[int]          = mapped_column(Integer, primary_key=True)
-    created_at:         Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:         Mapped[datetime]     = mapped_column(DateTime, default=_utcnow, nullable=False)
     branch_id:          Mapped[int]          = mapped_column(ForeignKey("branches.id"), nullable=False)
     agent_id:           Mapped[int]          = mapped_column(ForeignKey("users.id"), nullable=False)
     delivery_id:        Mapped[int | None]   = mapped_column(ForeignKey("deliveries.id"), nullable=True)
@@ -244,7 +248,7 @@ class StockTransfer(Base):
     received_by_id:  Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
     cancelled_by_id: Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
 
-    created_at:   Mapped[datetime]        = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at:   Mapped[datetime]        = mapped_column(DateTime, default=_utcnow, nullable=False)
     received_at:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -320,7 +324,7 @@ class AuditLog(Base):
     action:     Mapped[str]        = mapped_column(String(100), nullable=False)
     detail:     Mapped[str]        = mapped_column(String(500), default="")
     ip:         Mapped[str]        = mapped_column(String(45), default="")
-    created_at: Mapped[datetime]   = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime]   = mapped_column(DateTime, default=_utcnow)
 
     __table_args__ = (
         Index("ix_audit_logs_user_id",    "user_id"),
@@ -344,7 +348,7 @@ class Notification(Base):
     link:       Mapped[str]          = mapped_column(String(300), default="")
     kind:       Mapped[str]          = mapped_column(String(50), default="info")
     read_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime]     = mapped_column(DateTime, default=_utcnow)
 
     user: Mapped["User"] = relationship()
 
@@ -376,7 +380,7 @@ class StockReturnVetting(Base):
     vetted_by:        Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
     qty_returned:     Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
     transaction_id:   Mapped[int | None]   = mapped_column(ForeignKey("transactions.id"), nullable=True)
-    created_at:       Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    created_at:       Mapped[datetime]     = mapped_column(DateTime, default=_utcnow)
     # Shortfall resolution
     resolved:         Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
     resolve_action:   Mapped[str | None]   = mapped_column(String(20), nullable=True)   # 'returned' | 'written_off'
@@ -405,7 +409,7 @@ class AdjustmentRequest(Base):
     status:         Mapped[str]          = mapped_column(String(20), default="PENDING")
     reviewed_by:    Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
     rejection_note: Mapped[str]          = mapped_column(String(500), default="")
-    created_at:     Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    created_at:     Mapped[datetime]     = mapped_column(DateTime, default=_utcnow)
     reviewed_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
@@ -452,7 +456,7 @@ class FaultyStock(Base):
     qty_faulty:     Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
     reason:         Mapped[str]          = mapped_column(String(400), default="")
     flagged_by:     Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
-    flagged_at:     Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    flagged_at:     Mapped[datetime]     = mapped_column(DateTime, default=_utcnow)
     resolved:       Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
     resolve_action: Mapped[str | None]   = mapped_column(String(20), nullable=True)   # 'remove' | 'return_merchant'
     resolved_at:    Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -486,7 +490,7 @@ class AgentStockAssignment(Base):
     qty_assigned:        Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
     note:                Mapped[str]          = mapped_column(String(400), nullable=False, default="")
     assigned_by:         Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
-    assigned_at:         Mapped[datetime]     = mapped_column(DateTime, default=datetime.utcnow)
+    assigned_at:         Mapped[datetime]     = mapped_column(DateTime, default=_utcnow)
     returned:            Mapped[bool]         = mapped_column(Boolean, default=False, nullable=False, server_default="FALSE")
     qty_returned:        Mapped[int]          = mapped_column(Integer, nullable=False, default=0)
     vetted_by:           Mapped[int | None]   = mapped_column(ForeignKey("users.id"), nullable=True)
