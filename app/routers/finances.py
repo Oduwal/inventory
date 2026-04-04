@@ -892,7 +892,7 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
         f"{transfer.to_branch.name} has confirmed receipt of stock transfer #{transfer_id}.",
         f"/transfers/{transfer_id}", "success")
     db.commit()
-    return redirect(f"/transfers/{transfer_id}")
+    return redirect(f"/transfers/{transfer_id}?success=Stock+received+successfully")
 
 
 
@@ -940,7 +940,7 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
     db.commit()
     audit_log(db, user.id, "TRANSFER_SENT", f"transfer_id={transfer_id}",
               ip=request.client.host if request.client else "")
-    return redirect(f"/transfers/{transfer_id}")
+    return redirect(f"/transfers/{transfer_id}?success=Transfer+packed+and+sent")
 
 
 @router.post("/transfers/{transfer_id}/expense")

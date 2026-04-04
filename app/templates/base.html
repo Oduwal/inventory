@@ -279,6 +279,76 @@
       #notif-btn-wrap{right:8px !important;top:12px !important}
       #notif-panel{max-width:calc(100vw - 16px) !important;right:8px !important}
     }
+    /* ── Celebration Overlay ── */
+    #cele-overlay{
+      display:none;position:fixed;inset:0;z-index:99999;
+      background:rgba(8,15,30,.85);backdrop-filter:blur(12px);
+      align-items:center;justify-content:center;flex-direction:column;gap:16px;
+      opacity:0;transition:opacity .4s ease;
+    }
+    #cele-overlay.active{display:flex;opacity:1;}
+    #cele-overlay .cele-icon{font-size:72px;animation:celebounce 0.7s cubic-bezier(0.34,1.56,0.64,1) both;}
+    #cele-overlay .cele-title{font-size:22px;font-weight:800;color:#fff;animation:springFadeIn 0.6s .2s both;}
+    #cele-overlay .cele-sub{font-size:14px;color:var(--muted);animation:springFadeIn 0.6s .35s both;}
+    @keyframes celebounce{
+      0%{transform:scale(0) rotate(-20deg);opacity:0}
+      50%{transform:scale(1.3) rotate(5deg);opacity:1}
+      100%{transform:scale(1) rotate(0)}
+    }
+    /* Truck driving animation */
+    @keyframes truckDrive{
+      0%{transform:translateX(-120px);opacity:0}
+      20%{opacity:1}
+      80%{opacity:1}
+      100%{transform:translateX(120px);opacity:0}
+    }
+    @keyframes packageDrop{
+      0%{transform:translateY(-80px) scale(0.5);opacity:0}
+      40%{transform:translateY(10px) scale(1.1);opacity:1}
+      60%{transform:translateY(-8px) scale(0.95)}
+      100%{transform:translateY(0) scale(1);opacity:1}
+    }
+    @keyframes confettiBurst{
+      0%{transform:scale(0);opacity:1}
+      50%{transform:scale(1.2);opacity:0.8}
+      100%{transform:scale(1.8);opacity:0}
+    }
+    @keyframes checkDraw{
+      0%{stroke-dashoffset:80}
+      100%{stroke-dashoffset:0}
+    }
+    #cele-overlay .cele-scene{
+      position:relative;width:200px;height:120px;display:flex;
+      align-items:center;justify-content:center;
+    }
+    #cele-overlay .truck-anim{animation:truckDrive 2s ease-in-out both;}
+    #cele-overlay .pkg-anim{animation:packageDrop 0.8s 0.2s cubic-bezier(0.34,1.56,0.64,1) both;}
+    #cele-overlay .confetti-ring{
+      position:absolute;width:160px;height:160px;border-radius:50%;
+      border:3px dashed rgba(79,124,255,.4);
+      animation:confettiBurst 1.5s .3s ease-out both;pointer-events:none;
+    }
+    #cele-overlay .check-svg{
+      width:80px;height:80px;
+    }
+    #cele-overlay .check-svg circle{
+      fill:none;stroke:#22c55e;stroke-width:3;
+      stroke-dasharray:188;stroke-dashoffset:188;
+      animation:checkDraw 0.8s 0.3s ease forwards;
+    }
+    #cele-overlay .check-svg polyline{
+      fill:none;stroke:#22c55e;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;
+      stroke-dasharray:80;stroke-dashoffset:80;
+      animation:checkDraw 0.5s 0.8s ease forwards;
+    }
+    /* Sparkle dots */
+    .cele-sparkle{position:absolute;width:8px;height:8px;border-radius:50%;opacity:0;}
+    .cele-sparkle:nth-child(1){background:#4f7cff;top:10%;left:15%;animation:confettiBurst 1s 0.4s ease both;}
+    .cele-sparkle:nth-child(2){background:#22c55e;top:20%;right:20%;animation:confettiBurst 1s 0.5s ease both;}
+    .cele-sparkle:nth-child(3){background:#f59e0b;bottom:15%;left:25%;animation:confettiBurst 1s 0.6s ease both;}
+    .cele-sparkle:nth-child(4){background:#8b5cf6;bottom:20%;right:15%;animation:confettiBurst 1s 0.7s ease both;}
+    .cele-sparkle:nth-child(5){background:#ef4444;top:40%;left:8%;animation:confettiBurst 1.2s 0.45s ease both;}
+    .cele-sparkle:nth-child(6){background:#14b8a6;top:35%;right:10%;animation:confettiBurst 1.2s 0.55s ease both;}
   </style>
 </head>
 <body>
@@ -772,6 +842,134 @@ async function pollNotifications() {
   } catch(e) {}
 })();
 {% endif %}
+</script>
+
+<!-- Celebration Overlay -->
+<div id="cele-overlay" onclick="dismissCele()">
+  <div class="cele-scene" id="cele-scene"></div>
+  <div class="cele-icon" id="cele-icon"></div>
+  <div class="cele-title" id="cele-title"></div>
+  <div class="cele-sub" id="cele-sub"></div>
+  <div class="cele-sparkle"></div>
+  <div class="cele-sparkle"></div>
+  <div class="cele-sparkle"></div>
+  <div class="cele-sparkle"></div>
+  <div class="cele-sparkle"></div>
+  <div class="cele-sparkle"></div>
+</div>
+
+<script>
+// ── Celebration Animation Engine ──
+const CELE_SCENES = {
+  // Stock transfer: packed & sent
+  transfer_sent: {
+    scene: `<div class="truck-anim" style="font-size:64px;">🚚</div>
+            <div class="confetti-ring"></div>`,
+    icon: '📦',
+    title: 'Transfer Sent!',
+    sub: 'Package is on its way to the destination branch',
+  },
+  // Stock transfer: received
+  transfer_received: {
+    scene: `<div class="pkg-anim" style="font-size:64px;">📦</div>
+            <div class="confetti-ring"></div>`,
+    icon: '',
+    title: 'Transfer Received!',
+    sub: 'Stock has been added to the destination branch',
+    svgCheck: true,
+  },
+  // Delivery completed
+  delivery_done: {
+    scene: `<div class="pkg-anim" style="font-size:56px;">🎉</div>
+            <div class="confetti-ring"></div>`,
+    icon: '',
+    title: 'Delivery Complete!',
+    sub: 'Order has been successfully delivered to the customer',
+    svgCheck: true,
+  },
+  // Generic success
+  success: {
+    scene: `<div class="confetti-ring"></div>`,
+    icon: '',
+    title: 'Done!',
+    sub: 'Action completed successfully',
+    svgCheck: true,
+  },
+};
+
+function showCele(type) {
+  const cfg = CELE_SCENES[type] || CELE_SCENES.success;
+  const ov = document.getElementById('cele-overlay');
+  const scene = document.getElementById('cele-scene');
+  const icon = document.getElementById('cele-icon');
+  const title = document.getElementById('cele-title');
+  const sub = document.getElementById('cele-sub');
+
+  scene.innerHTML = cfg.scene || '';
+  if (cfg.svgCheck) {
+    icon.innerHTML = `<svg class="check-svg" viewBox="0 0 80 80">
+      <circle cx="40" cy="40" r="30"/>
+      <polyline points="26,42 36,52 54,30"/>
+    </svg>`;
+  } else {
+    icon.textContent = cfg.icon || '✅';
+  }
+  title.textContent = cfg.title;
+  sub.textContent = cfg.sub;
+
+  ov.classList.add('active');
+  // Auto-dismiss after 3s
+  setTimeout(() => dismissCele(), 3200);
+}
+
+function dismissCele() {
+  const ov = document.getElementById('cele-overlay');
+  ov.style.opacity = '0';
+  setTimeout(() => {
+    ov.classList.remove('active');
+    ov.style.opacity = '';
+  }, 400);
+}
+
+// Auto-detect success context from URL and page content
+(function autoCele() {
+  const params = new URLSearchParams(window.location.search);
+  const successMsg = (params.get('success') || '').toLowerCase();
+  if (!successMsg) return;
+
+  const path = window.location.pathname;
+  // Transfer pages
+  if (path.includes('/transfers/')) {
+    if (successMsg.includes('sent') || successMsg.includes('packed') || successMsg.includes('dispatched')) {
+      showCele('transfer_sent');
+    } else if (successMsg.includes('received') || successMsg.includes('receipt')) {
+      showCele('transfer_received');
+    } else {
+      showCele('success');
+    }
+  }
+  // Delivery pages
+  else if (path.includes('/deliveries/')) {
+    if (successMsg.includes('delivered') || successMsg.includes('complete')) {
+      showCele('delivery_done');
+    } else if (successMsg.includes('approved')) {
+      showCele('success');
+    } else {
+      showCele('success');
+    }
+  }
+  // Any other page with ?success=
+  else {
+    showCele('success');
+  }
+
+  // Clean URL (remove ?success= so refreshing won't replay)
+  if (window.history.replaceState) {
+    const clean = new URL(window.location);
+    clean.searchParams.delete('success');
+    window.history.replaceState({}, '', clean);
+  }
+})();
 </script>
 </body>
 </html>
