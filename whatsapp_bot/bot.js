@@ -97,11 +97,21 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
 function extractText(msg) {
     const m = msg.message;
     if (!m) return '';
+
+    // Debug: log the message keys so we can see what Baileys gives us
+    console.log(`📋 Message keys: ${Object.keys(m).join(', ')}`);
+
     return (
         m.conversation ||
         m.extendedTextMessage?.text ||
         m.imageMessage?.caption ||
         m.videoMessage?.caption ||
+        // Baileys sometimes nests the real message inside these wrappers
+        m.ephemeralMessage?.message?.conversation ||
+        m.ephemeralMessage?.message?.extendedTextMessage?.text ||
+        m.viewOnceMessage?.message?.conversation ||
+        m.viewOnceMessage?.message?.extendedTextMessage?.text ||
+        m.documentWithCaptionMessage?.message?.documentMessage?.caption ||
         ''
     );
 }
