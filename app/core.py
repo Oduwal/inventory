@@ -16,7 +16,11 @@ import html
 import json as _json
 import secrets
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, timezone
+
+# Background task executor to prevent OOM
+task_queue = ThreadPoolExecutor(max_workers=10)
 
 try:
     from pywebpush import webpush as _webpush, WebPushException as _WebPushException
@@ -174,9 +178,7 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
             "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
             "VALUES (:uid, :title, :body, :link, :kind, :now)"
         ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
-        threading.Thread(
-            target=_send_web_push, args=(user_id, title, body, link), daemon=True
-        ).start()
+        task_queue.submit(_send_web_push, user_id, title, body, link)
     except Exception as e:
         logging.getLogger("notifications").warning(f"Notify failed: {e}")
 

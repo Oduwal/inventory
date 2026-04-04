@@ -109,7 +109,7 @@ def push_test(request: Request, db: Session = Depends(get_db)):
     has_sub = db.execute(text("SELECT 1 FROM push_subscriptions WHERE user_id=:uid LIMIT 1"), {"uid": user.id}).first()
     if not has_sub:
         return JSONResponse({"error": "No push subscription found. Allow notifications first and reload."})
-    threading.Thread(target=_send_web_push, args=(user.id, "🔔 Test Notification", "Push notifications are working!", "/"), daemon=True).start()
+    task_queue.submit(_send_web_push, user.id, "🔔 Test Notification", "Push notifications are working!", "/")
     return JSONResponse({"ok": True, "message": "Test push sent"})
 
 

@@ -1380,14 +1380,13 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                     
                     # Launch the backup call using the metadata we saved
                     from app.calling_service import _do_call
-                    import threading
-                    threading.Thread(target=_do_call, args=(
-                        d.id, next_number, remaining_backups,
+                    task_queue.submit(
+                        _do_call, d.id, next_number, remaining_backups,
                         metadata.get("status", "PENDING"),
                         metadata.get("customer_name", d.customer_name),
                         metadata.get("items", "your order"),
                         metadata.get("address", d.address or "")
-                    ), daemon=True).start()
+                    )
                     
                 else:
                     # No backups left! Send the WhatsApp message
