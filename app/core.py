@@ -190,8 +190,10 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
             "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
             "VALUES (:uid, :title, :body, :link, :kind, :now)"
         ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
+        db.commit()
         task_queue.submit(_send_web_push, user_id, title, body, link)
     except Exception as e:
+        db.rollback()
         logging.getLogger("notifications").warning(f"Notify failed: {e}")
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
