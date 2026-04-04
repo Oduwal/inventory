@@ -1,18 +1,22 @@
 # security.py — Full security module for Inventory Keeper
 # Fixes applied:
 #   [SEC-1]  SESSION_SECRET hard-fail at startup
-#   [SEC-2]  In-memory rate limiter (IP-based)
+#   [SEC-2]  Database-backed rate limiter (IP-based) — survives redeploys
 #   [SEC-3]  CSRF double-submit pattern
 #   [SEC-4]  Input sanitization
-#   [SEC-5]  Per-account login lockout (5 failures → 15 min lock)
+#   [SEC-5]  Database-backed account lockout (5 failures → 15 min lock)
 #   [SEC-6]  Password reset token expiry (1 hour)
 #   [SEC-7]  Audit log helpers
 #   [SEC-8]  Security headers middleware
 #   [SEC-9]  File upload validation
+#   [SEC-10] Push subscription endpoint validation
+#   [SEC-11] Twilio webhook signature verification
 
 import os
 import re
 import secrets
+import hmac
+import hashlib
 import html
 import logging
 from datetime import datetime, timedelta, timezone
@@ -48,84 +52,143 @@ def get_session_secret() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [SEC-2] IP-BASED RATE LIMITER
+# [SEC-2] DATABASE-BACKED RATE LIMITER (survives redeploys)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class InMemoryRateLimiter:
-    def __init__(self):
-        self._store: dict[str, list[datetime]] = defaultdict(list)
-        self._lock = Lock()
-        self._call_count = 0
+class DbRateLimiter:
+    """Rate limiter backed by the database. Counters survive redeploys."""
+
+    def _get_db(self):
+        from .database import SessionLocal
+        return SessionLocal()
+
+    def _cleanup(self, db):
+        """Purge entries older than 1 hour to keep the table small."""
+        try:
+            from sqlalchemy import text
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            db.execute(text("DELETE FROM rate_limit_hits WHERE created_at < :cutoff"),
+                       {"cutoff": cutoff})
+            db.commit()
+        except Exception:
+            try: db.rollback()
+            except Exception: pass
 
     def is_allowed(self, ip: str, max_requests: int, window_seconds: int) -> bool:
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(seconds=window_seconds)
-        with self._lock:
-            self._store[ip] = [t for t in self._store[ip] if t > cutoff]
-            if len(self._store[ip]) >= max_requests:
+        from sqlalchemy import text
+        db = self._get_db()
+        try:
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(seconds=window_seconds)
+            count = db.execute(text(
+                "SELECT COUNT(*) FROM rate_limit_hits "
+                "WHERE ip = :ip AND created_at > :cutoff"
+            ), {"ip": ip[:45], "cutoff": cutoff}).scalar() or 0
+            if count >= max_requests:
                 return False
-            self._store[ip].append(now)
-            self._call_count += 1
-            # Purge stale IPs every 10 000 calls to prevent unbounded memory growth
-            if self._call_count % 10_000 == 0:
-                hour_ago = now - timedelta(hours=1)
-                self._store = defaultdict(list, {
-                    k: v for k, v in self._store.items() if v and v[-1] > hour_ago
-                })
+            db.execute(text(
+                "INSERT INTO rate_limit_hits (ip, created_at) VALUES (:ip, :now)"
+            ), {"ip": ip[:45], "now": now})
+            db.commit()
+            # Cleanup old entries every ~100 requests (probabilistic)
+            if secrets.randbelow(100) == 0:
+                self._cleanup(db)
             return True
+        except Exception as e:
+            logger.warning("DB rate limiter error (falling shut): %s", e)
+            try: db.rollback()
+            except Exception: pass
+            return False  # fail-shut securely
+        finally:
+            db.close()
 
     def check(self, request: Request, max_requests: int = 10, window_seconds: int = 60) -> None:
-        ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        ip = request.client.host if request.client else "unknown"
         if not self.is_allowed(ip, max_requests, window_seconds):
             raise HTTPException(
                 status_code=429,
                 detail="Too many requests. Please wait a minute and try again.",
             )
 
-limiter = InMemoryRateLimiter()
+limiter = DbRateLimiter()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [SEC-5] PER-ACCOUNT LOGIN LOCKOUT
+# [SEC-5] DATABASE-BACKED ACCOUNT LOCKOUT (survives redeploys)
 #   5 failed attempts → locked for 15 minutes
-#   Stored in-memory (resets on dyno restart — acceptable for single instance)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _LOCKOUT_MAX_ATTEMPTS = 5
 _LOCKOUT_WINDOW_SECONDS = 900  # 15 minutes
 
-class AccountLockout:
-    def __init__(self):
-        self._failures: dict[str, list[datetime]] = defaultdict(list)
-        self._lock = Lock()
+class DbAccountLockout:
+    """Per-account login lockout backed by the database."""
+
+    def _get_db(self):
+        from .database import SessionLocal
+        return SessionLocal()
 
     def record_failure(self, username: str) -> None:
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            self._failures[username].append(now)
+        from sqlalchemy import text
+        db = self._get_db()
+        try:
+            db.execute(text(
+                "INSERT INTO login_failures (username, created_at) VALUES (:u, :now)"
+            ), {"u": username[:80], "now": datetime.now(timezone.utc)})
+            db.commit()
+        except Exception as e:
+            logger.warning("DB lockout record error: %s", e)
+            try: db.rollback()
+            except Exception: pass
+        finally:
+            db.close()
 
     def is_locked(self, username: str) -> bool:
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
-        with self._lock:
-            self._failures[username] = [t for t in self._failures[username] if t > cutoff]
-            return len(self._failures[username]) >= _LOCKOUT_MAX_ATTEMPTS
+        from sqlalchemy import text
+        db = self._get_db()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
+            count = db.execute(text(
+                "SELECT COUNT(*) FROM login_failures "
+                "WHERE username = :u AND created_at > :cutoff"
+            ), {"u": username[:80], "cutoff": cutoff}).scalar() or 0
+            return count >= _LOCKOUT_MAX_ATTEMPTS
+        except Exception as e:
+            logger.warning("DB lockout check error (falling shut): %s", e)
+            return True  # fail-shut
+        finally:
+            db.close()
 
     def clear(self, username: str) -> None:
-        with self._lock:
-            self._failures.pop(username, None)
+        from sqlalchemy import text
+        db = self._get_db()
+        try:
+            db.execute(text("DELETE FROM login_failures WHERE username = :u"),
+                       {"u": username[:80]})
+            db.commit()
+        except Exception as e:
+            logger.warning("DB lockout clear error: %s", e)
+            try: db.rollback()
+            except Exception: pass
+        finally:
+            db.close()
 
     def remaining_attempts(self, username: str) -> int:
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
-        with self._lock:
-            recent = [t for t in self._failures[username] if t > cutoff]
-            return max(0, _LOCKOUT_MAX_ATTEMPTS - len(recent))
+        from sqlalchemy import text
+        db = self._get_db()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=_LOCKOUT_WINDOW_SECONDS)
+            count = db.execute(text(
+                "SELECT COUNT(*) FROM login_failures "
+                "WHERE username = :u AND created_at > :cutoff"
+            ), {"u": username[:80], "cutoff": cutoff}).scalar() or 0
+            return max(0, _LOCKOUT_MAX_ATTEMPTS - count)
+        except Exception:
+            return _LOCKOUT_MAX_ATTEMPTS  # assume safe
+        finally:
+            db.close()
 
-account_lockout = AccountLockout()
+account_lockout = DbAccountLockout()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -413,3 +476,73 @@ def validate_push_endpoint(endpoint: str) -> None:
     # Push services use well-known domains; reject obviously bogus endpoints
     if not parsed.netloc or "." not in parsed.netloc:
         raise HTTPException(status_code=400, detail="Invalid push endpoint domain.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SEC-11] TWILIO WEBHOOK SIGNATURE VERIFICATION
+#   Twilio signs every webhook request with HMAC-SHA1 using your Auth Token.
+#   This ensures only real Twilio requests are processed — not forged ones.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def verify_twilio_signature(request: Request) -> None:
+    """Verify the X-Twilio-Signature header matches the expected HMAC.
+    Skipped if TWILIO_AUTH_TOKEN is not set (Twilio not configured)."""
+    import os
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not auth_token:
+        raise HTTPException(status_code=403, detail="Twilio authentication not configured.")
+
+    signature = request.headers.get("x-twilio-signature", "")
+    if not signature:
+        raise HTTPException(status_code=403, detail="Missing Twilio signature.")
+
+    # Build the full URL that Twilio signed against
+    # In production behind a proxy, use X-Forwarded-Proto + Host
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host", "")
+    url = f"{proto}://{host}{request.url.path}"
+
+    # Twilio signs URL + sorted POST params concatenated as key=value
+    # The form data is already parsed by FastAPI at this point, so we
+    # accept it as a parameter from the caller.
+    # NOTE: This function validates signature given the form params.
+    # The caller must pass form_params after parsing the form.
+    logger.debug("Twilio signature check — url=%s", url)
+
+
+def verify_twilio_signature_with_params(request: Request, form_params: dict) -> None:
+    """Full Twilio signature verification with parsed form parameters.
+    Call this AFTER parsing the form data."""
+    import os
+    from urllib.parse import quote
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not auth_token:
+        raise HTTPException(status_code=403, detail="Twilio authentication not configured.")
+
+    signature = request.headers.get("x-twilio-signature", "")
+    if not signature:
+        raise HTTPException(status_code=403, detail="Missing Twilio signature.")
+
+    # Reconstruct the URL Twilio used for signing
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host", "")
+    url = f"{proto}://{host}{request.url.path}"
+
+    # Append sorted POST params as key=value (Twilio's signing algorithm)
+    data_string = url
+    for key in sorted(form_params.keys()):
+        data_string += f"{key}{form_params[key]}"
+
+    # Compute HMAC-SHA1
+    expected = hmac.new(
+        auth_token.encode("utf-8"),
+        data_string.encode("utf-8"),
+        hashlib.sha1,
+    ).digest()
+
+    import base64
+    expected_b64 = base64.b64encode(expected).decode("utf-8")
+
+    if not hmac.compare_digest(expected_b64, signature):
+        logger.warning("Twilio signature mismatch — url=%s", url)
+        raise HTTPException(status_code=403, detail="Invalid Twilio signature.")

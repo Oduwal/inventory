@@ -83,6 +83,7 @@ from .security import (
     validate_upload,
     validate_push_endpoint,
     verify_origin_for_json,
+    verify_twilio_signature_with_params,
 )
 from .calling_service import trigger_call
 from contextlib import asynccontextmanager
@@ -107,9 +108,9 @@ if not WEBHOOK_SECRET:
     )
 
 def _verify_webhook_token(request: Request) -> None:
-    """Raise 403 if WEBHOOK_SECRET is configured but the request doesn't match."""
+    """Raise 403 if WEBHOOK_SECRET doesn't match."""
     if not WEBHOOK_SECRET:
-        return  # not configured — allow all (backward-compatible)
+        raise HTTPException(status_code=403, detail="Webhook secret not configured")
     token = (
         request.headers.get("x-webhook-secret", "")
         or request.query_params.get("token", "")
@@ -683,6 +684,22 @@ def ensure_schema() -> None:
             created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
 
+        # [SEC-2] Rate limiter table — survives redeploys
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS rate_limit_hits (
+            id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            ip VARCHAR(45) NOT NULL,
+            created_at TIMESTAMP NOT NULL
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_rate_limit_ip_time ON rate_limit_hits (ip, created_at)")
+
+        # [SEC-5] Login failures table — survives redeploys
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS login_failures (
+            id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            username VARCHAR(80) NOT NULL,
+            created_at TIMESTAMP NOT NULL
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_login_failures_user_time ON login_failures (username, created_at)")
+
 
 def seed_admin_if_missing() -> None:
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()
@@ -768,10 +785,27 @@ def seed_default_branch_if_missing() -> None:
         gen.close()
 
 
+def _schedule_daily_backup() -> None:
+    """Run database backup once daily in a background thread."""
+    import time
+    def _backup_loop():
+        while True:
+            time.sleep(24 * 60 * 60)  # Wait 24 hours
+            try:
+                from backup_database import run_backup
+                run_backup()
+            except Exception as e:
+                logging.getLogger("backup").error("Scheduled backup failed: %s", e)
+    t = threading.Thread(target=_backup_loop, daemon=True)
+    t.start()
+    logging.getLogger("backup").info("Daily database backup scheduled.")
+
+
 def _run_startup() -> None:
     ensure_schema()
     seed_default_branch_if_missing()
     seed_admin_if_missing()
+    _schedule_daily_backup()
 
 
 def _range_dates_from_inputs(preset, start_date, end_date):
@@ -857,7 +891,7 @@ async def login(
 
     verify_csrf_token(request, csrf_token)
     username_clean = sanitize_username(username)
-    ip = request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else "")
+    ip = request.client.host if request.client else ""
 
     # [SEC-5] Per-account lockout check
     if account_lockout.is_locked(username_clean):
@@ -901,7 +935,7 @@ async def logout(request: Request, csrf_token: str = Form(""), db: Session = Dep
     verify_csrf_token(request, csrf_token)  # [SEC] CSRF protection on logout
     user_id = request.session.get("user_id")
     audit_log(db, user_id, "LOGOUT",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     request.session.clear()
     return redirect("/login")
 
@@ -1136,7 +1170,7 @@ async def confirm_cash(request: Request, db: Session = Depends(get_db)):
     ), {"aid": agent_id, "bid": user.branch_id, "start": day_start, "end": day_end, "_now": _now()})
     db.commit()
     audit_log(db, user.id, "CASH_CONFIRMED", f"agent_id={agent_id} date={date_str}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return JSONResponse({"status": "ok"})
 
 
@@ -1326,7 +1360,7 @@ async def reset_data_execute(
         conn.commit()
 
     audit_log(db, user.id, "DATA_RESET", "All operational data wiped by supervisor",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return HTMLResponse("""
     <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
     <div style="background:rgba(255,255,255,.04);border:1px solid rgba(34,197,94,.3);border-radius:16px;padding:40px;max-width:400px;text-align:center;">
@@ -1910,7 +1944,7 @@ async def flag_faulty_stock(
 
     audit_log(db, user.id, "FAULTY_STOCK_FLAGGED",
               f"item={item.name} qty={qty_faulty} reason={reason_clean}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     db.commit()
     return JSONResponse({"ok": True, "item_name": item.name, "qty_faulty": qty_faulty})
 
@@ -1976,7 +2010,7 @@ async def resolve_faulty_stock(
 
     audit_log(db, user.id, "FAULTY_STOCK_RESOLVED",
               f"item={item.name} qty={qty_faulty} action={action}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     db.commit()
     return JSONResponse({
         "ok": True,
@@ -2375,7 +2409,7 @@ async def agent_reset_password(
     target.password_hash = hash_password(pw)
     db.commit()
     audit_log(db, user.id, "PASSWORD_RESET", f"user_id={agent_id} reset by {user.username}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return redirect(f"/agents/{agent_id}?success=Password+reset+successfully")
 
 # ────────────────────────────────────────────────
@@ -3126,7 +3160,7 @@ async def delivery_assign_agent(
     db.commit()
     audit_log(db, user.id, "DELIVERY_REASSIGNED",
               f"delivery_id={delivery_id} assigned to agent_id={agent_id}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return redirect(f"/deliveries/{delivery_id}?success=Agent+assigned+successfully")
 
 
@@ -3216,7 +3250,7 @@ async def request_adjustment(
            f"/deliveries/{d.id}", "warning")
     db.commit()
     audit_log(db, user.id, "ADJUSTMENT_REQUESTED", f"delivery_id={d.id} request_id={req_id}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return redirect(f"/deliveries/{delivery_id}?success=Adjustment+request+submitted+awaiting+admin+approval")
 
 
@@ -3306,7 +3340,7 @@ async def review_adjustment(
                f"/deliveries/{d.id}", "success")
         db.commit()
         audit_log(db, user.id, "ADJUSTMENT_APPROVED", f"delivery_id={d.id} request_id={pending.id}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         return redirect(f"/deliveries/{delivery_id}?success=Adjustment+approved+agent+can+now+mark+delivered")
     else:
         note = (rejection_note or "").strip()[:400] or "Rejected by admin"
@@ -3320,7 +3354,7 @@ async def review_adjustment(
                f"/deliveries/{d.id}", "danger")
         db.commit()
         audit_log(db, user.id, "ADJUSTMENT_REJECTED", f"delivery_id={d.id} request_id={pending.id}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         return redirect(f"/deliveries/{delivery_id}?success=Adjustment+rejected+agent+notified")
 
 
@@ -3390,7 +3424,7 @@ async def delivery_collect(
            f"/deliveries/{d.id}", "success")
     audit_log(db, user.id, "DELIVERY_DELIVERED",
               f"delivery_id={d.id} cash={cash_amt} transfer={transfer_amt}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     db.commit()
     return redirect(f"/deliveries/{delivery_id}?success=Delivery+marked+as+delivered")
 
@@ -3433,7 +3467,7 @@ async def update_delivery_status(
             d.status = "DELIVERED"
             d.delivered_at = datetime.now(timezone.utc)
             audit_log(db, user.id, "DELIVERY_DELIVERED", f"delivery_id={d.id}",
-                      ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                      ip=request.client.host if request.client else "")
 
             # Auto-close any linked assignment — stock was used for this delivery
             db.execute(text(
@@ -3670,7 +3704,7 @@ async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db))
 
     audit_log(db, user.id, "STOCK_ASSIGNED_TO_AGENT",
               f"agent={agent.username} item={item.name} qty={qty}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
 
     # Notify agent
     notify(db, agent_id, "📦 Stock Assigned to You",
@@ -3737,7 +3771,7 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
 
     audit_log(db, user.id, "ASSIGNED_STOCK_RETURNED",
               f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}/{qty_assigned}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     db.commit()
     return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
                          "qty_returned": qty_returned, "qty_assigned": qty_assigned,
@@ -3801,7 +3835,7 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_RESOLVED",
                   f"assignment_id={asgn_id} item={item.name if item else item_id} credited={qty_to_credit} remaining={remaining}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         db.commit()
         notify(db, agent_id,
             "✅ Assignment Shortfall Resolved" if remaining == 0 else "⚠ Partial Assignment Shortfall Resolved",
@@ -3828,7 +3862,7 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
                   f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         db.commit()
         notify(db, agent_id,
             "📋 Assignment Written Off" if remaining == 0 else "📋 Partial Write-Off Recorded",
@@ -3905,7 +3939,7 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
 
     audit_log(db, user.id, "STOCK_RETURN_VETTED",
               f"delivery_id={delivery_id} item={item.name} returned={qty_returned}/{original_qty} shortfall={shortfall}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
 
     if qty_returned > 0:
         delivery_obj = db.get(Delivery, delivery_id)
@@ -4002,7 +4036,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
 
         audit_log(db, user.id, "SHORTFALL_PARTIAL_RESOLVED" if not is_fully_resolved else "SHORTFALL_RESOLVED",
                   f"delivery_id={delivery_id} item={item.name} credited={qty_to_credit} remaining={remaining_shortfall}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         db.commit()
         _delivery = db.get(Delivery, delivery_id) if delivery_id else None
         if _delivery and _delivery.agent_id:
@@ -4039,7 +4073,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
                   f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}",
-                  ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+                  ip=request.client.host if request.client else "")
         db.commit()
         _delivery = db.get(Delivery, delivery_id) if delivery_id else None
         if _delivery and _delivery.agent_id:
@@ -4389,7 +4423,7 @@ async def vetting_confirm(request: Request, db: Session = Depends(get_db)):
     db.commit()
     audit_log(db, user.id, "CASH_VETTED",
               f"agent_id={agent_id} date={date_str} entries={len(entries)}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     if entries:
         notify(db, agent_id,
             "✅ Cash Confirmed",
@@ -5206,7 +5240,7 @@ async def merchant_return_create(
         ))
     audit_log(db, user.id, "MERCHANT_RETURN",
               f"merchant={merchant_name} items={len(item_ids)}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     db.commit()
     return redirect("/merchant-return/new?success=Goods+returned+to+merchant+and+recorded+successfully")
 
@@ -5486,7 +5520,7 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
         f"/transfers/{transfer_id}", "info")
     db.commit()
     audit_log(db, user.id, "TRANSFER_SENT", f"transfer_id={transfer_id}",
-              ip=request.headers.get("x-forwarded-for","").split(",")[0].strip() or (request.client.host if request.client else ""))
+              ip=request.client.host if request.client else "")
     return redirect(f"/transfers/{transfer_id}")
 
 
@@ -5973,12 +6007,13 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
 @app.post("/api/whatsapp-reply")
 async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     """Receives replies from customers via Twilio WhatsApp.
-    NOTE: No _verify_webhook_token here — Twilio sends form data and cannot
-    send custom headers. Twilio has its own signature-based authentication.
+    Protected by Twilio's HMAC-SHA1 signature verification (uses TWILIO_AUTH_TOKEN).
     This endpoint is also listed in _ORIGIN_CHECK_EXEMPT in security.py.
     """
     form_data = await request.form()
-    
+    # [SEC-11] Verify Twilio signature — rejects forged requests
+    verify_twilio_signature_with_params(request, dict(form_data))
+
     sender = form_data.get("From", "").replace("whatsapp:", "")
     body = form_data.get("Body", "").strip()
     
