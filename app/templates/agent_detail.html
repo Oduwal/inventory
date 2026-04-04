@@ -43,6 +43,31 @@
   </div>
 </div>
 
+{# ── Edit Profile — admin/supervisor only ──────────────────────────────── #}
+<div class="card" style="margin-bottom:14px;border-top:3px solid var(--accent);">
+  <div class="badge b-blue" style="margin-bottom:10px;">✏️ EDIT PROFILE</div>
+  <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">
+    Update the name or phone number for <strong style="color:var(--text);">{{ agent.username }}</strong>.
+  </p>
+  <form method="post" action="/agents/{{ agent.id }}/edit-profile">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <div class="inputs" style="flex-wrap:wrap;">
+      <div>
+        <label>Full Name</label>
+        <input type="text" name="full_name" value="{{ agent.full_name or '' }}" maxlength="140" placeholder="Enter full name" />
+      </div>
+      <div>
+        <label>Phone</label>
+        <input type="text" name="phone" value="{{ agent.phone or '' }}" maxlength="40" placeholder="Enter phone number" />
+      </div>
+      <div style="min-width:auto;flex:0;">
+        <label>&nbsp;</label>
+        <button class="btnPrimary" type="submit">💾 Save Changes</button>
+      </div>
+    </div>
+  </form>
+</div>
+
 {# ── Branch agents list — admin profile only ────────────────────────────── #}
 {% if is_admin_profile and branch_agents %}
 <div class="card" style="margin-bottom:14px;">

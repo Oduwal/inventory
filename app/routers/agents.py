@@ -104,6 +104,42 @@ async def remove_agent_picture(
     return redirect(f"/agents/{agent_id}?success=Profile+picture+removed")
 
 
+@router.post("/agents/{agent_id}/edit-profile")
+async def edit_agent_profile(
+    request: Request,
+    agent_id: int,
+    full_name: str = Form(""),
+    phone: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Admin/supervisor edits an agent/admin's name and phone."""
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user) and not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+
+    target = db.get(User, agent_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Admin can only edit agents in their own branch
+    if is_admin(user) and not is_supervisor(user):
+        if target.branch_id != user.branch_id:
+            return HTMLResponse("Forbidden", status_code=403)
+        if target.role != "AGENT":
+            return HTMLResponse("Forbidden — admins can only edit agent profiles", status_code=403)
+
+    target.full_name = sanitize_text(full_name, 140, "Full name") or None
+    target.phone = sanitize_phone(phone) or None
+    db.commit()
+    audit_log(db, user.id, "PROFILE_EDITED", f"user_id={agent_id} name={target.full_name} phone={target.phone}",
+              ip=request.client.host if request.client else "")
+    return redirect(f"/agents/{agent_id}?success=Profile+updated+successfully")
+
+
 #  AGENTS
 # ────────────────────────────────────────────────
 
