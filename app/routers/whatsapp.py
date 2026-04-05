@@ -344,7 +344,9 @@ def _handle_customer_reply(
         f"Order: {items}. Status: {spoken_status}. Address: {address or 'Not specified'}. {phone_line}\n"
         f"Recent notes: {recent_notes[-300:]}\n\n"
         f"Customer said: \"{customer_msg}\"\n\n"
-        f"Write a short WhatsApp reply (1-2 sentences max). Be warm and professional. "
+        f"Write a clear WhatsApp reply (2-4 sentences). Be warm, professional, and helpful. "
+        f"Make sure the customer fully understands what is happening with their order and what to expect next. "
+        f"If they asked a question, answer it clearly. If they confirmed something, acknowledge it and explain the next step. "
         f"Do not make up delivery times. Do not start with 'Hi {customer_name}' every time — vary your greeting. "
         f"Reply with ONLY the message text, nothing else."
     )
