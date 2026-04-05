@@ -51,6 +51,11 @@
                 <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">Customer</span>
                 {{ line.strip().split(']: ', 1)[-1] }}
               </div>
+            {% elif line.strip().startswith('[Agent ') %}
+              <div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
+                <span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">{{ line.strip().split(']: ', 1)[0][1:] }}</span>
+                {{ line.strip().split(']: ', 1)[-1] }}
+              </div>
             {% elif line.strip().startswith('[AI Reply]') %}
               <div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
                 <span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">AI Agent</span>
@@ -74,6 +79,29 @@
         </div>
       </div>
       <script>var nc=document.getElementById('note-chat');if(nc)nc.scrollTop=nc.scrollHeight;</script>
+      {% endif %}
+      {% if d.customer_phone %}
+      <div style="margin-top:8px;display:flex;gap:6px;">
+        <input id="agent-reply-input" type="text" placeholder="Reply to customer via WhatsApp..."
+          style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#1f2c34;color:#e9edef;font-size:13px;outline:none;"
+          onkeydown="if(event.key==='Enter')sendAgentReply()">
+        <button onclick="sendAgentReply()" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+      </div>
+      <script>
+      async function sendAgentReply(){
+        const inp=document.getElementById('agent-reply-input');
+        const msg=inp.value.trim();
+        if(!msg)return;
+        inp.disabled=true;
+        try{
+          const r=await fetch('/api/agent-whatsapp-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delivery_id:{{d.id}},message:msg})});
+          const d2=await r.json();
+          if(d2.ok){inp.value='';location.reload();}
+          else{alert(d2.error||'Failed to send');}
+        }catch(e){alert('Error: '+e);}
+        finally{inp.disabled=false;}
+      }
+      </script>
       {% endif %}
     </div>
 

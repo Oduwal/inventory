@@ -263,6 +263,46 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
 
 # ─────────────────────────────────────────────────────────────────
+# AGENT WHATSAPP REPLY (agent sends message to customer from dashboard)
+# ─────────────────────────────────────────────────────────────────
+@router.post("/api/agent-whatsapp-reply")
+async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
+    """Allows an agent/admin to send a WhatsApp message to a customer from the delivery page."""
+    user = get_current_user(db, request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
+
+    body = await request.json()
+    delivery_id = body.get("delivery_id")
+    message = (body.get("message") or "").strip()
+
+    if not delivery_id or not message:
+        return JSONResponse({"ok": False, "error": "Missing delivery_id or message"}, status_code=400)
+
+    d = db.get(Delivery, int(delivery_id))
+    if not d:
+        return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not d.customer_phone:
+        return JSONResponse({"ok": False, "error": "No customer phone number on this delivery"}, status_code=400)
+
+    from app.utils import format_nigerian_phone
+    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    if not phone:
+        return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
+
+    # Send via Twilio
+    _send_twilio_reply(phone, message)
+
+    # Log on delivery notes
+    existing_note = d.note or ""
+    d.note = (existing_note + f"\n[Agent {user.name}]: {message}").strip()
+    db.commit()
+
+    _log.info("Agent %s replied to delivery %s: %s", user.name, delivery_id, message[:100])
+    return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────────────────────────
 # VOICE NOTE TRANSCRIPTION (Gemini)
 # ─────────────────────────────────────────────────────────────────
 def _transcribe_voice_note(media_url: str, media_type: str) -> str:

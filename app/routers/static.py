@@ -80,7 +80,11 @@ self.addEventListener("notificationclick", e => {
     })
   );
 });"""
-    return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
+    return PlainTextResponse(sw, headers={
+        "Content-Type": "application/javascript",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Service-Worker-Allowed": "/",
+    })
 
 
 # NOTE: /debug-login REMOVED [FIX-2]

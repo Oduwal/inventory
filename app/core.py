@@ -38,6 +38,13 @@ try:
 except ImportError:
     _PYWEBPUSH_OK = False
 
+logging.getLogger("push").info(
+    "PUSH STARTUP: pywebpush=%s VAPID_PUBLIC=%s VAPID_PRIVATE=%s",
+    _PYWEBPUSH_OK,
+    bool(os.environ.get("VAPID_PUBLIC_KEY")),
+    bool(os.environ.get("VAPID_PRIVATE_KEY")),
+)
+
 VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 
