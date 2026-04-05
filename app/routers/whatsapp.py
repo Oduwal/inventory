@@ -338,16 +338,32 @@ def _handle_customer_reply(
     # Include recent notes for context (last 500 chars)
     recent_notes = existing_notes[-500:] if existing_notes else "No prior notes."
 
+    # Company knowledge base — same as calling service
+    company_knowledge = (
+        f"COMPANY KNOWLEDGE BASE (use this to answer customer questions):\n"
+        f"- Business Name: {business_name}\n"
+        f"- Operating Hours: {os.getenv('BUSINESS_HOURS', '8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays.')}\n"
+        f"- Delivery Zones: {os.getenv('DELIVERY_ZONES', 'We deliver across major cities in Nigeria.')}\n"
+        f"- Rescheduling: Customers can reschedule a delivery to the next day for free.\n"
+        f"- Payment: We accept bank transfers and cash on delivery.\n"
+        f"- Contact: {phone_line or 'Customer can reply to this chat.'}\n"
+        f"- Support: For major complaints, customers should message our WhatsApp support line.\n"
+    )
+
     prompt = (
         f"You are a friendly customer service agent for {business_name}. "
         f"A customer named {customer_name} replied to a WhatsApp message about their delivery.\n\n"
-        f"Order: {items}. Status: {spoken_status}. Address: {address or 'Not specified'}. {phone_line}\n"
+        f"{company_knowledge}\n"
+        f"DELIVERY DETAILS:\n"
+        f"Order: {items}. Status: {spoken_status}. Address: {address or 'Not specified'}.\n"
         f"Recent notes: {recent_notes[-300:]}\n\n"
         f"Customer said: \"{customer_msg}\"\n\n"
         f"Write a clear WhatsApp reply (2-4 sentences). Be warm, professional, and helpful. "
         f"Make sure the customer fully understands what is happening with their order and what to expect next. "
-        f"If they asked a question, answer it clearly. If they confirmed something, acknowledge it and explain the next step. "
-        f"Do not make up delivery times. Do not start with 'Hi {customer_name}' every time — vary your greeting. "
+        f"If they asked a question, answer it using the COMPANY KNOWLEDGE BASE above. "
+        f"If they confirmed something, acknowledge it and explain the next step. "
+        f"Do not make up information that is not in the knowledge base. "
+        f"Do not start with 'Hi {customer_name}' every time — vary your greeting. "
         f"Reply with ONLY the message text, nothing else."
     )
 
