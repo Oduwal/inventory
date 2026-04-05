@@ -46,7 +46,8 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         _log.info("Vapi message-level keys=%s", list(message.keys()))
 
         # Vapi puts summary in different places depending on version
-        analysis = message.get("analysis", {}) or call_data.get("analysis", {})
+        # NOTE: use `or {}` at end — .get() returns None if key exists with value None
+        analysis = message.get("analysis") or call_data.get("analysis") or {}
         summary = (
             message.get("summary", "")
             or analysis.get("summary", "")
