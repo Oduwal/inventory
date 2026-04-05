@@ -386,6 +386,7 @@ def _handle_customer_reply(
         f"- Operating Hours: {os.getenv('BUSINESS_HOURS', '8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays.')}\n"
         f"- Delivery Zones: {os.getenv('DELIVERY_ZONES', 'We deliver across major cities in Nigeria.')}\n"
         f"- Rescheduling: Customers can reschedule a delivery to the next day for free.\n"
+        f"- Modifications: Even after a delivery is out for dispatch, customers can still request modifications (add/remove items, change address, special instructions). Just let the customer know and the team will handle it.\n"
         f"- Payment: We accept bank transfers and cash on delivery.\n"
         f"- Contact: {phone_line or 'Customer can reply to this chat.'}\n"
         f"- Support: For major complaints, customers should message our WhatsApp support line.\n"

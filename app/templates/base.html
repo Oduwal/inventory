@@ -822,7 +822,8 @@ async function pollNotifications() {
   setInterval(pollNotifications, 3000);
 
   // Web push — subscribe this device so notifications arrive when screen is off
-  (async function subscribePush() {
+  const SW_VERSION = 'invkeeper-v6';  // Must match CACHE in sw.js
+  async function subscribePush(forceNew) {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
       const kr = await fetch('/push/vapid-public-key');
@@ -831,15 +832,17 @@ async function pollNotifications() {
       const reg = await navigator.serviceWorker.ready;
       const existing = await reg.pushManager.getSubscription();
       const storedKey = localStorage.getItem('push_vapid_key');
-      if (existing && storedKey === publicKey) {
-        // Same VAPID key and subscription exists — just ensure server has it
+      const storedSW  = localStorage.getItem('push_sw_version');
+      const needsResub = forceNew || !storedSW || storedSW !== SW_VERSION;
+      if (existing && storedKey === publicKey && !needsResub) {
+        // Same VAPID key, same SW version — just ensure server has it
         await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
         return;
       }
-      // VAPID key changed or no stored key — drop old and resubscribe
+      // SW updated, VAPID key changed, or no stored key — drop old and resubscribe
       if (existing) {
         await existing.unsubscribe();
-        console.log('Push: old subscription cleared');
+        console.log('Push: old subscription cleared (SW update or VAPID change)');
       }
       if (Notification.permission === 'denied') return;
       if (Notification.permission !== 'granted') {
@@ -849,9 +852,16 @@ async function pollNotifications() {
       const sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:_urlB64ToUint8(publicKey)});
       await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
       localStorage.setItem('push_vapid_key', publicKey);
-      console.log('Push: subscribed successfully');
+      localStorage.setItem('push_sw_version', SW_VERSION);
+      console.log('Push: subscribed successfully (fresh subscription)');
     } catch(e) { console.log('Push subscribe error:', e); }
-  })();
+  }
+  subscribePush(false);
+  // When a new SW activates, force resubscribe so push endpoint is fresh
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    console.log('Push: new SW activated, resubscribing...');
+    subscribePush(true);
+  });
 })();
 {% endif %}
 </script>

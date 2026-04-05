@@ -26,7 +26,7 @@ def pwa_manifest():
 
 @router.get("/sw.js", response_class=PlainTextResponse)
 def service_worker():
-    sw = """const CACHE = "invkeeper-v5";
+    sw = """const CACHE = "invkeeper-v6";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
@@ -61,7 +61,7 @@ self.addEventListener("push", e => {
     self.registration.showNotification(data.title, {
       body: data.body,
       icon: "/static/icon-192.png",
-      badge: "/static/icon-192.png",
+      badge: "/static/badge-96.png",
       vibrate: [200, 100, 200],
       data: {link: data.link || "/"},
       requireInteraction: true
