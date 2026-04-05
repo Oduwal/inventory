@@ -339,79 +339,57 @@ def _handle_customer_reply(
     recent_notes = existing_notes[-500:] if existing_notes else "No prior notes."
 
     prompt = (
-        f"You are a friendly, professional customer service agent for {business_name}. "
-        f"A customer named {customer_name} has replied to a WhatsApp message about their delivery.\n\n"
-        f"DELIVERY DETAILS:\n"
-        f"- Items: {items}\n"
-        f"- Status: {spoken_status}\n"
-        f"- Address: {address or 'Not specified'}\n"
-        f"- {phone_line}\n\n"
-        f"RECENT DELIVERY NOTES:\n{recent_notes}\n\n"
-        f"CUSTOMER MESSAGE:\n\"{customer_msg}\"\n\n"
-        f"RULES:\n"
-        f"1. Reply naturally and helpfully in 1-3 short sentences. Be warm but professional.\n"
-        f"2. If they confirm availability, acknowledge and tell them the rider is on the way.\n"
-        f"3. If they want to reschedule, confirm and say the team will arrange a new time.\n"
-        f"4. If they ask about timing, say you will check with the dispatch team and get back to them.\n"
-        f"5. If they have a complaint, apologize sincerely and say a supervisor will follow up.\n"
-        f"6. If they want to change address, acknowledge and say the team will update it.\n"
-        f"7. Do NOT make up delivery times or promises you can't keep.\n"
-        f"8. Keep replies short — this is WhatsApp, not email.\n"
-        f"9. Sign off as {business_name} team.\n\n"
-        f"Respond ONLY with valid JSON on a SINGLE LINE (no newlines inside strings, no markdown):\n"
-        '{"reply":"<your WhatsApp reply to the customer>","classification":"<CONFIRMED_AVAILABLE|RESCHEDULE_REQUEST|ADDRESS_CHANGE|COMPLAINT|QUESTION|OTHER>","summary":"<one sentence summary>"}'
+        f"You are a friendly customer service agent for {business_name}. "
+        f"A customer named {customer_name} replied to a WhatsApp message about their delivery.\n\n"
+        f"Order: {items}. Status: {spoken_status}. Address: {address or 'Not specified'}. {phone_line}\n"
+        f"Recent notes: {recent_notes[-300:]}\n\n"
+        f"Customer said: \"{customer_msg}\"\n\n"
+        f"Write a short WhatsApp reply (1-2 sentences max). Be warm and professional. "
+        f"Do not make up delivery times. Do not start with 'Hi {customer_name}' every time — vary your greeting. "
+        f"Reply with ONLY the message text, nothing else."
     )
+
+    # Classify intent with simple keyword matching (no need for Gemini)
+    msg_lower = customer_msg.lower()
+    if any(w in msg_lower for w in ["yes", "available", "i'm home", "im home", "i am home", "come", "ready"]):
+        classification = "CONFIRMED_AVAILABLE"
+    elif any(w in msg_lower for w in ["reschedule", "tomorrow", "next", "not today", "another day", "later"]):
+        classification = "RESCHEDULE_REQUEST"
+    elif any(w in msg_lower for w in ["address", "location", "move", "changed address"]):
+        classification = "ADDRESS_CHANGE"
+    elif any(w in msg_lower for w in ["complain", "bad", "angry", "worst", "terrible", "disappointed", "rubbish"]):
+        classification = "COMPLAINT"
+    elif any(w in msg_lower for w in ["when", "what time", "how long", "where", "how much", "?"]):
+        classification = "QUESTION"
+    else:
+        classification = "OTHER"
 
     try:
         resp = httpx.post(
             f"{_GEMINI_URL}?key={_GEMINI_KEY}",
             json={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500},
+                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 200},
             },
             timeout=20,
         )
-        resp_json = resp.json()
-        _log.info("Gemini reply raw status=%s", resp.status_code)
 
         if resp.status_code != 200:
             _log.error("Gemini reply API error: %s", resp.text[:500])
             raise ValueError(f"Gemini API returned {resp.status_code}")
 
-        text_out = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
-        _log.info("Gemini reply raw text: %s", text_out[:300])
+        reply_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Clean up any JSON or markdown artifacts Gemini might add
+        reply_text = re.sub(r'^```.*\n?', '', reply_text)
+        reply_text = reply_text.strip('`"')
+        _log.info("Gemini reply: %s", reply_text[:200])
 
-        if text_out.startswith("```"):
-            text_out = text_out.strip("`").lstrip("json").strip()
-
-        # Try parsing as-is first, then try fixing common issues
-        try:
-            return json.loads(text_out)
-        except json.JSONDecodeError:
-            pass
-
-        # Gemini often outputs multiline JSON — collapse to single line
-        # Replace actual newlines inside string values with spaces
-        collapsed = " ".join(text_out.split())
-        try:
-            return json.loads(collapsed)
-        except json.JSONDecodeError:
-            pass
-
-        # Last resort: extract reply text with regex
-        reply_match = re.search(r'"reply"\s*:\s*"(.+?)"', collapsed)
-        extracted_reply = reply_match.group(1) if reply_match else text_out[:500]
-        _log.warning("Gemini reply JSON fallback — extracted: %s", extracted_reply[:200])
-        return {
-            "reply": extracted_reply,
-            "classification": "OTHER",
-            "summary": customer_msg[:100],
-        }
+        return {"reply": reply_text, "classification": classification, "summary": customer_msg[:100]}
     except Exception as e:
         _log.error("Gemini customer-reply failed: %s", e)
         return {
-            "reply": f"Thank you for your message, {customer_name}. Our team has been notified and will get back to you shortly.",
-            "classification": "OTHER",
+            "reply": f"Thank you for your message. Our team has been notified and will get back to you shortly.",
+            "classification": classification,
             "summary": customer_msg[:100],
         }
 
