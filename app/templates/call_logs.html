@@ -64,7 +64,7 @@
       </thead>
       <tbody>
         {% for r in rows %}
-        <tr>
+        <tr onclick="window.location='/deliveries/{{ r.delivery_id }}'" style="cursor:pointer;">
           <td style="font-family:var(--font-mono);font-size:11px;">
             <a href="/deliveries/{{ r.delivery_id }}" style="color:var(--cyan);text-decoration:none;">#{{ r.delivery_id }}</a>
           </td>

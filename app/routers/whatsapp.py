@@ -274,7 +274,7 @@ def _transcribe_voice_note(media_url: str, media_type: str) -> str:
     # Twilio requires auth to download media
     from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
     try:
-        audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15)
+        audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15, follow_redirects=True)
         if audio_resp.status_code != 200:
             _log.warning("Failed to download voice note: HTTP %s", audio_resp.status_code)
             return ""
