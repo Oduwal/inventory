@@ -160,7 +160,27 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     sender = form_data.get("From", "").replace("whatsapp:", "")
     body = form_data.get("Body", "").strip()
-    _log.info("WhatsApp reply from %s: %s", sender, body[:200])
+    num_media = int(form_data.get("NumMedia", "0"))
+    _log.info("WhatsApp reply from %s: body='%s' media=%d", sender, body[:200], num_media)
+
+    # Handle voice notes / audio messages
+    if num_media > 0 and not body:
+        media_url = form_data.get("MediaUrl0", "")
+        media_type = form_data.get("MediaContentType0", "")
+        _log.info("Media attachment: type=%s url=%s", media_type, media_url[:100])
+
+        if media_type and media_type.startswith("audio/"):
+            loop = asyncio.get_event_loop()
+            body = await loop.run_in_executor(None, _transcribe_voice_note, media_url, media_type)
+            if body:
+                _log.info("Voice note transcribed: %s", body[:200])
+                body = f"[Voice Note]: {body}"
+            else:
+                body = "[Voice Note]: (could not transcribe)"
+        elif media_type and media_type.startswith("image/"):
+            body = "[Image sent — no text provided]"
+        else:
+            body = f"[Media: {media_type}]"
 
     if not body:
         return PlainTextResponse("OK", status_code=200)
@@ -240,6 +260,60 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
         notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
     return PlainTextResponse("OK", status_code=200)
+
+
+# ─────────────────────────────────────────────────────────────────
+# VOICE NOTE TRANSCRIPTION (Gemini)
+# ─────────────────────────────────────────────────────────────────
+def _transcribe_voice_note(media_url: str, media_type: str) -> str:
+    """Download audio from Twilio and transcribe via Gemini."""
+    if not _GEMINI_KEY:
+        _log.warning("No GEMINI_API_KEY — cannot transcribe voice note")
+        return ""
+
+    # Twilio requires auth to download media
+    from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+    try:
+        audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15)
+        if audio_resp.status_code != 200:
+            _log.warning("Failed to download voice note: HTTP %s", audio_resp.status_code)
+            return ""
+        audio_bytes = audio_resp.content
+        if len(audio_bytes) > 10_000_000:  # 10MB limit
+            _log.warning("Voice note too large: %d bytes", len(audio_bytes))
+            return ""
+    except Exception as e:
+        _log.error("Error downloading voice note: %s", e)
+        return ""
+
+    import base64
+    audio_b64 = base64.b64encode(audio_bytes).decode()
+
+    # Map common Twilio media types to Gemini mime types
+    mime_map = {"audio/ogg": "audio/ogg", "audio/mpeg": "audio/mpeg", "audio/amr": "audio/amr",
+                "audio/aac": "audio/aac", "audio/mp4": "audio/mp4", "audio/ogg; codecs=opus": "audio/ogg"}
+    mime_type = mime_map.get(media_type, media_type.split(";")[0].strip())
+
+    try:
+        resp = httpx.post(
+            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
+            json={
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"inlineData": {"mimeType": mime_type, "data": audio_b64}},
+                        {"text": "Transcribe this voice message exactly as spoken. Return ONLY the transcription text, nothing else. If you cannot understand it, return 'unclear'."},
+                    ],
+                }],
+                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500},
+            },
+            timeout=20,
+        )
+        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return text_out
+    except Exception as e:
+        _log.error("Gemini voice transcription failed: %s", e)
+        return ""
 
 
 # ─────────────────────────────────────────────────────────────────
