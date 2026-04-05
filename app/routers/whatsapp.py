@@ -358,10 +358,8 @@ def _handle_customer_reply(
         f"7. Do NOT make up delivery times or promises you can't keep.\n"
         f"8. Keep replies short — this is WhatsApp, not email.\n"
         f"9. Sign off as {business_name} team.\n\n"
-        f"Respond ONLY with valid JSON (no markdown):\n"
-        '{"reply": "<your WhatsApp reply to the customer>", '
-        '"classification": "<CONFIRMED_AVAILABLE|RESCHEDULE_REQUEST|ADDRESS_CHANGE|COMPLAINT|QUESTION|OTHER>", '
-        '"summary": "<one sentence summary of what the customer said/needs>"}'
+        f"Respond ONLY with valid JSON on a SINGLE LINE (no newlines inside strings, no markdown):\n"
+        '{"reply":"<your WhatsApp reply to the customer>","classification":"<CONFIRMED_AVAILABLE|RESCHEDULE_REQUEST|ADDRESS_CHANGE|COMPLAINT|QUESTION|OTHER>","summary":"<one sentence summary>"}'
     )
 
     try:
@@ -369,7 +367,7 @@ def _handle_customer_reply(
             f"{_GEMINI_URL}?key={_GEMINI_KEY}",
             json={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 500},
             },
             timeout=20,
         )
@@ -385,12 +383,27 @@ def _handle_customer_reply(
 
         if text_out.startswith("```"):
             text_out = text_out.strip("`").lstrip("json").strip()
-        return json.loads(text_out)
-    except json.JSONDecodeError as e:
-        _log.error("Gemini reply JSON parse failed: %s — raw: %s", e, text_out[:300])
-        # Gemini responded but not valid JSON — use the raw text as the reply
+
+        # Try parsing as-is first, then try fixing common issues
+        try:
+            return json.loads(text_out)
+        except json.JSONDecodeError:
+            pass
+
+        # Gemini often outputs multiline JSON — collapse to single line
+        # Replace actual newlines inside string values with spaces
+        collapsed = " ".join(text_out.split())
+        try:
+            return json.loads(collapsed)
+        except json.JSONDecodeError:
+            pass
+
+        # Last resort: extract reply text with regex
+        reply_match = re.search(r'"reply"\s*:\s*"(.+?)"', collapsed)
+        extracted_reply = reply_match.group(1) if reply_match else text_out[:500]
+        _log.warning("Gemini reply JSON fallback — extracted: %s", extracted_reply[:200])
         return {
-            "reply": text_out[:500] if text_out else f"Thank you for your message, {customer_name}. Our team will get back to you shortly.",
+            "reply": extracted_reply,
             "classification": "OTHER",
             "summary": customer_msg[:100],
         }
