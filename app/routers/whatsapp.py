@@ -41,9 +41,26 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         if not delivery_id:
             return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
 
-        summary = message.get("summary", "")
-        ended_reason = call_data.get("endedReason", "")
+        # Log full structure to find where Vapi puts summary/endedReason
+        _log.info("Vapi call_data keys=%s", list(call_data.keys()) if call_data else "NONE")
+        _log.info("Vapi message-level keys=%s", list(message.keys()))
+
+        # Vapi puts summary in different places depending on version
+        analysis = message.get("analysis", {}) or call_data.get("analysis", {})
+        summary = (
+            message.get("summary", "")
+            or analysis.get("summary", "")
+            or call_data.get("summary", "")
+            or ""
+        )
+        ended_reason = (
+            message.get("endedReason", "")
+            or call_data.get("endedReason", "")
+            or ""
+        )
         duration = int(message.get("durationSeconds") or call_data.get("duration") or 0)
+
+        _log.info("Vapi extracted: summary='%s' endedReason='%s' duration=%s", summary[:80], ended_reason, duration)
 
         if not summary:
             summary = "No summary provided by AI."
