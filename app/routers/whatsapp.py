@@ -18,51 +18,66 @@ router = APIRouter()
 # ─────────────────────────────────────────────────────────────────
 @router.post("/api/call-webhook")
 async def call_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receives the end-of-call report from Vapi and updates the delivery notes."""
+    """Receives the end-of-call report from Vapi and updates call_logs + delivery notes."""
     _verify_webhook_token(request)
     try:
         payload = await request.json()
         message = payload.get("message", {})
-        
+
         if message.get("type") != "end-of-call-report":
             return JSONResponse({"status": "ignored"})
 
         call_data = message.get("call", {})
         metadata = call_data.get("metadata", {})
         delivery_id = metadata.get("delivery_id")
-        
+        call_id = call_data.get("id", "")
+
         if not delivery_id:
             return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
 
-        # Vapi usually provides the summary inside the 'analysis' object
-        analysis = message.get("analysis", {}) or call_data.get("analysis", {})
-        summary = analysis.get("summary") or message.get("summary") or "No summary provided by AI."
-        
-        # Vapi can put endedReason in the root message or inside message.call
-        ended_reason = message.get("endedReason") or call_data.get("endedReason") or ""
+        summary = message.get("summary", "")
+        ended_reason = call_data.get("endedReason", "")
+        duration = int(message.get("durationSeconds") or call_data.get("duration") or 0)
 
+        if not summary:
+            summary = "No summary provided by AI."
+
+        # ── Update call_logs with summary, duration, and final status ──
+        call_status = "completed" if ended_reason not in (
+            "error", "assistant-error", "failed"
+        ) else "failed"
+        if call_id:
+            db.execute(text(
+                "UPDATE call_logs SET summary=:s, duration=:d, call_status=:cs "
+                "WHERE call_id=:cid"
+            ), {"s": summary[:1000], "d": duration, "cs": call_status, "cid": call_id})
+
+        # ── Update delivery notes ──
         d = db.get(Delivery, int(delivery_id))
         if d:
             existing_note = d.note or ""
             d.note = (existing_note + f"\n[AI Call Update]: {summary}").strip()
-            
-            logging.getLogger("webhook").info(f"Call {delivery_id} ended with reason: '{ended_reason}'")
+
+            logging.getLogger("webhook").info(
+                "Call %s ended: reason='%s' status='%s' duration=%ss",
+                delivery_id, ended_reason, call_status, duration
+            )
 
             # Trigger fallback logic if call failed
             if ended_reason in [
-                "voicemail", "customer-hung-up", "customer-ended-call", 
+                "voicemail", "customer-hung-up", "customer-ended-call",
                 "customer-did-not-answer", "failed", "assistant-error", "customer-busy"
             ]:
                 backup_numbers = metadata.get("backup_numbers", [])
-                
+
                 # Check if we have more numbers to try first
                 if len(backup_numbers) > 0:
                     next_number = backup_numbers[0]
                     remaining_backups = backup_numbers[1:]
-                    
+
                     d.note += f"\n[System]: Call to {call_data.get('customer', {}).get('number')} failed. Trying backup number: {next_number}..."
                     db.commit()
-                    
+
                     # Launch the backup call using the metadata we saved
                     from app.calling_service import _do_call
                     task_queue.submit(
@@ -72,7 +87,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                         metadata.get("items", "your order"),
                         metadata.get("address", d.address or "")
                     )
-                    
+
                 else:
                     # No backups left! Send the WhatsApp message
                     try:
@@ -90,11 +105,8 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                     except Exception as wa_err:
                         logging.getLogger("webhook").error(f"WhatsApp fallback error: {wa_err}")
 
-            else:
-                logging.getLogger("webhook").info(f"Call {delivery_id} ended reason '{ended_reason}' did not trigger fallback.")
-
             db.commit()
-            
+
             # Notify the assigned agent
             if d.agent_id:
                 notify(db, d.agent_id, "📞 Customer Call Update",
