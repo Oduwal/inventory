@@ -371,7 +371,7 @@ def _handle_customer_reply(
             f"{_GEMINI_URL}?key={_GEMINI_KEY}",
             json={
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1024},
+                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048},
             },
             timeout=20,
         )
