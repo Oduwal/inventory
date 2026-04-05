@@ -23,9 +23,14 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
     Protected by delivery_id metadata validation instead."""
     try:
         payload = await request.json()
-        message = payload.get("message", {})
+        _log = logging.getLogger("webhook")
+        _log.info("Vapi webhook received: keys=%s", list(payload.keys()))
 
-        if message.get("type") != "end-of-call-report":
+        message = payload.get("message", {})
+        msg_type = message.get("type", "")
+        _log.info("Vapi message type: '%s'", msg_type)
+
+        if msg_type != "end-of-call-report":
             return JSONResponse({"status": "ignored"})
 
         call_data = message.get("call", {})
@@ -116,7 +121,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
 
         return JSONResponse({"status": "success"})
     except Exception as e:
-        logging.getLogger("webhook").error(f"Webhook error: {e}")
+        logging.getLogger("webhook").error(f"Webhook error: %s", e, exc_info=True)
         return JSONResponse({"error": "Internal webhook processing error."}, status_code=500)
 
 
