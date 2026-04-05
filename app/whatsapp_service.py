@@ -13,6 +13,7 @@ TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "")
 # Set this to your approved WhatsApp Content Template SID (e.g. "HXxxxxxxx")
 # Required for messaging customers outside the 24-hour window
 TWILIO_CONTENT_SID = os.getenv("TWILIO_CONTENT_SID", "")
+BUSINESS_PHONE = os.getenv("BUSINESS_PHONE", "")
 
 def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, items: str):
     """Sends a WhatsApp message when the AI call goes to voicemail or fails."""
@@ -47,6 +48,7 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
                 content_variables=json.dumps({
                     "1": customer_name or "Valued Customer",
                     "2": items or "your order",
+                    "3": BUSINESS_PHONE or "our office",
                 }),
                 to=whatsapp_to,
             )
