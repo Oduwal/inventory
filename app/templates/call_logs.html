@@ -37,6 +37,12 @@
     <div>
       <div class="badge b-blue">VAPI CALLS</div>
       <div style="font-size:12px;color:var(--muted);margin-top:6px;">{{ total }} total call{{ 's' if total != 1 else '' }}</div>
+      {% if delivery_id %}
+      <div style="margin-top:6px;display:flex;gap:10px;align-items:center;">
+        <span style="font-size:12px;color:var(--cyan);">Filtered: Delivery <a href="/deliveries/{{ delivery_id }}" style="color:var(--cyan);">#{{ delivery_id }}</a></span>
+        <a href="/call-logs" style="font-size:11px;color:var(--muted);text-decoration:underline;">Show all</a>
+      </div>
+      {% endif %}
     </div>
   </div>
 

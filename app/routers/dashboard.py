@@ -269,7 +269,7 @@ async def confirm_cash_entry(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/call-logs", response_class=HTMLResponse)
-def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 1):
+def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 1, delivery_id: int | None = None):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return user_or
     user = user_or
@@ -278,23 +278,42 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
     per_page = 50
     offset = (page - 1) * per_page
     branch_id = get_selected_branch_id(request, user)
-    rows = db.execute(text("""
-        SELECT cl.id, cl.delivery_id, cl.call_id, cl.phone, cl.trigger_status,
-               cl.call_status, cl.error_msg, cl.summary, cl.duration, cl.created_at,
-               d.customer_name, d.branch_id
-        FROM call_logs cl
-        JOIN deliveries d ON d.id = cl.delivery_id
-        WHERE d.branch_id = :bid
-        ORDER BY cl.created_at DESC
-        LIMIT :lim OFFSET :off
-    """), {"bid": branch_id, "lim": per_page, "off": offset}).fetchall()
-    total = db.scalar(text(
-        "SELECT COUNT(*) FROM call_logs cl JOIN deliveries d ON d.id=cl.delivery_id WHERE d.branch_id=:bid"
-    ), {"bid": branch_id}) or 0
+
+    if delivery_id:
+        # Filter by specific delivery
+        rows = db.execute(text("""
+            SELECT cl.id, cl.delivery_id, cl.call_id, cl.phone, cl.trigger_status,
+                   cl.call_status, cl.error_msg, cl.summary, cl.duration, cl.created_at,
+                   d.customer_name, d.branch_id
+            FROM call_logs cl
+            JOIN deliveries d ON d.id = cl.delivery_id
+            WHERE cl.delivery_id = :did AND d.branch_id = :bid
+            ORDER BY cl.created_at DESC
+            LIMIT :lim OFFSET :off
+        """), {"did": delivery_id, "bid": branch_id, "lim": per_page, "off": offset}).fetchall()
+        total = db.scalar(text(
+            "SELECT COUNT(*) FROM call_logs cl JOIN deliveries d ON d.id=cl.delivery_id WHERE cl.delivery_id=:did AND d.branch_id=:bid"
+        ), {"did": delivery_id, "bid": branch_id}) or 0
+    else:
+        rows = db.execute(text("""
+            SELECT cl.id, cl.delivery_id, cl.call_id, cl.phone, cl.trigger_status,
+                   cl.call_status, cl.error_msg, cl.summary, cl.duration, cl.created_at,
+                   d.customer_name, d.branch_id
+            FROM call_logs cl
+            JOIN deliveries d ON d.id = cl.delivery_id
+            WHERE d.branch_id = :bid
+            ORDER BY cl.created_at DESC
+            LIMIT :lim OFFSET :off
+        """), {"bid": branch_id, "lim": per_page, "off": offset}).fetchall()
+        total = db.scalar(text(
+            "SELECT COUNT(*) FROM call_logs cl JOIN deliveries d ON d.id=cl.delivery_id WHERE d.branch_id=:bid"
+        ), {"bid": branch_id}) or 0
+
     pages = max(1, (total + per_page - 1) // per_page)
     return tpl(request, "call_logs.html", {
         "request": request, "user": user, "active": "call_logs",
         "rows": rows, "page": page, "pages": pages, "total": total,
+        "delivery_id": delivery_id,
     })
 
 
