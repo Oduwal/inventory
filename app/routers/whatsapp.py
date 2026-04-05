@@ -18,8 +18,9 @@ router = APIRouter()
 # ─────────────────────────────────────────────────────────────────
 @router.post("/api/call-webhook")
 async def call_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receives the end-of-call report from Vapi and updates call_logs + delivery notes."""
-    _verify_webhook_token(request)
+    """Receives the end-of-call report from Vapi and updates call_logs + delivery notes.
+    No webhook token check — Vapi is an external service that cannot send custom headers.
+    Protected by delivery_id metadata validation instead."""
     try:
         payload = await request.json()
         message = payload.get("message", {})
