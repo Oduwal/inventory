@@ -26,7 +26,7 @@ def pwa_manifest():
 
 @router.get("/sw.js", response_class=PlainTextResponse)
 def service_worker():
-    sw = """const CACHE = "invkeeper-v3";
+    sw = """const CACHE = "invkeeper-v4";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
@@ -40,7 +40,6 @@ self.addEventListener("activate", e => {
 });
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
-  // Only intercept same-origin requests
   try {
     const url = new URL(e.request.url);
     if (url.origin !== self.location.origin) return;
@@ -53,6 +52,32 @@ self.addEventListener("fetch", e => {
       }
       return res;
     }).catch(() => caches.match(e.request))
+  );
+});
+self.addEventListener("push", e => {
+  let data = {title: "Inventory Keeper", body: "You have a new notification", link: "/"};
+  try { data = Object.assign(data, e.data.json()); } catch(err) {}
+  e.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/static/icon-192.png",
+      badge: "/static/icon-192.png",
+      vibrate: [200, 100, 200],
+      data: {link: data.link || "/"},
+      requireInteraction: true
+    })
+  );
+});
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = e.notification.data?.link || "/";
+  e.waitUntil(
+    clients.matchAll({type: "window", includeUncontrolled: true}).then(list => {
+      for (const c of list) {
+        if (c.url.includes(url) && "focus" in c) return c.focus();
+      }
+      return clients.openWindow(url);
+    })
   );
 });"""
     return PlainTextResponse(sw, headers={"Content-Type": "application/javascript"})
