@@ -295,10 +295,11 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     # Log on delivery notes
     existing_note = d.note or ""
-    d.note = (existing_note + f"\n[Agent {user.name}]: {message}").strip()
+    agent_name = user.full_name or user.username
+    d.note = (existing_note + f"\n[Agent {agent_name}]: {message}").strip()
     db.commit()
 
-    _log.info("Agent %s replied to delivery %s: %s", user.name, delivery_id, message[:100])
+    _log.info("Agent %s replied to delivery %s: %s", agent_name, delivery_id, message[:100])
     return JSONResponse({"ok": True})
 
 

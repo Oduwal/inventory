@@ -121,13 +121,6 @@
           ✅ Delivered
         </button>
       </div>
-      <div style="margin-top:10px;display:flex;gap:6px;">
-        <textarea id="wa-custom-msg-{{ d.id }}" rows="2" placeholder="Type a custom message to the seller group…"
-          style="flex:1;background:#0d1117;border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:7px 10px;resize:none;font-family:inherit;"></textarea>
-        <button data-wa-btn onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" class="btnGhost" style="color:#4f7cff;border-color:#4f7cff;font-size:12px;padding:7px 10px;align-self:stretch;">
-          Send
-        </button>
-      </div>
       <div id="wa-update-status" style="font-size:12px;margin-top:8px;min-height:18px;"></div>
     </div>
   </div>
@@ -509,6 +502,12 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         No messages yet — send an update to start the thread.
       </div>
     {% endif %}
+  </div>
+  <div style="padding:8px 10px;background:#1f2c34;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:6px;align-items:center;">
+    <input id="wa-custom-msg-{{ d.id }}" type="text" placeholder="Type a message to seller group..."
+      style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#0b141a;color:#e9edef;font-size:13px;outline:none;"
+      onkeydown="if(event.key==='Enter')sendWaUpdate({{ d.id }}, 'CUSTOM')">
+    <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
   </div>
 </div>
 

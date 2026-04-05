@@ -26,7 +26,7 @@ def pwa_manifest():
 
 @router.get("/sw.js", response_class=PlainTextResponse)
 def service_worker():
-    sw = """const CACHE = "invkeeper-v4";
+    sw = """const CACHE = "invkeeper-v5";
 const PRECACHE = ["/", "/deliveries", "/items", "/transfers", "/cash"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)));
