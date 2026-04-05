@@ -474,7 +474,7 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
 # block the event loop — Gemini HTTP call can take 2-5s)
 # ─────────────────────────────────────────────────────────────────
 _GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
     """
