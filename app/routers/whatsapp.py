@@ -11,6 +11,7 @@ from app.whatsapp_service import send_whatsapp_fallback
 from app.calling_service import _build_script
 
 router = APIRouter()
+_log = logging.getLogger("whatsapp")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -149,6 +150,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
 @router.post("/api/whatsapp-reply")
 async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     """Receives replies from customers via Twilio WhatsApp.
+    Uses AI to understand the message and respond intelligently.
     Protected by Twilio's HMAC-SHA1 signature verification (uses TWILIO_AUTH_TOKEN).
     This endpoint is also listed in _ORIGIN_CHECK_EXEMPT in security.py.
     """
@@ -158,41 +160,174 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     sender = form_data.get("From", "").replace("whatsapp:", "")
     body = form_data.get("Body", "").strip()
-    
-    # Find the most recent active delivery for this phone number
-    # Twilio sends the number in E.164 format (+234...)
-    d = db.execute(
-        select(Delivery)
-        .where(Delivery.customer_phone == sender)
-        .where(Delivery.status.in_(["PENDING", "OUT_FOR_DELIVERY"]))
-        .order_by(Delivery.created_at.desc())
-    ).scalars().first()
+    _log.info("WhatsApp reply from %s: %s", sender, body[:200])
 
-    if d:
-        existing_note = d.note or ""
-        
-        if body == "1":
-            d.note = (existing_note + "\n[WhatsApp]: Customer confirmed available today.").strip()
-            notify_msg = f"{d.customer_name} confirmed via WhatsApp they are available."
-            
-        elif body == "2":
-            d.note = (existing_note + "\n[WhatsApp]: Customer requested reschedule for tomorrow.").strip()
-            d.status = "FAILED"
-            notify_msg = f"{d.customer_name} requested a reschedule via WhatsApp."
-            
-        else:
-            d.note = (existing_note + f"\n[WhatsApp Reply]: {body}").strip()
-            notify_msg = f"{d.customer_name} replied on WhatsApp: {body}"
-            
-        db.commit()
-        
-        # Notify the branch admin or assigned agent
-        if d.agent_id:
-            notify(db, d.agent_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
-        else:
-            notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
+    if not body:
+        return PlainTextResponse("OK", status_code=200)
+
+    # Find the most recent active delivery for this phone number
+    # Twilio sends E.164 (+234...), DB may store as 080... or +234...
+    # Try multiple formats for matching
+    phone_variants = [sender]
+    if sender.startswith("+234"):
+        phone_variants.append("0" + sender[4:])   # +2348012345678 → 08012345678
+        phone_variants.append(sender[1:])          # +2348012345678 → 2348012345678
+    elif sender.startswith("0"):
+        phone_variants.append("+234" + sender[1:])
+
+    d = None
+    for variant in phone_variants:
+        d = db.execute(
+            select(Delivery)
+            .where(Delivery.customer_phone.contains(variant))
+            .where(Delivery.status.in_(["PENDING", "OUT_FOR_DELIVERY"]))
+            .order_by(Delivery.created_at.desc())
+        ).scalars().first()
+        if d:
+            break
+
+    if not d:
+        _log.info("WhatsApp reply from %s — no matching delivery found", sender)
+        return PlainTextResponse("OK", status_code=200)
+
+    # Fetch items for context
+    items_query = db.execute(
+        select(Item.name, DeliveryItem.quantity)
+        .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+        .where(DeliveryItem.delivery_id == d.id)
+    ).all()
+    items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
+
+    # Build conversation history from delivery notes
+    existing_note = d.note or ""
+    business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
+    business_phone = os.getenv("BUSINESS_PHONE", "")
+
+    # Use AI to understand and respond
+    loop = asyncio.get_event_loop()
+    ai_result = await loop.run_in_executor(
+        None, _handle_customer_reply, body, d.customer_name, items_str,
+        d.address or "", d.status, existing_note, business_name, business_phone
+    )
+
+    ai_reply = ai_result.get("reply", "")
+    classification = ai_result.get("classification", "OTHER")
+    summary = ai_result.get("summary", body[:100])
+
+    # Log the conversation on delivery notes
+    d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
+
+    # Handle specific classifications
+    notify_msg = f"{d.customer_name} via WhatsApp: {summary}"
+    if classification == "CONFIRMED_AVAILABLE":
+        d.note += "\n[System]: Customer confirmed availability."
+    elif classification == "RESCHEDULE_REQUEST":
+        d.note += "\n[System]: Customer wants to reschedule."
+    elif classification == "ADDRESS_CHANGE":
+        d.note += "\n[System]: Customer wants to change delivery address — needs manual review."
+    elif classification == "COMPLAINT":
+        d.note += "\n[System]: Customer has a complaint — needs attention."
+
+    db.commit()
+
+    # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
+    _send_twilio_reply(sender, ai_reply)
+
+    # Notify the assigned agent or branch admins
+    if d.agent_id:
+        notify(db, d.agent_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
+    else:
+        notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
     return PlainTextResponse("OK", status_code=200)
+
+
+# ─────────────────────────────────────────────────────────────────
+# AI-POWERED CUSTOMER REPLY HANDLER
+# ─────────────────────────────────────────────────────────────────
+def _handle_customer_reply(
+    customer_msg: str, customer_name: str, items: str,
+    address: str, status: str, existing_notes: str,
+    business_name: str, business_phone: str
+) -> dict:
+    """Use Gemini to understand a customer's WhatsApp reply and generate a response."""
+    if not _GEMINI_KEY:
+        return {
+            "reply": f"Thank you for your message. Our team will get back to you shortly. For urgent enquiries, please call {business_phone or 'our office'}.",
+            "classification": "OTHER",
+            "summary": customer_msg[:100],
+        }
+
+    spoken_status = status.replace("_", " ").lower()
+    phone_line = f"Our contact number is {business_phone}." if business_phone else ""
+
+    # Include recent notes for context (last 500 chars)
+    recent_notes = existing_notes[-500:] if existing_notes else "No prior notes."
+
+    prompt = (
+        f"You are a friendly, professional customer service agent for {business_name}. "
+        f"A customer named {customer_name} has replied to a WhatsApp message about their delivery.\n\n"
+        f"DELIVERY DETAILS:\n"
+        f"- Items: {items}\n"
+        f"- Status: {spoken_status}\n"
+        f"- Address: {address or 'Not specified'}\n"
+        f"- {phone_line}\n\n"
+        f"RECENT DELIVERY NOTES:\n{recent_notes}\n\n"
+        f"CUSTOMER MESSAGE:\n\"{customer_msg}\"\n\n"
+        f"RULES:\n"
+        f"1. Reply naturally and helpfully in 1-3 short sentences. Be warm but professional.\n"
+        f"2. If they confirm availability, acknowledge and tell them the rider is on the way.\n"
+        f"3. If they want to reschedule, confirm and say the team will arrange a new time.\n"
+        f"4. If they ask about timing, say you will check with the dispatch team and get back to them.\n"
+        f"5. If they have a complaint, apologize sincerely and say a supervisor will follow up.\n"
+        f"6. If they want to change address, acknowledge and say the team will update it.\n"
+        f"7. Do NOT make up delivery times or promises you can't keep.\n"
+        f"8. Keep replies short — this is WhatsApp, not email.\n"
+        f"9. Sign off as {business_name} team.\n\n"
+        f"Respond ONLY with valid JSON (no markdown):\n"
+        '{"reply": "<your WhatsApp reply to the customer>", '
+        '"classification": "<CONFIRMED_AVAILABLE|RESCHEDULE_REQUEST|ADDRESS_CHANGE|COMPLAINT|QUESTION|OTHER>", '
+        '"summary": "<one sentence summary of what the customer said/needs>"}'
+    )
+
+    try:
+        resp = httpx.post(
+            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
+            json={
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
+            },
+            timeout=10,
+        )
+        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if text_out.startswith("```"):
+            text_out = text_out.strip("`").lstrip("json").strip()
+        return json.loads(text_out)
+    except Exception as e:
+        _log.warning("Gemini customer-reply failed: %s", e)
+        return {
+            "reply": f"Thank you for your message, {customer_name}. Our team has been notified and will get back to you shortly.",
+            "classification": "OTHER",
+            "summary": customer_msg[:100],
+        }
+
+
+def _send_twilio_reply(to_number: str, message: str):
+    """Send a freeform WhatsApp reply via Twilio (within 24hr window)."""
+    from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not message:
+        return
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            from_=TWILIO_WHATSAPP_NUMBER,
+            body=message,
+            to=f"whatsapp:{to_number}",
+        )
+        _log.info("Twilio AI reply sent to %s", to_number)
+    except Exception as e:
+        _log.error("Failed to send Twilio reply to %s: %s", to_number, e)
 
 
 # ─────────────────────────────────────────────────────────────────
