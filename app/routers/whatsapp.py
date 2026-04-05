@@ -371,14 +371,31 @@ def _handle_customer_reply(
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
             },
-            timeout=10,
+            timeout=20,
         )
-        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        resp_json = resp.json()
+        _log.info("Gemini reply raw status=%s", resp.status_code)
+
+        if resp.status_code != 200:
+            _log.error("Gemini reply API error: %s", resp.text[:500])
+            raise ValueError(f"Gemini API returned {resp.status_code}")
+
+        text_out = resp_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+        _log.info("Gemini reply raw text: %s", text_out[:300])
+
         if text_out.startswith("```"):
             text_out = text_out.strip("`").lstrip("json").strip()
         return json.loads(text_out)
+    except json.JSONDecodeError as e:
+        _log.error("Gemini reply JSON parse failed: %s — raw: %s", e, text_out[:300])
+        # Gemini responded but not valid JSON — use the raw text as the reply
+        return {
+            "reply": text_out[:500] if text_out else f"Thank you for your message, {customer_name}. Our team will get back to you shortly.",
+            "classification": "OTHER",
+            "summary": customer_msg[:100],
+        }
     except Exception as e:
-        _log.warning("Gemini customer-reply failed: %s", e)
+        _log.error("Gemini customer-reply failed: %s", e)
         return {
             "reply": f"Thank you for your message, {customer_name}. Our team has been notified and will get back to you shortly.",
             "classification": "OTHER",
