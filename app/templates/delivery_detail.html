@@ -478,28 +478,34 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
   </div>
 </div>
 
-<div class="card" style="margin-top:16px;" id="wa-chat-card">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-    <div class="badge b-blue">💬 SELLER GROUP CHAT</div>
-    <span id="wa-live-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e;" title="Live"></span>
+<div class="card" style="margin-top:16px;padding:0;overflow:hidden;" id="wa-chat-card">
+  <div style="background:#1f2c34;padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.06);">
+    <span style="font-size:18px;">💬</span>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:#e9edef;">Seller Group Chat</div>
+      <div style="font-size:10px;color:#8696a0;">WhatsApp Group</div>
+    </div>
+    <span id="wa-live-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;box-shadow:0 0 6px #22c55e;margin-left:auto;" title="Live"></span>
   </div>
-  <div id="wa-chat-thread" style="display:flex;flex-direction:column;gap:8px;max-height:420px;overflow-y:auto;padding-right:4px;scroll-behavior:smooth;">
+  <div id="wa-chat-thread" style="display:flex;flex-direction:column;gap:4px;max-height:420px;overflow-y:auto;padding:10px;background:#0b141a;scroll-behavior:smooth;">
     {% if wa_comments %}
       {% for c in wa_comments %}
-      <div style="display:flex;gap:10px;align-items:flex-start;{% if c.direction=='outbound' %}flex-direction:row-reverse;{% endif %}">
-        <div style="width:28px;height:28px;border-radius:50%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.2){% else %}rgba(34,197,94,.15){% endif %};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">
-          {% if c.direction=='outbound' %}🤖{% else %}💬{% endif %}
+      {% if c.direction == 'outbound' %}
+        <div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
+          <span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">Agent → Group</span>
+          <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}</div>
         </div>
-        <div style="max-width:80%;background:{% if c.direction=='outbound' %}rgba(79,124,255,.08){% else %}rgba(255,255,255,.04){% endif %};border:1px solid var(--border);border-radius:10px;padding:8px 12px;">
-          <div style="font-size:10px;color:var(--muted);margin-bottom:4px;font-family:var(--font-mono);">
-            {% if c.direction=='outbound' %}Agent → Group{% else %}{{ c.sender or 'Seller' }} → You{% endif %}&nbsp;·&nbsp;{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}
-          </div>
-          <div style="font-size:13px;white-space:pre-wrap;">{{ c.body }}</div>
+      {% else %}
+        <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
+          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender or 'Seller' }}</span>
+          <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}</div>
         </div>
-      </div>
+      {% endif %}
       {% endfor %}
     {% else %}
-      <div id="wa-empty-state" style="color:var(--muted);font-size:13px;text-align:center;padding:20px 0;">
+      <div id="wa-empty-state" style="align-self:center;background:rgba(255,255,255,.06);color:#8696a0;padding:6px 16px;border-radius:12px;font-size:12px;margin:20px 0;">
         No messages yet — send an update to start the thread.
       </div>
     {% endif %}

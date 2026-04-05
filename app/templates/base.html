@@ -638,7 +638,7 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPro
 function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;banner.style.display='none';});}
 function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa-dismissed','1');}
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
-if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).catch(e=>console.log("SW error",e));}
+if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).then(reg=>{reg.update();console.log("SW registered, checking for updates");}).catch(e=>console.log("SW error",e));}
 function _urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=atob((b+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...s].map(c=>c.charCodeAt(0)));}
 </script>
 <style>

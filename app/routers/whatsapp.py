@@ -701,14 +701,12 @@ async def send_agent_feedback(
         now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
         _sse_msg = html.escape(message)
         fragment = (
-            f'<div style="display:flex;gap:10px;align-items:flex-start;flex-direction:row-reverse;">'
-            f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(79,124,255,.2);'
-            f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">🤖</div>'
-            f'<div style="max-width:80%;background:rgba(79,124,255,.08);border:1px solid rgba(255,255,255,.07);'
-            f'border-radius:10px;padding:8px 12px;">'
-            f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">Agent → Group · {now_str}</div>'
-            f'<div style="font-size:13px;white-space:pre-wrap;">{_sse_msg}</div>'
-            f'</div></div>'
+            f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
+            f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+            f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">Agent → Group</span>'
+            f'<div style="white-space:pre-wrap;">{_sse_msg}</div>'
+            f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+            f'</div>'
         )
         _sse_broadcast(delivery.id, fragment)
 
@@ -868,19 +866,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     # SSE — push fragment to any open delivery detail tabs
     now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION NEEDED</span>' if ai.get("action_required") else ""
+    action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION</span>' if ai.get("action_required") else ""
     _sse_sender = html.escape(sender or "Seller")
     _sse_body   = html.escape(comment_body)
     fragment = (
-        f'<div style="display:flex;gap:10px;align-items:flex-start;">'
-        f'<div style="width:28px;height:28px;border-radius:50%;background:rgba(34,197,94,.15);'
-        f'display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">💬</div>'
-        f'<div style="max-width:80%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);'
-        f'border-radius:10px;padding:8px 12px;">'
-        f'<div style="font-size:10px;color:#8a9bc4;margin-bottom:4px;font-family:monospace;">'
-        f'{_sse_sender} → You · {now_str}{action_badge}</div>'
-        f'<div style="font-size:13px;white-space:pre-wrap;">{_sse_body}</div>'
-        f'</div></div>'
+        f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
+        f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">'
+        f'{_sse_sender}{action_badge}</span>'
+        f'<div style="white-space:pre-wrap;">{_sse_body}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{now_str}</div>'
+        f'</div>'
     )
     _sse_broadcast(order_id, fragment)
 
