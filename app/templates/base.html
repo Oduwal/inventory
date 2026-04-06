@@ -17,7 +17,7 @@
       --bg:#080f1e;--card:rgba(255,255,255,.04);--text:#e7eefc;
       --muted:#8a9bc4;--accent:#4f7cff;--accent2:#22c55e;
       --danger:#ef4444;--warn:#f59e0b;--purple:#8b5cf6;
-      --border:rgba(255,255,255,.07);
+      --border:rgba(255,255,255,.07);--toast-bg:#1a2332;
       --shadow:0 16px 40px rgba(0,0,0,.35);--radius:20px;--sidebar-w:240px;
     }
     @keyframes springFadeIn {
@@ -30,7 +30,7 @@
       --muted:#5a6a90;--accent:#2d5fff;--accent2:#16a34a;
       --danger:#dc2626;--warn:#d97706;--purple:#6d28d9;
       --border:rgba(0,0,40,.1);
-      --shadow:0 4px 24px rgba(0,0,60,.1);
+      --shadow:0 4px 24px rgba(0,0,60,.1);--toast-bg:#ffffff;
     }
     body.light-mode{
       background:#f0f4ff !important;
@@ -685,7 +685,7 @@ function playNotifSound() {
 function showToast(notif) {
   const color = NOTIF_COLORS[notif.kind] || NOTIF_COLORS.info;
   const toast = document.createElement('div');
-  toast.style.cssText = `pointer-events:all;background:var(--card);border:1px solid ${color};border-left:4px solid ${color};border-radius:10px;padding:12px 14px;min-width:280px;max-width:340px;box-shadow:0 4px 20px rgba(0,0,0,.4);cursor:pointer;transition:opacity .3s,transform .3s;opacity:0;transform:translateY(20px);`;
+  toast.style.cssText = `pointer-events:all;background:var(--toast-bg, #1a2332);border:1px solid ${color};border-left:4px solid ${color};border-radius:10px;padding:12px 14px;min-width:280px;max-width:340px;box-shadow:0 6px 24px rgba(0,0,0,.7);cursor:pointer;transition:opacity .3s,transform .3s;opacity:0;transform:translateY(20px);`;
   toast.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
       <div>
