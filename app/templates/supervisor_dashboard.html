@@ -32,6 +32,133 @@
   </div>
 </div>
 
+<!-- Feature Controls -->
+<style>
+  .toggle-switch{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;}
+  .toggle-switch input{opacity:0;width:0;height:0;}
+  .toggle-slider{position:absolute;cursor:pointer;inset:0;background:#1e3050;border-radius:24px;transition:.3s;border:1px solid rgba(255,255,255,.1);}
+  .toggle-slider:before{content:"";position:absolute;height:18px;width:18px;left:2px;bottom:2px;background:#fff;border-radius:50%;transition:.3s;}
+  .toggle-switch input:checked + .toggle-slider{background:#22c55e;border-color:#22c55e;}
+  .toggle-switch input:checked + .toggle-slider:before{transform:translateX(20px);}
+  .toggle-switch input:disabled + .toggle-slider{opacity:.35;cursor:not-allowed;}
+  .feature-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);}
+  .feature-label{font-size:13px;font-weight:600;color:var(--text);flex:1;}
+  .feature-desc{font-size:11px;color:var(--muted);margin-top:2px;}
+  .sub-toggles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px;padding:10px 14px;background:rgba(0,0,0,.2);border-radius:10px;border:1px solid rgba(255,255,255,.04);}
+  .sub-toggle-item{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 6px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);}
+  .sub-toggle-label{font-size:10px;color:var(--muted);text-align:center;font-family:var(--font-mono,monospace);text-transform:uppercase;letter-spacing:.04em;}
+</style>
+
+<div class="card" style="margin-bottom:14px;border-top:3px solid #8b5cf6;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+    <span class="badge b-purple">⚙ FEATURE CONTROLS</span>
+    <span class="muted small">Supervisor toggles — changes take effect immediately</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+
+    <!-- Call Function -->
+    <div>
+      <div class="feature-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="tog-call" {% if toggles.get('call_enabled', True) %}checked{% endif %}
+                 onchange="toggleFeature('call_enabled', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <div>
+          <div class="feature-label">📞 Call Function</div>
+          <div class="feature-desc">Automated VAPI customer calls</div>
+        </div>
+      </div>
+      <!-- Per-status sub-toggles -->
+      <div class="sub-toggles" id="call-sub-toggles" {% if not toggles.get('call_enabled', True) %}style="opacity:.4;pointer-events:none;"{% endif %}>
+        {% for status, label, color in [
+            ('PENDING',           'Pending',      '#f59e0b'),
+            ('OUT_FOR_DELIVERY',  'Out for Del.', '#4f7cff'),
+            ('FAILED',            'Failed',       '#ef4444'),
+            ('RETURNED',          'Returned',     '#a78bfa')
+        ] %}
+        <div class="sub-toggle-item">
+          <label class="toggle-switch">
+            <input type="checkbox" id="tog-call-{{ status }}"
+                   {% if toggles.get('call_status_' + status, True) %}checked{% endif %}
+                   onchange="toggleFeature('call_status_{{ status }}', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="sub-toggle-label" style="color:{{ color }};">{{ label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Customer WhatsApp -->
+    <div>
+      <div class="feature-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="tog-wa-customer" {% if toggles.get('whatsapp_customer_enabled', True) %}checked{% endif %}
+                 onchange="toggleFeature('whatsapp_customer_enabled', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <div>
+          <div class="feature-label">💬 Customer WhatsApp</div>
+          <div class="feature-desc">Auto fallback messages to customers</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Seller WhatsApp -->
+    <div>
+      <div class="feature-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="tog-wa-seller" {% if toggles.get('whatsapp_seller_enabled', True) %}checked{% endif %}
+                 onchange="toggleFeature('whatsapp_seller_enabled', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <div>
+          <div class="feature-label">🏪 Seller WhatsApp</div>
+          <div class="feature-desc">Group updates sent to sellers</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toggle-feedback" style="font-size:12px;margin-top:10px;min-height:16px;color:#22c55e;"></div>
+</div>
+
+<script>
+async function toggleFeature(key, isOn) {
+  const fb = document.getElementById('toggle-feedback');
+  try {
+    const r = await fetch('/api/feature-toggles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value: isOn})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      fb.style.color = '#22c55e';
+      fb.textContent = (isOn ? '✓ Enabled' : '✗ Disabled') + ': ' + key.replace(/_/g,' ');
+    } else {
+      fb.style.color = '#ef4444';
+      fb.textContent = d.error || 'Failed to update';
+    }
+  } catch(e) {
+    fb.style.color = '#ef4444';
+    fb.textContent = 'Error: ' + e;
+  }
+  // Dim/undim sub-toggles when master call switch changes
+  if (key === 'call_enabled') {
+    const sub = document.getElementById('call-sub-toggles');
+    if (sub) {
+      sub.style.opacity = isOn ? '1' : '0.4';
+      sub.style.pointerEvents = isOn ? '' : 'none';
+    }
+  }
+  setTimeout(() => { fb.textContent = ''; }, 4000);
+}
+</script>
+
 <!-- KPI cards — same 4-col layout as admin -->
 <div style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;">
     <div class="card">

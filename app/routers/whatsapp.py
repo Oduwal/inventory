@@ -592,6 +592,10 @@ async def send_agent_feedback(
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
 
+    from app.feature_toggles import is_feature_on
+    if not is_feature_on(db, "whatsapp_seller_enabled"):
+        return JSONResponse({"status": "error", "message": "Seller WhatsApp messaging is currently disabled by the supervisor."}, status_code=403)
+
     update_templates = {
         "OUT_FOR_DELIVERY": f"🚚 *Update: Out for Delivery*\nOrder #{delivery.id} - {delivery.customer_name}\nYour order is on its way and will be delivered shortly.",
         "CALLED_CUSTOMER":  f"📞 *Update: Customer Called*\nOrder #{delivery.id} - {delivery.customer_name}\nOur agent has called the customer to confirm delivery.",

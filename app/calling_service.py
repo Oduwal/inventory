@@ -171,13 +171,30 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
 
 def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "") -> None:
     if not phone or not phone.strip(): return
-    
+
+    # Check supervisor toggles before placing any call
+    try:
+        from app.database import SessionLocal
+        from app.feature_toggles import is_feature_on
+        _db = SessionLocal()
+        try:
+            if not is_feature_on(_db, "call_enabled"):
+                logger.info("Calls disabled by supervisor toggle. Skipping delivery #%s", delivery_id)
+                return
+            if not is_feature_on(_db, f"call_status_{status}"):
+                logger.info("Calls for status %s disabled by supervisor toggle. Skipping delivery #%s", status, delivery_id)
+                return
+        finally:
+            _db.close()
+    except Exception as _e:
+        logger.warning("Could not check feature toggles: %s — proceeding with call", _e)
+
     # Safely split numbers separated by comma, slash, or space
     raw_numbers = [p.strip() for p in phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
     if not raw_numbers: return
-    
+
     primary = raw_numbers[0]
     backups = raw_numbers[1:]
-    
+
     from app.core import task_queue
     task_queue.submit(_do_call, delivery_id, primary, backups, status, customer_name, items, address)

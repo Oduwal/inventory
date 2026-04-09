@@ -8,6 +8,7 @@ import json, csv, io, os, logging
 from app.core import *
 from app.models import *
 from app.security import *
+from app.feature_toggles import get_all_toggles, set_feature
 
 router = APIRouter()
 
@@ -599,7 +600,44 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "all_in7": all_in7, "all_out7": all_out7,
         "branches": branches, "selected_branch_id": None, "active": "supervisor",
         "preset": preset or "", "start_date": start_date or "", "end_date": end_date or "",
+        "toggles": get_all_toggles(db),
     })
+
+
+# ────────────────────────────────────────────────
+#  FEATURE TOGGLE API  (supervisor only)
+# ────────────────────────────────────────────────
+
+_ALLOWED_TOGGLES = {
+    "call_enabled", "call_status_PENDING", "call_status_OUT_FOR_DELIVERY",
+    "call_status_FAILED", "call_status_RETURNED",
+    "whatsapp_customer_enabled", "whatsapp_seller_enabled",
+}
+
+@router.get("/api/feature-toggles")
+async def get_feature_toggles(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    if not is_supervisor(user_or):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    return JSONResponse(get_all_toggles(db))
+
+
+@router.post("/api/feature-toggles")
+async def update_feature_toggle(request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+    if not is_supervisor(user_or):
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
+    body = await request.json()
+    key = str(body.get("key", ""))
+    value = "on" if body.get("value") else "off"
+    if key not in _ALLOWED_TOGGLES:
+        return JSONResponse({"error": "Unknown toggle key"}, status_code=400)
+    set_feature(db, key, value)
+    return JSONResponse({"ok": True, "key": key, "value": value})
 
 
 # ────────────────────────────────────────────────

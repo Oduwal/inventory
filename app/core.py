@@ -738,6 +738,25 @@ def ensure_schema() -> None:
         )""")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_login_failures_user_time ON login_failures (username, created_at)")
 
+        # Feature toggles — supervisor on/off switches for calls & WhatsApp
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS feature_toggles (
+            key   VARCHAR(80) PRIMARY KEY,
+            value VARCHAR(20) NOT NULL DEFAULT 'on',
+            updated_at TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        # Seed defaults (all on) — INSERT OR IGNORE for SQLite, ON CONFLICT for PG
+        _toggle_defaults = [
+            "call_enabled", "call_status_PENDING", "call_status_OUT_FOR_DELIVERY",
+            "call_status_FAILED", "call_status_RETURNED",
+            "whatsapp_customer_enabled", "whatsapp_seller_enabled",
+        ]
+        for _tk in _toggle_defaults:
+            if is_sqlite:
+                conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'on')"), {"k": _tk})
+            else:
+                conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'on') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
+        conn.commit()
+
 
 def seed_admin_if_missing() -> None:
     admin_user = (os.getenv("ADMIN_USERNAME") or "").strip()

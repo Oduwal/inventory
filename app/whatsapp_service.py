@@ -17,6 +17,19 @@ BUSINESS_PHONE = os.getenv("BUSINESS_PHONE", "")
 
 def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, items: str):
     """Sends a WhatsApp message when the AI call goes to voicemail or fails."""
+    try:
+        from app.database import SessionLocal
+        from app.feature_toggles import is_feature_on
+        _db = SessionLocal()
+        try:
+            if not is_feature_on(_db, "whatsapp_customer_enabled"):
+                logger.info("Customer WhatsApp disabled by supervisor toggle. Skipping delivery #%s", delivery_id)
+                return
+        finally:
+            _db.close()
+    except Exception as _e:
+        logger.warning("Could not check feature toggles: %s — proceeding with WhatsApp", _e)
+
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
         logger.warning("Twilio credentials missing. Skipping WhatsApp.")
         return
