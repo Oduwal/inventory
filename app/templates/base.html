@@ -807,6 +807,13 @@ async function pollNotifications() {
   } catch(e) {}
 }
 
+// Auto-dismiss notifications whose link matches the current page
+function autoDismissVisited() {
+  const path = window.location.pathname;
+  const toRemove = notifCache.filter(n => n.link && (n.link === path || path.startsWith(n.link)));
+  toRemove.forEach(n => dismissNotif(n.id));
+}
+
 // Load existing unread on page load (no toast, no sound — just populate panel/bell)
 (async function init() {
   try {
@@ -816,6 +823,7 @@ async function pollNotifications() {
     if (notifCache.length > 0) {
       lastNotifId = Math.max(...notifCache.map(n => n.id));
       updateBell();
+      autoDismissVisited();
     }
   } catch(e) {}
   pollNotifications();
