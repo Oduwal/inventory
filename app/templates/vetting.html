@@ -56,8 +56,8 @@
         <thead>
           <tr>
             <th>Date Written Off</th><th>Item</th>
-            <th style="text-align:right;">Qty Returned</th>
             <th style="text-align:right;color:#f87171;">Qty Lost</th>
+            <th>Reason</th>
             <th>Delivery</th><th>Agent</th><th>Confirmed By</th>
           </tr>
         </thead>
@@ -66,8 +66,8 @@
           <tr>
             <td style="color:var(--muted);white-space:nowrap;font-size:12px;">{{ r.resolved_at.strftime('%d %b %Y %H:%M') if r.resolved_at else '—' }}</td>
             <td style="font-weight:600;">{{ r.item_name }}</td>
-            <td style="text-align:right;color:#4ade80;">{{ r.qty_returned }}</td>
             <td style="text-align:right;font-weight:700;color:#f87171;">{{ r.qty_lost }}</td>
+            <td style="color:var(--muted);font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ r.reason or '' }}">{{ r.reason or '—' }}</td>
             <td>
               {% if r.source == 'assignment' %}
               <span class="badge b-blue" style="font-size:11px;">📦 Assigned Stock</span>
@@ -82,9 +82,9 @@
         </tbody>
         <tfoot>
           <tr style="border-top:2px solid var(--border);font-weight:800;">
-            <td colspan="3">Total Lost</td>
+            <td colspan="2">Total Lost</td>
             <td style="text-align:right;color:#f87171;">{{ written_off_rows | sum(attribute='qty_lost') }} units</td>
-            <td colspan="3"></td>
+            <td colspan="4"></td>
           </tr>
         </tfoot>
       </table>
@@ -343,18 +343,19 @@
         {% else %}
           <!-- Unvetted — first time confirming -->
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:var(--muted);">0 returned</span>
             <div style="display:flex;align-items:center;gap:6px;">
-              <label style="font-size:12px;color:var(--muted);margin:0;">Qty returned:</label>
+              <label style="font-size:12px;color:var(--muted);margin:0;">Resolve qty:</label>
               <input type="number" id="qty-{{ item.di_id }}" value="{{ item.qty }}" min="0" max="{{ item.qty }}"
                 style="width:70px;margin:0;padding:6px 8px;font-size:13px;" />
             </div>
             <button class="btnPrimary" onclick="confirmSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this)"
-              style="font-size:12px;padding:6px 12px;">
-              ✓ Confirm
+              style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">
+              ✓ Agent Returned It
             </button>
             <button onclick="confirmSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this, true)"
               style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
-              ✕ Not Returned
+              ✕ Write Off
             </button>
           </div>
         {% endif %}
@@ -842,12 +843,13 @@ async function confirmAgent(agentId, dateStr, btn) {
         {% else %}
           <!-- First-time vetting -->
           <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:var(--muted);">0 returned</span>
             <div style="display:flex;align-items:center;gap:5px;">
-              <label style="font-size:11px;color:var(--muted);margin:0;">Qty given:</label>
+              <label style="font-size:11px;color:var(--muted);margin:0;">Resolve qty:</label>
               <input type="number" id="return-assign-qty-{{ r[0] }}" value="{{ r[1] }}" min="0" max="{{ r[1] }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
             </div>
-            <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this)" class="btnPrimary" style="font-size:12px;padding:8px 14px;">✓ Confirm Return</button>
-            <button onclick="assignWriteOffDirect({{ r[0] }}, {{ r[1] }}, this)" style="font-size:12px;padding:8px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Write Off</button>
+            <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this)" class="btnPrimary" style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">✓ Agent Returned It</button>
+            <button onclick="assignWriteOffDirect({{ r[0] }}, {{ r[1] }}, this)" style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Write Off</button>
           </div>
         {% endif %}
       </div>

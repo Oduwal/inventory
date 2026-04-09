@@ -51,13 +51,11 @@
       <tr>
         <td>
           <span style="color:var(--muted);">#{{ d.id }}</span>
-          {% if d.id in attention_ids %}
-            {% if d.id in wa_attention_ids %}
-              <span title="Unread WhatsApp reply" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-left:4px;vertical-align:middle;box-shadow:0 0 5px #22c55e;"></span>
-            {% endif %}
-            {% if d.status == 'ADJUSTMENT_PENDING' %}
-              <span title="Adjustment pending approval" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a78bfa;margin-left:4px;vertical-align:middle;box-shadow:0 0 5px #a78bfa;"></span>
-            {% endif %}
+          {% if d.id in (wa_attention_ids or []) %}
+            <span title="Unread WhatsApp reply" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-left:4px;vertical-align:middle;box-shadow:0 0 5px #22c55e;"></span>
+          {% endif %}
+          {% if d.status == 'ADJUSTMENT_PENDING' %}
+            <span title="Adjustment pending approval" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#a78bfa;margin-left:4px;vertical-align:middle;box-shadow:0 0 5px #a78bfa;"></span>
           {% endif %}
         </td>
         <td style="font-weight:700;">{{ d.customer_name }}</td>

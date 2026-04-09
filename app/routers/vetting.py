@@ -672,7 +672,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             d.id AS delivery_id, d.customer_name,
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
             u_res.full_name AS resolved_by_name, u_res.username AS resolved_by_username,
-            'delivery' AS source
+            'delivery' AS source,
+            '' AS reason
         FROM stock_return_vettings srv
         JOIN delivery_items di ON di.id = srv.delivery_item_id
         JOIN items it          ON it.id = di.item_id
@@ -693,7 +694,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             'Assigned Stock' AS customer_name,
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
             u_vet.full_name AS resolved_by_name, u_vet.username AS resolved_by_username,
-            'assignment' AS source
+            'assignment' AS source,
+            COALESCE(asa.writeoff_note, '') AS reason
         FROM agent_stock_assignments asa
         JOIN items it         ON it.id = asa.item_id
         JOIN users u_agent    ON u_agent.id = asa.agent_id
