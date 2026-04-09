@@ -207,14 +207,14 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         if remaining == 0:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
-                "resolve_action='written_off', writeoff_note=:note, "
+                "resolve_action='written_off', writeoff_note=:note, writeoff_qty=:wq, "
                 "vetted_by=:uid, vetted_at=:_now WHERE id=:aid"
-            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now(), "note": writeoff_note or ""})
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now(), "note": writeoff_note or "", "wq": qty_to_writeoff})
         else:
             # Partial write-off — reduce shortfall but keep record open
             db.execute(text(
-                "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off' WHERE id=:aid"
-            ), {"qty": new_total, "aid": asgn_id})
+                "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off', writeoff_qty=:wq WHERE id=:aid"
+            ), {"qty": new_total, "aid": asgn_id, "wq": qty_to_writeoff})
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
                   f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}" + (f" note={writeoff_note}" if writeoff_note else ""),
@@ -420,13 +420,13 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         if is_fully_resolved:
             db.execute(text(
                 "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-                "qty_returned=:newqty, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
-            ), {"newqty": new_total_returned, "uid": user.id, "vid": vet_id, "_now": _now()})
+                "qty_returned=:newqty, writeoff_qty=:wq, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "wq": qty_to_writeoff, "uid": user.id, "vid": vet_id, "_now": _now()})
         else:
             # Partial write-off — reduce shortfall but keep record open for further action
             db.execute(text(
-                "UPDATE stock_return_vettings SET qty_returned=:newqty WHERE id=:vid"
-            ), {"newqty": new_total_returned, "vid": vet_id})
+                "UPDATE stock_return_vettings SET qty_returned=:newqty, writeoff_qty=:wq WHERE id=:vid"
+            ), {"newqty": new_total_returned, "vid": vet_id, "wq": qty_to_writeoff})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
                   f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}" + (f" note={writeoff_note}" if writeoff_note else ""),
@@ -667,7 +667,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         SELECT
             srv.id, srv.qty_returned, srv.resolved_at,
             di.quantity AS original_qty,
-            (di.quantity - srv.qty_returned) AS qty_lost,
+            COALESCE(NULLIF(srv.writeoff_qty, 0), di.quantity - srv.qty_returned) AS qty_lost,
             it.name AS item_name,
             d.id AS delivery_id, d.customer_name,
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
@@ -687,7 +687,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         SELECT
             asa.id, asa.qty_returned, asa.vetted_at AS resolved_at,
             asa.qty_assigned AS original_qty,
-            (asa.qty_assigned - asa.qty_returned) AS qty_lost,
+            COALESCE(NULLIF(asa.writeoff_qty, 0), asa.qty_assigned - asa.qty_returned) AS qty_lost,
             it.name AS item_name,
             COALESCE(asa.delivery_id, 0) AS delivery_id,
             'Assigned Stock' AS customer_name,

@@ -518,9 +518,31 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 
+    # Attention flags: deliveries needing action
+    attention_ids: set[int] = set()
+    wa_attention_ids: set[int] = set()
+    if delivery_ids:
+        id_placeholders = ",".join(str(i) for i in delivery_ids)
+        wa_last = db.execute(text(f"""
+            SELECT wc.delivery_id, wc.direction
+            FROM wa_comments wc
+            WHERE wc.delivery_id IN ({id_placeholders})
+              AND wc.created_at = (
+                SELECT MAX(created_at) FROM wa_comments wc2 WHERE wc2.delivery_id = wc.delivery_id
+              )
+        """)).fetchall()
+        for _wrow in wa_last:
+            if _wrow[1] == 'inbound':
+                wa_attention_ids.add(_wrow[0])
+        attention_ids |= wa_attention_ids
+    adj_ids = {d.id for d in rows if d.status == "ADJUSTMENT_PENDING"}
+    attention_ids |= adj_ids
+
     return tpl(request, "my_deliveries.html", {
         "request": request, "rows": rows, "user": user, "active": "deliveries",
         "items_summary": items_summary,
+        "attention_ids": attention_ids,
+        "wa_attention_ids": wa_attention_ids,
     })
 
 
@@ -885,6 +907,8 @@ async def delivery_collect(
     verify_csrf_token(request, csrf_token)
     if d.status == "DELIVERED":
         return redirect(f"/deliveries/{delivery_id}?error=Already+delivered")
+    if d.status == "ADJUSTMENT_PENDING":
+        return redirect(f"/deliveries/{delivery_id}?error=Status+is+locked+%E2%80%94+an+adjustment+request+is+pending+approval.+Approve+or+reject+it+first.")
 
     cash_amt     = max(0.0, float(cash_amount or 0))
     transfer_amt = max(0.0, float(transfer_amount or 0))

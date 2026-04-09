@@ -532,6 +532,7 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS delivery_id INTEGER REFERENCES deliveries(id)")
         _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS resolve_action VARCHAR(20) DEFAULT NULL")
         _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS writeoff_note VARCHAR(400) DEFAULT NULL")
+        _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS writeoff_qty INTEGER DEFAULT 0")
         # Faulty stock tracking table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS faulty_stock (
             id           SERIAL PRIMARY KEY,
@@ -569,6 +570,7 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS resolve_action VARCHAR(20) DEFAULT NULL")
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP DEFAULT NULL")
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS resolved_by INTEGER DEFAULT NULL REFERENCES users(id)")
+        _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS writeoff_qty INTEGER DEFAULT 0")
         # Notifications table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS notifications (
             id SERIAL PRIMARY KEY,
