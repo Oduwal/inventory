@@ -530,6 +530,8 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_agent ON agent_stock_assignments (agent_id)")
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_agent_stock_asgn_branch ON agent_stock_assignments (branch_id)")
         _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS delivery_id INTEGER REFERENCES deliveries(id)")
+        _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS resolve_action VARCHAR(20) DEFAULT NULL")
+        _ddl(conn, "ALTER TABLE agent_stock_assignments ADD COLUMN IF NOT EXISTS writeoff_note VARCHAR(400) DEFAULT NULL")
         # Faulty stock tracking table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS faulty_stock (
             id           SERIAL PRIMARY KEY,

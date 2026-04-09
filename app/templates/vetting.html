@@ -497,12 +497,18 @@ async function confirmAllReturns(deliveryId, btn) {
 async function resolveShortfall(deliveryId, diId, btn, action) {
   const qtyInput = document.getElementById('resolve-qty-' + diId);
   const qty = parseInt(qtyInput ? qtyInput.value : 0) || 0;
-  const msg = action === 'returned'
-    ? 'Confirm agent returned ' + qty + ' unit(s)?'
-    : 'Write off ' + qty + ' unit(s) as lost? This cannot be undone.';
-  if (!confirm(msg)) return;
+
+  if (action === 'written_off') {
+    // Show write-off note modal instead of confirm()
+    _woDeliveryId = deliveryId; _woDiId = diId; _woBtn = btn; _woQty = qty; _woEndpoint = 'resolve-shortfall'; _woExtraData = {};
+    document.getElementById('wo-qty-display').textContent = qty + ' unit(s)';
+    document.getElementById('wo-note-input').value = '';
+    document.getElementById('wo-modal').style.display = 'flex';
+    return;
+  }
+
+  if (!confirm('Confirm agent returned ' + qty + ' unit(s)?')) return;
   btn.disabled = true; btn.textContent = '⏳';
-  // Disable ALL buttons in this row to prevent double-click
   const row = document.getElementById('return-item-' + diId);
   if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
   try {
@@ -516,31 +522,87 @@ async function resolveShortfall(deliveryId, diId, btn, action) {
     if (data.ok) {
       if (row) {
         if (data.remaining_shortfall > 0) {
-          // Still some missing — update qty but keep buttons
           var resolveInput = row.querySelector('[id^="resolve-qty-"]');
           if (resolveInput) { resolveInput.max = data.remaining_shortfall; resolveInput.value = data.remaining_shortfall; }
           var warn = row.querySelector('span[style*="f59e0b"]');
           if (warn) warn.textContent = '⚠ ' + data.remaining_shortfall + ' still missing';
           row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
-          btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+          btn.textContent = '✓ Agent Returned It';
         } else {
-          // Fully resolved — replace entire row, no more buttons
           row.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name + '</div>'
-            + (action === 'returned'
-               ? '<span class="badge b-green" style="font-size:11px;">✓ All Returned</span>'
-               : '<span style="font-size:11px;color:#f87171;">✕ Written Off — ' + (data.qty_lost || 0) + ' unit(s) lost</span>');
+            + '<span class="badge b-green" style="font-size:11px;">✓ All Returned</span>';
           checkAllVetted(deliveryId);
         }
       }
     } else {
       alert(data.error || 'Error resolving shortfall');
       if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
-      btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+      btn.textContent = '✓ Agent Returned It';
     }
   } catch(e) {
     alert('Error: ' + e.message);
     if (row) row.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
-    btn.textContent = action === 'returned' ? '✓ Agent Returned It' : '✕ Write Off';
+    btn.textContent = '✓ Agent Returned It';
+  }
+}
+
+// Write-off modal state
+var _woDeliveryId, _woDiId, _woBtn, _woQty, _woEndpoint, _woExtraData;
+
+async function confirmWriteOff() {
+  const note = document.getElementById('wo-note-input').value.trim();
+  if (!note) { document.getElementById('wo-note-input').style.borderColor = '#ef4444'; document.getElementById('wo-note-input').focus(); return; }
+  document.getElementById('wo-modal').style.display = 'none';
+
+  const btn = _woBtn;
+  btn.disabled = true; btn.textContent = '⏳';
+
+  // Build payload based on endpoint type
+  let payload, rowEl;
+  if (_woEndpoint === 'resolve-shortfall') {
+    payload = {delivery_item_id: _woDiId, delivery_id: _woDeliveryId, qty_resolved: _woQty, action: 'written_off', note: note};
+    rowEl = document.getElementById('return-item-' + _woDiId);
+  } else {
+    // resolve-assign-shortfall
+    payload = Object.assign({}, _woExtraData, {qty_resolved: _woQty, action: 'written_off', note: note});
+    rowEl = document.getElementById('assign-action-' + _woExtraData.assignment_id);
+  }
+
+  try {
+    const res = await fetch('/vetting/' + _woEndpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (rowEl) {
+        if (data.remaining_shortfall > 0) {
+          var resolveInput = rowEl.querySelector('[id^="resolve-qty-"]');
+          if (resolveInput) { resolveInput.max = data.remaining_shortfall; resolveInput.value = data.remaining_shortfall; }
+          var warn = rowEl.querySelector('span[style*="f59e0b"]');
+          if (warn) warn.textContent = '⚠ ' + data.remaining_shortfall + ' still missing';
+          rowEl.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
+          btn.textContent = '✕ Write Off';
+        } else {
+          if (_woEndpoint === 'resolve-shortfall') {
+            rowEl.innerHTML = '<div style="flex:1;font-weight:600;font-size:13px;">' + data.item_name + '</div>'
+              + '<span style="font-size:11px;color:#f87171;">✕ ' + (_woQty) + ' unit(s) lost — written off</span>';
+            checkAllVetted(_woDeliveryId);
+          } else {
+            var card = document.getElementById('assign-card-' + _woExtraData.assignment_id);
+            if (card) card.style.borderTopColor = '#22c55e';
+            rowEl.innerHTML = '<span style="font-size:12px;color:#f87171;">✕ ' + (_woQty) + ' unit(s) lost — written off</span>';
+          }
+        }
+      }
+    } else {
+      alert(data.error || 'Write-off failed');
+      btn.disabled = false; btn.textContent = '✕ Write Off';
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false; btn.textContent = '✕ Write Off';
   }
 }
 
@@ -759,15 +821,31 @@ async function confirmAgent(agentId, dateStr, btn) {
         </div>
       </div>
     </div>
-    <div style="padding:12px 16px;">
-      <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <div style="display:flex;align-items:center;gap:5px;">
-          <label style="font-size:11px;color:var(--muted);margin:0;">Qty returned:</label>
-          <input type="number" id="return-assign-qty-{{ r[0] }}" value="{{ r[1] - (r[4] or 0) }}" min="0" max="{{ r[1] }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
+    <div style="padding:12px 16px;border-top:1px solid rgba(255,255,255,.05);">
+      {% set qty_remaining = r[1] - (r[4] or 0) %}
+      {% if r[4] and r[4] > 0 and qty_remaining > 0 %}
+        <!-- Partial return already recorded — show shortfall resolution -->
+        <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#4ade80;">{{ r[4] }} returned</span>
+          <span style="font-size:11px;color:#f59e0b;">⚠ {{ qty_remaining }} missing</span>
+          <div style="display:flex;align-items:center;gap:5px;">
+            <label style="font-size:11px;color:var(--muted);margin:0;">Resolve qty:</label>
+            <input type="number" id="resolve-assign-qty-{{ r[0] }}" value="{{ qty_remaining }}" min="0" max="{{ qty_remaining }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
+          </div>
+          <button onclick="resolveAssignShortfall({{ r[0] }}, this, 'returned')" class="btnPrimary" style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">✓ Agent Returned It</button>
+          <button onclick="resolveAssignShortfall({{ r[0] }}, this, 'written_off')" style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Write Off</button>
         </div>
-        <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this)" class="btnPrimary" style="font-size:12px;padding:8px 14px;">✓ Confirm Return</button>
-        <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this, true)" style="font-size:12px;padding:8px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Not Returned</button>
-      </div>
+      {% else %}
+        <!-- First-time vetting -->
+        <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:5px;">
+            <label style="font-size:11px;color:var(--muted);margin:0;">Qty returned:</label>
+            <input type="number" id="return-assign-qty-{{ r[0] }}" value="{{ r[1] }}" min="0" max="{{ r[1] }}" style="width:65px;margin:0;padding:5px 8px;font-size:12px;" />
+          </div>
+          <button onclick="returnAssignedStock({{ r[0] }}, {{ r[1] }}, this)" class="btnPrimary" style="font-size:12px;padding:8px 14px;">✓ Confirm Return</button>
+          <button onclick="assignWriteOffDirect({{ r[0] }}, {{ r[1] }}, this)" style="font-size:12px;padding:8px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">✕ Write Off</button>
+        </div>
+      {% endif %}
     </div>
   </div>
   {% endfor %}
@@ -885,34 +963,35 @@ async function returnAssignedStock(assignmentId, qtyAssigned, btn, notReturned=f
 async function resolveAssignShortfall(assignmentId, btn, action) {
   const qtyInput = document.getElementById('resolve-assign-qty-' + assignmentId);
   const qty = parseInt(qtyInput ? qtyInput.value : 0) || 0;
-  const msg = action === 'returned'
-    ? 'Confirm agent returned ' + qty + ' more unit(s)?'
-    : 'Write off ' + qty + ' unit(s) as lost? This cannot be undone.';
-  if (!confirm(msg)) return;
+
+  if (action === 'written_off') {
+    _woDeliveryId = null; _woDiId = null; _woBtn = btn; _woQty = qty;
+    _woEndpoint = 'resolve-assign-shortfall'; _woExtraData = {assignment_id: assignmentId};
+    document.getElementById('wo-qty-display').textContent = qty + ' unit(s)';
+    document.getElementById('wo-note-input').value = '';
+    document.getElementById('wo-modal').style.display = 'flex';
+    return;
+  }
+
+  if (!confirm('Confirm agent returned ' + qty + ' more unit(s)?')) return;
   btn.disabled = true; btn.textContent = '⏳';
   const card = document.getElementById('assign-card-' + assignmentId);
   if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = true; });
   try {
     const res = await fetch('/vetting/resolve-assign-shortfall', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({assignment_id: assignmentId, qty_resolved: qty, action: action})
+      body: JSON.stringify({assignment_id: assignmentId, qty_resolved: qty, action: 'returned'})
     });
     const data = await res.json();
     if (data.ok) {
       const actionDiv = document.getElementById('assign-action-' + assignmentId);
       if (data.remaining_shortfall > 0) {
-        // Still some missing
         var ri = document.getElementById('resolve-assign-qty-' + assignmentId);
         if (ri) { ri.max = data.remaining_shortfall; ri.value = data.remaining_shortfall; }
         if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
       } else {
-        // Fully resolved
-        if (card) card.style.borderTopColor = action === 'returned' ? '#22c55e' : '#ef4444';
-        if (actionDiv) {
-          actionDiv.innerHTML = action === 'returned'
-            ? '<span class="badge b-green" style="font-size:11px;">✓ All stock returned — fully vetted</span>'
-            : '<span style="font-size:11px;color:#f87171;">✕ Written off — ' + (data.qty_lost || qty) + ' unit(s) lost</span>';
-        }
+        if (card) card.style.borderTopColor = '#22c55e';
+        if (actionDiv) actionDiv.innerHTML = '<span class="badge b-green" style="font-size:11px;">✓ All stock returned — fully vetted</span>';
       }
     } else {
       alert(data.error || 'Error');
@@ -923,6 +1002,51 @@ async function resolveAssignShortfall(assignmentId, btn, action) {
     if (card) card.querySelectorAll('button').forEach(function(b){ b.disabled = false; });
   }
 }
+
+async function assignWriteOffDirect(assignmentId, qtyAssigned, btn) {
+  // Write-off from first-time vetting (no partial return yet) — treat all as lost
+  const qtyInput = document.getElementById('return-assign-qty-' + assignmentId);
+  const qtyReturned = parseInt(qtyInput ? qtyInput.value : 0) || 0;
+  const qtyLost = qtyAssigned - qtyReturned;
+  if (qtyLost <= 0) { alert('No stock to write off — qty returned equals qty assigned.'); return; }
+
+  // First confirm whatever was returned, then write off the rest
+  _woDeliveryId = null; _woDiId = null; _woBtn = btn; _woQty = qtyLost;
+  _woEndpoint = 'resolve-assign-shortfall'; _woExtraData = {assignment_id: assignmentId, qty_returned_first: qtyReturned};
+  document.getElementById('wo-qty-display').textContent = qtyLost + ' unit(s)';
+  document.getElementById('wo-note-input').value = '';
+  document.getElementById('wo-modal').style.display = 'flex';
+
+  // Override confirmWriteOff to handle two-step: return + writeoff
+  _woAssignDirectQtyReturned = qtyReturned;
+  _woAssignDirectQtyAssigned = qtyAssigned;
+}
+var _woAssignDirectQtyReturned = null;
+var _woAssignDirectQtyAssigned = null;
 </script>
+
+<!-- Write-Off Note Modal -->
+<div id="wo-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);align-items:center;justify-content:center;">
+  <div style="background:#0d1829;border:1px solid rgba(239,68,68,.35);border-radius:16px;width:100%;max-width:420px;padding:24px;margin:20px;box-shadow:0 24px 60px rgba(0,0,0,.8);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <span class="badge b-red">✕ Write Off Stock</span>
+      <button onclick="document.getElementById('wo-modal').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <div style="font-size:14px;color:var(--text);margin-bottom:6px;">
+      Writing off <strong id="wo-qty-display" style="color:#f87171;"></strong> as <strong>lost</strong>. This cannot be undone.
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">A reason is required before proceeding.</div>
+    <div style="margin-bottom:16px;">
+      <label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">Reason / Note <span style="color:#ef4444;">*</span></label>
+      <textarea id="wo-note-input" rows="3" placeholder="e.g. Agent confirmed stock was lost in transit..."
+        style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(239,68,68,.3);background:#1f2c34;color:#e9edef;font-size:13px;outline:none;resize:vertical;"
+        oninput="this.style.borderColor=this.value.trim()?'rgba(239,68,68,.3)':'#ef4444';"></textarea>
+    </div>
+    <div style="display:flex;gap:10px;">
+      <button onclick="document.getElementById('wo-modal').style.display='none'" class="btnGhost" style="flex:1;">Cancel</button>
+      <button onclick="confirmWriteOff()" style="flex:1;padding:10px;border-radius:10px;border:none;background:#ef4444;color:#fff;font-weight:700;cursor:pointer;font-size:13px;">✕ Confirm Write Off</button>
+    </div>
+  </div>
+</div>
 
 {% endblock %}

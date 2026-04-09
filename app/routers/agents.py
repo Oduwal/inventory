@@ -958,8 +958,8 @@ async def update_delivery_status(
     # Lock: once DELIVERED, FAILED, or RETURNED — no further status changes
     if d.status in ("DELIVERED", "FAILED", "RETURNED"):
         return redirect(f"/deliveries/{delivery_id}?error=This+order+is+{d.status.lower()}+and+cannot+be+updated")
-    if d.status == "ADJUSTMENT_PENDING" and status_clean == "DELIVERED":
-        return redirect(f"/deliveries/{delivery_id}?error=Cannot+mark+delivered+while+adjustment+request+is+pending+admin+approval")
+    if d.status == "ADJUSTMENT_PENDING":
+        return redirect(f"/deliveries/{delivery_id}?error=Status+is+locked+%E2%80%94+an+adjustment+request+is+pending+approval.+Approve+or+reject+it+first.")
     # Helper: build item summary string for AI call script
     def _items_summary() -> str:
         rows = db.execute(

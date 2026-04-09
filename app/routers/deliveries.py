@@ -97,6 +97,30 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     if all_agent_ids:
         for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
             agent_names[u.id] = u.full_name or u.username
+
+    # Attention flags: deliveries needing action
+    # — last WhatsApp message is inbound (customer or seller reply waiting)
+    # — adjustment pending approval
+    attention_ids: set[int] = set()
+    wa_attention_ids: set[int] = set()  # specifically has unread WA
+    if delivery_ids:
+        id_placeholders = ",".join(str(i) for i in delivery_ids)
+        wa_last = db.execute(text(f"""
+            SELECT wc.delivery_id, wc.direction
+            FROM wa_comments wc
+            WHERE wc.delivery_id IN ({id_placeholders})
+              AND wc.created_at = (
+                SELECT MAX(created_at) FROM wa_comments wc2 WHERE wc2.delivery_id = wc.delivery_id
+              )
+        """)).fetchall()
+        for _wrow in wa_last:
+            if _wrow[1] == 'inbound':
+                wa_attention_ids.add(_wrow[0])
+        attention_ids |= wa_attention_ids
+    # ADJUSTMENT_PENDING deliveries always need attention
+    adj_ids = {d.id for d in rows if d.status == "ADJUSTMENT_PENDING"}
+    attention_ids |= adj_ids
+
     return tpl(request, "deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
@@ -104,6 +128,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         "branch_id": filter_branch, "start_date": start_date, "end_date": end_date,
         "user": user, "active": "deliveries", "sup_kpis": sup_kpis,
         "agent_names": agent_names,
+        "attention_ids": attention_ids,
+        "wa_attention_ids": wa_attention_ids,
     })
 
 

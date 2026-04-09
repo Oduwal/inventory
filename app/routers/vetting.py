@@ -146,6 +146,7 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
     assignment_id = body.get("assignment_id")
     action        = body.get("action", "")
     qty_resolved  = int(body.get("qty_resolved", 0))
+    writeoff_note = str(body.get("note", "")).strip()
     if not assignment_id or action not in ("returned", "written_off"):
         return JSONResponse({"error": "invalid params"}, status_code=400)
 
@@ -206,16 +207,17 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         if remaining == 0:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
+                "resolve_action='written_off', writeoff_note=:note, "
                 "vetted_by=:uid, vetted_at=:_now WHERE id=:aid"
-            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now()})
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now(), "note": writeoff_note or ""})
         else:
             # Partial write-off — reduce shortfall but keep record open
             db.execute(text(
-                "UPDATE agent_stock_assignments SET qty_returned=:qty WHERE id=:aid"
+                "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off' WHERE id=:aid"
             ), {"qty": new_total, "aid": asgn_id})
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
-                  f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}",
+                  f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}" + (f" note={writeoff_note}" if writeoff_note else ""),
                   ip=request.client.host if request.client else "")
         db.commit()
         notify(db, agent_id,
@@ -331,6 +333,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
     action           = body.get("action", "")   # "returned" | "written_off"
     delivery_id      = body.get("delivery_id")
     qty_resolved     = int(body.get("qty_resolved", 0))
+    writeoff_note    = str(body.get("note", "")).strip()
 
     if not delivery_item_id or action not in ("returned", "written_off"):
         return JSONResponse({"error": "invalid params — action must be returned or written_off"}, status_code=400)
@@ -426,7 +429,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
             ), {"newqty": new_total_returned, "vid": vet_id})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
-                  f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}",
+                  f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}" + (f" note={writeoff_note}" if writeoff_note else ""),
                   ip=request.client.host if request.client else "")
         db.commit()
         _delivery = db.get(Delivery, delivery_id) if delivery_id else None
@@ -695,8 +698,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         JOIN items it         ON it.id = asa.item_id
         JOIN users u_agent    ON u_agent.id = asa.agent_id
         LEFT JOIN users u_vet ON u_vet.id = asa.vetted_by
-        WHERE asa.returned = TRUE
-          AND asa.qty_returned < asa.qty_assigned
+        WHERE asa.resolve_action = 'written_off'
           AND asa.branch_id = :bid
 
         ORDER BY resolved_at DESC
