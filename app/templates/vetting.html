@@ -844,18 +844,25 @@ async function confirmAgent(agentId, dateStr, btn) {
           <div style="font-weight:700;font-size:14px;">{{ r[6] }} <span style="color:var(--muted);font-size:12px;font-weight:400;">→ {{ r[8] or r[9] }}</span></div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px;">
             {{ r[1] }} unit(s) assigned · {{ r[3].strftime('%d %b %Y %H:%M') if r[3] else '—' }}
-            {% if r[4] %}· <span style="color:#4ade80;">{{ r[4] }} returned so far</span>{% endif %}
+            {% set wo = r[12] or 0 %}
+            {% set actual_returned = (r[4] or 0) - wo %}
+            {% if actual_returned > 0 %}· <span style="color:#4ade80;">{{ actual_returned }} returned</span>{% endif %}
+            {% if wo > 0 %}· <span style="color:#f87171;">{{ wo }} written off</span>{% endif %}
             {% if r[10] or r[11] %}· by {{ r[10] or r[11] }}{% endif %}
           </div>
           {% if r[2] %}<div style="font-size:11px;color:var(--muted);margin-top:2px;">Note: {{ r[2] }}</div>{% endif %}
         </div>
       </div>
       <div style="margin-top:10px;">
+        {% set wo = r[12] or 0 %}
         {% set qty_remaining = r[1] - (r[4] or 0) %}
-        {% if r[4] and r[4] > 0 and qty_remaining > 0 %}
-          <!-- Partial return already recorded — show shortfall resolution -->
+        {% set effective_remaining = r[1] - wo %}
+        {% if (r[4] and r[4] > 0) and qty_remaining > 0 %}
+          <!-- Partial action already recorded — show shortfall resolution -->
           <div id="assign-action-{{ r[0] }}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;color:#4ade80;">{{ r[4] }} returned</span>
+            {% set actual_ret = (r[4] or 0) - wo %}
+            {% if actual_ret > 0 %}<span style="font-size:12px;color:#4ade80;">{{ actual_ret }} returned</span>{% endif %}
+            {% if wo > 0 %}<span style="font-size:12px;color:#f87171;">{{ wo }} written off</span>{% endif %}
             <span style="font-size:11px;color:#f59e0b;">⚠ {{ qty_remaining }} missing</span>
             <div style="display:flex;align-items:center;gap:5px;">
               <label style="font-size:11px;color:var(--muted);margin:0;">Resolve qty:</label>

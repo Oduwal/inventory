@@ -123,6 +123,36 @@
 
   </div>
 
+  <!-- Contact Hours -->
+  <div style="margin-top:14px;">
+    <div class="feature-row" style="flex-wrap:wrap;gap:12px;">
+      <div style="font-size:18px;">🕐</div>
+      <div style="flex:1;min-width:140px;">
+        <div class="feature-label">Contact Hours (WAT)</div>
+        <div class="feature-desc">Calls & WhatsApp are delayed until the start hour if orders are assigned outside this window</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <select id="contact-start-hour" onchange="updateContactHour('contact_start_hour', this.value)"
+          style="padding:6px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;">
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if (toggles_raw.get('contact_start_hour', '8')|string) == (h|string) %}selected{% endif %}>
+            {{ '%02d:00'|format(h) }}
+          </option>
+          {% endfor %}
+        </select>
+        <span style="font-size:12px;color:var(--muted);">to</span>
+        <select id="contact-end-hour" onchange="updateContactHour('contact_end_hour', this.value)"
+          style="padding:6px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);color:var(--text);font-size:13px;">
+          {% for h in range(24) %}
+          <option value="{{ h }}" {% if (toggles_raw.get('contact_end_hour', '20')|string) == (h|string) %}selected{% endif %}>
+            {{ '%02d:00'|format(h) }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
   <div id="toggle-feedback" style="font-size:12px;margin-top:10px;min-height:16px;color:#22c55e;"></div>
 </div>
 
@@ -154,6 +184,30 @@ async function toggleFeature(key, isOn) {
       sub.style.opacity = isOn ? '1' : '0.4';
       sub.style.pointerEvents = isOn ? '' : 'none';
     }
+  }
+  setTimeout(() => { fb.textContent = ''; }, 4000);
+}
+
+async function updateContactHour(key, hour) {
+  const fb = document.getElementById('toggle-feedback');
+  try {
+    const r = await fetch('/api/feature-toggles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({key, value: parseInt(hour)})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      fb.style.color = '#22c55e';
+      const label = key === 'contact_start_hour' ? 'Start' : 'End';
+      fb.textContent = '✓ Contact ' + label + ' hour set to ' + hour.toString().padStart(2,'0') + ':00';
+    } else {
+      fb.style.color = '#ef4444';
+      fb.textContent = d.error || 'Failed to update';
+    }
+  } catch(e) {
+    fb.style.color = '#ef4444';
+    fb.textContent = 'Error: ' + e;
   }
   setTimeout(() => { fb.textContent = ''; }, 4000);
 }

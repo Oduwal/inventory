@@ -85,12 +85,13 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
         return JSONResponse({"error": "invalid params"}, status_code=400)
 
     row = db.execute(text(
-        "SELECT id, agent_id, item_id, branch_id, qty_assigned, note FROM agent_stock_assignments "
+        "SELECT id, agent_id, item_id, branch_id, qty_assigned, note, COALESCE(writeoff_qty, 0) "
+        "FROM agent_stock_assignments "
         "WHERE id = :aid AND returned = FALSE"
     ), {"aid": assignment_id}).fetchone()
     if not row:
         return JSONResponse({"error": "assignment not found or already returned"}, status_code=404)
-    asgn_id, agent_id, item_id, branch_id, qty_assigned, asgn_note = row
+    asgn_id, agent_id, item_id, branch_id, qty_assigned, asgn_note, existing_writeoff = row
 
     if branch_id != user.branch_id:
         return JSONResponse({"error": "forbidden — different branch"}, status_code=403)
@@ -98,11 +99,14 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
     item  = db.get(Item, item_id)
     agent = db.get(User, agent_id)
     tx_in_id = None
-    is_full = qty_returned >= qty_assigned
+    # Account for already written-off qty when checking if this return completes the assignment
+    effective_assigned = qty_assigned - existing_writeoff
+    actual_return = min(qty_returned, effective_assigned)
+    is_full = actual_return >= effective_assigned
 
-    if qty_returned > 0:
+    if actual_return > 0:
         tx = Transaction(
-            branch_id=branch_id, item_id=item_id, type="IN", quantity=min(qty_returned, qty_assigned),
+            branch_id=branch_id, item_id=item_id, type="IN", quantity=actual_return,
             note=f"Assigned stock returned by {agent.full_name or agent.username if agent else 'agent'}",
             reference=f"agent-return-{assignment_id}",
         )
@@ -111,24 +115,24 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
         tx_in_id = tx.id
 
     if is_full:
-        # Full return — mark complete
+        # Full return (accounting for write-offs) — mark complete
         db.execute(text(
             "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
             "vetted_by=:uid, vetted_at=:_now, transaction_in_id=:txid WHERE id=:aid"
-        ), {"qty": min(qty_returned, qty_assigned), "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
+        ), {"qty": existing_writeoff + actual_return, "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
     else:
         # Partial — update qty_returned but keep returned=FALSE for shortfall resolution
         db.execute(text(
             "UPDATE agent_stock_assignments SET qty_returned=:qty, "
             "vetted_by=:uid, vetted_at=:_now, transaction_in_id=:txid WHERE id=:aid"
-        ), {"qty": qty_returned, "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
+        ), {"qty": existing_writeoff + actual_return, "uid": user.id, "txid": tx_in_id, "aid": asgn_id, "_now": _now()})
 
     audit_log(db, user.id, "ASSIGNED_STOCK_RETURNED",
-              f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={qty_returned}/{qty_assigned}",
+              f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={actual_return}/{qty_assigned} writeoff={existing_writeoff}",
               ip=request.client.host if request.client else "")
     db.commit()
     return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
-                         "qty_returned": qty_returned, "qty_assigned": qty_assigned,
+                         "qty_returned": actual_return, "qty_assigned": qty_assigned,
                          "is_full": is_full})
 
 
@@ -648,7 +652,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             it.id AS item_id, it.name AS item_name,
             u_agent.id AS agent_id,
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
-            u_assigner.full_name AS assigned_by_name, u_assigner.username AS assigned_by_username
+            u_assigner.full_name AS assigned_by_name, u_assigner.username AS assigned_by_username,
+            COALESCE(asa.writeoff_qty, 0) AS writeoff_qty
         FROM agent_stock_assignments asa
         JOIN items it           ON it.id    = asa.item_id
         JOIN users u_agent      ON u_agent.id = asa.agent_id

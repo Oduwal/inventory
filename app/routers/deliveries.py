@@ -8,6 +8,7 @@ import json, csv, io, os, logging
 from app.core import *
 from app.models import *
 from app.security import *
+from app.whatsapp_service import send_whatsapp_fallback
 
 router = APIRouter()
 
@@ -509,6 +510,13 @@ async def delivery_create(
                 call_items.append(f"{it.name} x{qty}")
     items_summary = ", ".join(call_items) if call_items else "your order"
     trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "")
+
+    # Auto-send WhatsApp template to customer when delivery is created
+    if d.customer_phone:
+        try:
+            task_queue.submit(send_whatsapp_fallback, d.id, d.customer_phone, d.customer_name or "Customer", items_summary)
+        except Exception as e:
+            logging.getLogger("whatsapp").warning("Failed to queue WA template for delivery #%s: %s", d.id, e)
 
     return redirect(f"/deliveries/{d.id}")
 

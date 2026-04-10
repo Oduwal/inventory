@@ -760,6 +760,12 @@ def ensure_schema() -> None:
                 conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'on')"), {"k": _tk})
             else:
                 conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'on') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
+        # Contact hours — default 8 AM to 8 PM (Nigeria WAT = UTC+1)
+        for _hk, _hv in [("contact_start_hour", "8"), ("contact_end_hour", "20")]:
+            if is_sqlite:
+                conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, :v)"), {"k": _hk, "v": _hv})
+            else:
+                conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING"), {"k": _hk, "v": _hv})
         conn.commit()
 
 

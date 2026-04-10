@@ -19,12 +19,13 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
     """Sends a WhatsApp message when the AI call goes to voicemail or fails."""
     try:
         from app.database import SessionLocal
-        from app.feature_toggles import is_feature_on
+        from app.feature_toggles import is_feature_on, wait_for_contact_hours
         _db = SessionLocal()
         try:
             if not is_feature_on(_db, "whatsapp_customer_enabled"):
                 logger.info("Customer WhatsApp disabled by supervisor toggle. Skipping delivery #%s", delivery_id)
                 return
+            wait_for_contact_hours(_db)
         finally:
             _db.close()
     except Exception as _e:

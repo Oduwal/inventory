@@ -8,7 +8,7 @@ import json, csv, io, os, logging
 from app.core import *
 from app.models import *
 from app.security import *
-from app.feature_toggles import get_all_toggles, set_feature
+from app.feature_toggles import get_all_toggles, get_all_toggles_raw, set_feature
 
 router = APIRouter()
 
@@ -601,6 +601,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
         "branches": branches, "selected_branch_id": None, "active": "supervisor",
         "preset": preset or "", "start_date": start_date or "", "end_date": end_date or "",
         "toggles": get_all_toggles(db),
+        "toggles_raw": get_all_toggles_raw(db),
     })
 
 
@@ -612,6 +613,7 @@ _ALLOWED_TOGGLES = {
     "call_enabled", "call_status_PENDING", "call_status_OUT_FOR_DELIVERY",
     "call_status_FAILED", "call_status_RETURNED",
     "whatsapp_customer_enabled", "whatsapp_seller_enabled",
+    "contact_start_hour", "contact_end_hour",
 }
 
 @router.get("/api/feature-toggles")
@@ -633,9 +635,16 @@ async def update_feature_toggle(request: Request, db: Session = Depends(get_db))
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     body = await request.json()
     key = str(body.get("key", ""))
-    value = "on" if body.get("value") else "off"
     if key not in _ALLOWED_TOGGLES:
         return JSONResponse({"error": "Unknown toggle key"}, status_code=400)
+    # Hour-based toggles store a numeric string, not on/off
+    if key in ("contact_start_hour", "contact_end_hour"):
+        hour_val = int(body.get("value", 8))
+        if hour_val < 0 or hour_val > 23:
+            return JSONResponse({"error": "Hour must be 0-23"}, status_code=400)
+        value = str(hour_val)
+    else:
+        value = "on" if body.get("value") else "off"
     set_feature(db, key, value)
     return JSONResponse({"ok": True, "key": key, "value": value})
 

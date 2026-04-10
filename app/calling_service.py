@@ -53,6 +53,18 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         logger.warning("VAPI keys not set — skipping call for delivery #%s", delivery_id)
         return
 
+    # Wait for contact hours before calling
+    try:
+        from app.database import SessionLocal
+        from app.feature_toggles import wait_for_contact_hours
+        _db = SessionLocal()
+        try:
+            wait_for_contact_hours(_db)
+        finally:
+            _db.close()
+    except Exception as _e:
+        logger.warning("Could not check contact hours: %s — proceeding", _e)
+
     formatted_phone = format_nigerian_phone(phone)
     if not formatted_phone: return
 
