@@ -502,19 +502,14 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
-        _phantom_ids3 = set(r[0] for r in db.execute(text(
-            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
-        )).fetchall())
         lines = db.execute(
-            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
-        for did, iname, qty, di_id in lines:
-            if di_id in _phantom_ids3:
-                continue
+        for did, iname, qty in lines:
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         items_summary = {did: ", ".join(parts) for did, parts in grouped.items()}
 

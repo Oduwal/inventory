@@ -571,6 +571,7 @@ def ensure_schema() -> None:
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP DEFAULT NULL")
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS resolved_by INTEGER DEFAULT NULL REFERENCES users(id)")
         _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS writeoff_qty INTEGER DEFAULT 0")
+        _ddl(conn, "ALTER TABLE stock_return_vettings ADD COLUMN IF NOT EXISTS writeoff_note VARCHAR(400) DEFAULT NULL")
         # Notifications table
         _ddl(conn, """CREATE TABLE IF NOT EXISTS notifications (
             id SERIAL PRIMARY KEY,

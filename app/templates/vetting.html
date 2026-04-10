@@ -353,7 +353,7 @@
               style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#22c55e,#16a34a);">
               ✓ Agent Returned It
             </button>
-            <button onclick="confirmSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this, true)"
+            <button onclick="writeOffSingleReturn({{ row.delivery_id }}, {{ item.di_id }}, this)"
               style="font-size:12px;padding:6px 12px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:8px;cursor:pointer;">
               ✕ Write Off
             </button>
@@ -418,6 +418,30 @@ async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
     alert('Error: ' + e.message);
     btn.disabled = false; btn.textContent = '✓ Confirm';
   }
+}
+
+async function writeOffSingleReturn(deliveryId, diId, btn) {
+  const qtyInput = document.getElementById('qty-' + diId);
+  const qtyLost = parseInt(qtyInput ? qtyInput.value : 0) || 0;
+  if (qtyLost <= 0) { alert('Enter the quantity to write off.'); return; }
+  // First create the vetting record by confirming 0 returned
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const res = await fetch('/vetting/confirm-return', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({delivery_id: deliveryId, delivery_item_id: diId, qty_returned: 0})
+    });
+    const data = await res.json();
+    if (!data.ok) { alert(data.error || 'Failed to create vetting record'); btn.disabled = false; btn.textContent = '✕ Write Off'; return; }
+  } catch(e) { btn.disabled = false; btn.textContent = '✕ Write Off'; return; }
+  btn.disabled = false; btn.textContent = '✕ Write Off';
+  // Now open write-off modal targeting resolve-shortfall
+  _woDeliveryId = deliveryId; _woDiId = diId; _woBtn = btn; _woQty = qtyLost;
+  _woEndpoint = 'resolve-shortfall'; _woExtraData = null;
+  _woAssignDirectQtyReturned = null; _woAssignDirectQtyAssigned = null;
+  document.getElementById('wo-qty-display').textContent = qtyLost + ' unit(s)';
+  document.getElementById('wo-note-input').value = '';
+  document.getElementById('wo-modal').style.display = 'flex';
 }
 
 async function confirmAllReturns(deliveryId, btn) {
@@ -1012,22 +1036,19 @@ async function resolveAssignShortfall(assignmentId, btn, action) {
 }
 
 async function assignWriteOffDirect(assignmentId, qtyAssigned, btn) {
-  // Write-off from first-time vetting (no partial return yet) — treat all as lost
+  // Write-off: qty in the box is the amount LOST
   const qtyInput = document.getElementById('return-assign-qty-' + assignmentId);
-  const qtyReturned = parseInt(qtyInput ? qtyInput.value : 0) || 0;
-  const qtyLost = qtyAssigned - qtyReturned;
-  if (qtyLost <= 0) { alert('No stock to write off — qty returned equals qty assigned.'); return; }
+  const qtyLost = parseInt(qtyInput ? qtyInput.value : 0) || 0;
+  if (qtyLost <= 0) { alert('Enter the quantity to write off.'); return; }
 
-  // First confirm whatever was returned, then write off the rest
   _woDeliveryId = null; _woDiId = null; _woBtn = btn; _woQty = qtyLost;
-  _woEndpoint = 'resolve-assign-shortfall'; _woExtraData = {assignment_id: assignmentId, qty_returned_first: qtyReturned};
+  _woEndpoint = 'resolve-assign-shortfall'; _woExtraData = {assignment_id: assignmentId};
   document.getElementById('wo-qty-display').textContent = qtyLost + ' unit(s)';
   document.getElementById('wo-note-input').value = '';
   document.getElementById('wo-modal').style.display = 'flex';
 
-  // Override confirmWriteOff to handle two-step: return + writeoff
-  _woAssignDirectQtyReturned = qtyReturned;
-  _woAssignDirectQtyAssigned = qtyAssigned;
+  _woAssignDirectQtyReturned = null;
+  _woAssignDirectQtyAssigned = null;
 }
 var _woAssignDirectQtyReturned = null;
 var _woAssignDirectQtyAssigned = null;

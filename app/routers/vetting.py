@@ -420,13 +420,13 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
         if is_fully_resolved:
             db.execute(text(
                 "UPDATE stock_return_vettings SET resolved=TRUE, resolve_action='written_off', "
-                "qty_returned=:newqty, writeoff_qty=:wq, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
-            ), {"newqty": new_total_returned, "wq": qty_to_writeoff, "uid": user.id, "vid": vet_id, "_now": _now()})
+                "qty_returned=:newqty, writeoff_qty=:wq, writeoff_note=:note, resolved_at=:_now, resolved_by=:uid WHERE id=:vid"
+            ), {"newqty": new_total_returned, "wq": qty_to_writeoff, "note": writeoff_note or "", "uid": user.id, "vid": vet_id, "_now": _now()})
         else:
             # Partial write-off — reduce shortfall but keep record open for further action
             db.execute(text(
-                "UPDATE stock_return_vettings SET qty_returned=:newqty, writeoff_qty=:wq WHERE id=:vid"
-            ), {"newqty": new_total_returned, "vid": vet_id, "wq": qty_to_writeoff})
+                "UPDATE stock_return_vettings SET qty_returned=:newqty, writeoff_qty=:wq, writeoff_note=:note WHERE id=:vid"
+            ), {"newqty": new_total_returned, "vid": vet_id, "wq": qty_to_writeoff, "note": writeoff_note or ""})
 
         audit_log(db, user.id, "SHORTFALL_WRITTEN_OFF",
                   f"delivery_id={delivery_id} item={item.name} qty_lost={qty_to_writeoff} remaining={remaining_shortfall}" + (f" note={writeoff_note}" if writeoff_note else ""),
@@ -673,7 +673,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             u_agent.full_name AS agent_name, u_agent.username AS agent_username,
             u_res.full_name AS resolved_by_name, u_res.username AS resolved_by_username,
             'delivery' AS source,
-            '' AS reason
+            COALESCE(srv.writeoff_note, '') AS reason
         FROM stock_return_vettings srv
         JOIN delivery_items di ON di.id = srv.delivery_item_id
         JOIN items it          ON it.id = di.item_id

@@ -64,19 +64,14 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
     if delivery_ids:
-        _phantom_ids2 = set(r[0] for r in db.execute(text(
-            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
-        )).fetchall())
         lines = db.execute(
-            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
-        for did, iname, qty, di_id in lines:
-            if di_id in _phantom_ids2:
-                continue
+        for did, iname, qty in lines:
             grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
         for did, parts in grouped.items():
             items_summary[did] = ", ".join(parts)
