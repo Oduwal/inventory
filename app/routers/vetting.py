@@ -155,12 +155,13 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         return JSONResponse({"error": "invalid params"}, status_code=400)
 
     row = db.execute(text(
-        "SELECT id, agent_id, item_id, branch_id, qty_assigned, qty_returned FROM agent_stock_assignments "
+        "SELECT id, agent_id, item_id, branch_id, qty_assigned, qty_returned, COALESCE(writeoff_qty, 0) "
+        "FROM agent_stock_assignments "
         "WHERE id = :aid AND returned = FALSE"
     ), {"aid": assignment_id}).fetchone()
     if not row:
         return JSONResponse({"error": "assignment not found or already resolved"}, status_code=404)
-    asgn_id, agent_id, item_id, branch_id, qty_assigned, qty_already_returned = row
+    asgn_id, agent_id, item_id, branch_id, qty_assigned, qty_already_returned, existing_writeoff = row
     current_shortfall = max(0, qty_assigned - qty_already_returned)
 
     if branch_id != user.branch_id:
@@ -207,18 +208,29 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         qty_to_writeoff = min(qty_resolved, current_shortfall) if qty_resolved > 0 else current_shortfall
         new_total = qty_already_returned + qty_to_writeoff
         remaining = max(0, qty_assigned - new_total)
+        # Accumulate writeoff_qty (don't overwrite — may be a second partial write-off)
+        total_writeoff = existing_writeoff + qty_to_writeoff
+        # Append note to existing note if there's already one
+        combined_note = writeoff_note or ""
+        if existing_writeoff > 0 and writeoff_note:
+            # Fetch existing note to append
+            _existing_note = db.execute(text(
+                "SELECT writeoff_note FROM agent_stock_assignments WHERE id = :aid"
+            ), {"aid": asgn_id}).scalar() or ""
+            if _existing_note:
+                combined_note = _existing_note + "; " + writeoff_note
 
         if remaining == 0:
             db.execute(text(
                 "UPDATE agent_stock_assignments SET returned=TRUE, qty_returned=:qty, "
                 "resolve_action='written_off', writeoff_note=:note, writeoff_qty=:wq, "
                 "vetted_by=:uid, vetted_at=:_now WHERE id=:aid"
-            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now(), "note": writeoff_note or "", "wq": qty_to_writeoff})
+            ), {"qty": new_total, "uid": user.id, "aid": asgn_id, "_now": _now(), "note": combined_note, "wq": total_writeoff})
         else:
             # Partial write-off — reduce shortfall but keep record open
             db.execute(text(
                 "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off', writeoff_qty=:wq, writeoff_note=:note WHERE id=:aid"
-            ), {"qty": new_total, "aid": asgn_id, "wq": qty_to_writeoff, "note": writeoff_note or ""})
+            ), {"qty": new_total, "aid": asgn_id, "wq": total_writeoff, "note": combined_note})
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
                   f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}" + (f" note={writeoff_note}" if writeoff_note else ""),
