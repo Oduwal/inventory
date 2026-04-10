@@ -264,22 +264,26 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     if is_admin(user) and branch_id:
         try:
             rows_a = db.execute(text(
-                "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
-                "it.name AS item_name "
+                "SELECT asa.id, asa.agent_id, asa.item_id, "
+                "asa.qty_assigned - COALESCE(asa.qty_returned, 0) AS qty_available, "
+                "asa.note, it.name AS item_name "
                 "FROM agent_stock_assignments asa "
                 "JOIN items it ON it.id = asa.item_id "
                 "WHERE asa.branch_id = :bid AND asa.returned = FALSE "
-                "AND (asa.delivery_id IS NULL OR asa.delivery_id = 0)"
+                "AND (asa.delivery_id IS NULL OR asa.delivery_id = 0) "
+                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0"
             ), {"bid": branch_id}).fetchall()
         except Exception:
             # Fallback if delivery_id column doesn't exist yet
             db.rollback()
             rows_a = db.execute(text(
-                "SELECT asa.id, asa.agent_id, asa.item_id, asa.qty_assigned, asa.note, "
-                "it.name AS item_name "
+                "SELECT asa.id, asa.agent_id, asa.item_id, "
+                "asa.qty_assigned - COALESCE(asa.qty_returned, 0) AS qty_available, "
+                "asa.note, it.name AS item_name "
                 "FROM agent_stock_assignments asa "
                 "JOIN items it ON it.id = asa.item_id "
-                "WHERE asa.branch_id = :bid AND asa.returned = FALSE"
+                "WHERE asa.branch_id = :bid AND asa.returned = FALSE "
+                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0"
             ), {"bid": branch_id}).fetchall()
         for r in rows_a:
             pending_assignments.setdefault(r[1], []).append({

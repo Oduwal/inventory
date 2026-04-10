@@ -217,8 +217,8 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
         else:
             # Partial write-off — reduce shortfall but keep record open
             db.execute(text(
-                "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off', writeoff_qty=:wq WHERE id=:aid"
-            ), {"qty": new_total, "aid": asgn_id, "wq": qty_to_writeoff})
+                "UPDATE agent_stock_assignments SET qty_returned=:qty, resolve_action='written_off', writeoff_qty=:wq, writeoff_note=:note WHERE id=:aid"
+            ), {"qty": new_total, "aid": asgn_id, "wq": qty_to_writeoff, "note": writeoff_note or ""})
 
         audit_log(db, user.id, "ASSIGN_SHORTFALL_WRITTEN_OFF",
                   f"assignment_id={asgn_id} item={item.name if item else item_id} qty_lost={qty_to_writeoff} remaining={remaining}" + (f" note={writeoff_note}" if writeoff_note else ""),
