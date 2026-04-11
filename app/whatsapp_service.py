@@ -6,6 +6,9 @@ from twilio.rest import Client
 from .utils import format_nigerian_phone
 
 logger = logging.getLogger("whatsapp")
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
@@ -17,6 +20,8 @@ BUSINESS_PHONE = os.getenv("BUSINESS_PHONE", "")
 
 def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, items: str):
     """Sends a WhatsApp message when the AI call goes to voicemail or fails."""
+    logger.info("WhatsApp send triggered for delivery #%s, phone=%s, from=%s, content_sid=%s",
+                delivery_id, phone, TWILIO_WHATSAPP_NUMBER, TWILIO_CONTENT_SID[:10] if TWILIO_CONTENT_SID else "NONE")
     try:
         from app.database import SessionLocal
         from app.feature_toggles import is_feature_on
@@ -37,6 +42,7 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
     # Use the smart formatter so Twilio doesn't reject it!
     clean_phone = format_nigerian_phone(phone)
     if not clean_phone:
+        logger.warning("Phone format rejected for delivery #%s: %s", delivery_id, phone)
         return
         
     whatsapp_to = f"whatsapp:{clean_phone}"
