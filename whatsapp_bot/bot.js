@@ -133,6 +133,27 @@ function extractText(msg) {
     );
 }
 
+/** Replace @mention JIDs in text with contact names */
+function resolveMentions(text, msg) {
+    const m = msg.message;
+    if (!m) return text;
+    const ctx =
+        m.extendedTextMessage?.contextInfo ||
+        m.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
+        null;
+    const mentioned = ctx?.mentionedJid || [];
+    let resolved = text;
+    for (const jid of mentioned) {
+        const phone = jid.replace('@s.whatsapp.net', '').replace('@lid', '');
+        const name = contactNames.get(jid) || '';
+        if (name) {
+            // Replace @phone with @name
+            resolved = resolved.replace(new RegExp(`@${phone}\\b`, 'g'), `@${name}`);
+        }
+    }
+    return resolved;
+}
+
 /** Extract quoted stanza ID AND the quoted message body */
 function extractQuoted(msg) {
     const m = msg.message;
@@ -251,7 +272,8 @@ async function handleInbound(msg) {
         return;
     }
 
-    const text                  = extractText(msg);
+    const rawText               = extractText(msg);
+    const text                  = resolveMentions(rawText, msg);
     const { id: quotedId,
             body: quotedBody }  = extractQuoted(msg);
     const sender                = msg.key.participant || jid;
@@ -467,6 +489,11 @@ app.post('/send-group-feedback', async (req, res) => {
     }
 
     console.log(`\n📤 Sending update for Order #${orderId}...`);
+    console.log(`   → group: ${targetGroupJid || GROUP_JID || 'NONE'}`);
+    console.log(`   → quoteId: ${quoteMessageId || 'NONE'}`);
+    console.log(`   → quoteSender: ${quoteMessageSender || 'NONE'}`);
+    console.log(`   → quoteBody: ${(quoteMessageBody || '').slice(0, 50) || 'NONE'}`);
+    console.log(`   → mentions: ${JSON.stringify(mentions || [])}`);
 
     try {
         const msgId = await humanizedSend(
