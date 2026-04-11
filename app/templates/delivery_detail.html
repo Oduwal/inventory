@@ -473,7 +473,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         </div>
       {% else %}
         <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
-          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender or 'Seller' }}</span>
+          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
           <div style="white-space:pre-wrap;">{{ c.body }}</div>
           <div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}</div>
         </div>

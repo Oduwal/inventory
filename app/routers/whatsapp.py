@@ -670,10 +670,16 @@ async def send_agent_feedback(
     if orig_map:
         quote_id     = orig_map[0]
         quote_body   = orig_map[1]
-        quote_sender = orig_map[2]
-        fallback_grp = orig_map[3] # <--- Extracts the group_jid safely
+        raw_sender   = orig_map[2] or ""
+        fallback_grp = orig_map[3]
+        # Parse "Name|jid" format or plain jid
+        if "|" in raw_sender:
+            seller_name, quote_sender = raw_sender.split("|", 1)
+        else:
+            seller_name = ""
+            quote_sender = raw_sender
     else:
-        quote_id = quote_body = quote_sender = fallback_grp = None
+        quote_id = quote_body = quote_sender = fallback_grp = seller_name = None
 
     # Build mentions list and append @tags to the message
     mention_jids = []
@@ -683,6 +689,7 @@ async def send_agent_feedback(
     if quote_sender:
         mention_jids.append(quote_sender)
         phone = quote_sender.replace("@s.whatsapp.net", "").replace("@lid", "")
+        # Show name if available, otherwise phone
         mention_tags.append(f"@{phone}")
 
     # Agent-specified mention (UI sends full JID like 2348012345678@s.whatsapp.net)
@@ -807,6 +814,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quoted_msg_body     = data.get("quoted_message_body", "").strip()
     reply_text          = data.get("reply_text", "").strip()
     sender              = data.get("sender_phone", "")
+    sender_name         = data.get("sender_name", "").strip()
     group_jid           = data.get("groupJid", "").strip()
 
     if not reply_text:
@@ -938,16 +946,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
     comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
+    # Use friendly name for display, fall back to phone digits
+    display_sender = sender_name or sender.replace("@s.whatsapp.net", "").replace("@lid", "")
     db.execute(text(
         "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
         "VALUES (:did, 'inbound', :sender, :body, :clf, :_now)"
-    ), {"did": order_id, "sender": sender, "body": comment_body, "clf": classification_json, "_now": _now()})
+    ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json, "_now": _now()})
     db.commit()
 
     # SSE — push fragment to any open delivery detail tabs
     now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
     action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION</span>' if ai.get("action_required") else ""
-    _sse_sender = html.escape(sender or "Seller")
+    _sse_sender = html.escape(display_sender or "Seller")
     _sse_body   = html.escape(comment_body)
     fragment = (
         f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
@@ -962,7 +972,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     # Persistent notifications (bell + web push)
     notif_title = f"💬 Seller Reply — Order #{order_id}"
-    notif_msg   = f"{sender or 'Seller'}: {summary}"
+    notif_msg   = f"{display_sender or 'Seller'}: {summary}"
     notif_link  = f"/deliveries/{order_id}"
     if delivery.agent_id:
         notify(db, delivery.agent_id, notif_title, notif_msg, notif_link, "info")
@@ -991,6 +1001,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     message_id     = (data.get("message_id") or "").strip()
     body           = (data.get("body") or "").strip()
     sender         = (data.get("sender") or "").strip()
+    sender_name    = (data.get("sender_name") or "").strip()
     group_jid      = (data.get("groupJid") or "").strip()
     customer_name  = (data.get("customer_name") or "").strip().lower()
     customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
@@ -1033,21 +1044,14 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             elif customer_name == db_name:
                 name_ok = True
 
-        # When we have BOTH phone and name from WhatsApp → require both to match
-        if customer_phone and customer_name:
-            if phone_ok and name_ok:
-                matched_order_id = r_id
-                break
-        # Only phone available → phone-only is fine
-        elif customer_phone:
-            if phone_ok:
-                matched_order_id = r_id
-                break
-        # Only name available → name-only is fine
-        elif customer_name:
-            if name_ok:
-                matched_order_id = r_id
-                break
+        # Phone match is the strongest signal — always trust it
+        if phone_ok:
+            matched_order_id = r_id
+            break
+        # Name-only match (no phone extracted) — acceptable fallback
+        if name_ok and not customer_phone:
+            matched_order_id = r_id
+            break
 
     if not matched_order_id:
         logging.getLogger("cache_wa").info(
@@ -1083,10 +1087,13 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, "
             "body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
         )
+    # Store JID for quoting, but keep sender_name for display
+    # Format: "Name|jid" so we can split later for both quoting and display
+    sender_value = f"{sender_name}|{sender}" if sender_name else sender
     try:
         db.execute(text(upsert_sql), {
             "mid": message_id, "oid": matched_order_id,
-            "body": body, "sender": sender, "gjid": group_jid, "_now": _now()
+            "body": body, "sender": sender_value, "gjid": group_jid, "_now": _now()
         })
         db.commit()
         logging.getLogger("cache_wa").info(

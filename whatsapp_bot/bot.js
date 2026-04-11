@@ -262,11 +262,13 @@ async function handleInbound(msg) {
 
     if (quotedId) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
+        const senderName = msg.pushName || contactNames.get(sender) || '';
         axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
             quoted_message_id:   quotedId,
             quoted_message_body: quotedBody || '',
             reply_text:          text,
             sender_phone:        sender,
+            sender_name:         senderName,
             groupJid:            jid,
         }, {
             timeout: 10000,
@@ -281,10 +283,12 @@ async function handleInbound(msg) {
         return;
     }
     console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
+    const senderName = msg.pushName || contactNames.get(sender) || '';
     axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
         message_id:      msgId,
         body:            text,
         sender:          sender,
+        sender_name:     senderName,
         customer_name:   info.customer_name,
         customer_phone:  info.customer_phone,
         groupJid:        jid,   // already normalised @lid → @g.us above
