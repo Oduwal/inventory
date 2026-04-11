@@ -35,6 +35,14 @@ console.log('🚀 Booting Clawbot (Baileys edition)...');
 const GROUP_JID      = process.env.WA_GROUP_ID    || '120363239510350827@g.us';
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
+
+// Set RESET_AUTH=true in Railway env vars to wipe session and re-scan QR.
+// Remove the env var after scanning to avoid resetting on every deploy.
+if (process.env.RESET_AUTH === 'true') {
+    console.log('🗑️ RESET_AUTH=true — deleting auth session at', AUTH_DIR);
+    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    console.log('✅ Auth session deleted. Will show new QR code.');
+}
 const PORT           = process.env.PORT            || 3000;
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET  || '';
 
@@ -63,10 +71,14 @@ let latestQrUrl = null;   // pre-rendered data: URL for the /qr page
 
 /** Human-like delay — 2–4 seconds with typing presence */
 async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe) {
-    await sock.sendPresenceUpdate('composing', jid);
-    const ms = 2000 + Math.random() * 2000;
-    await new Promise(r => setTimeout(r, ms));
-    await sock.sendPresenceUpdate('paused', jid);
+    try {
+        await sock.sendPresenceUpdate('composing', jid);
+        const ms = 2000 + Math.random() * 2000;
+        await new Promise(r => setTimeout(r, ms));
+        await sock.sendPresenceUpdate('paused', jid);
+    } catch (presenceErr) {
+        console.log(`⚠️ Presence update failed (${presenceErr.message}) — sending message anyway`);
+    }
 
     const opts = {};
     if (quotedKey && quotedBody) {
