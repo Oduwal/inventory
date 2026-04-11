@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}{% if user.role == "SUPERVISOR" %}New Admin{% else %}New Agent{% endif %}{% endblock %}
-{% block page_title %}{% if user.role == "SUPERVISOR" %}New Branch Admin{% else %}New Agent{% endif %}{% endblock %}
-{% block page_subtitle %}{% if user.role == "SUPERVISOR" %}Create a new admin account for a branch.{% else %}Create a new delivery agent account.{% endif %}{% endblock %}
+{% block title %}{% if user.role == "SUPERVISOR" %}New User{% else %}New Agent{% endif %}{% endblock %}
+{% block page_title %}{% if user.role == "SUPERVISOR" %}New User{% else %}New Agent{% endif %}{% endblock %}
+{% block page_subtitle %}{% if user.role == "SUPERVISOR" %}Create a new admin or supervisor account.{% else %}Create a new delivery agent account.{% endif %}{% endblock %}
 {% set active = "agents" %}
 
 {% block top_right %}
@@ -11,7 +11,7 @@
 {% block content %}
 <div class="card" style="max-width:600px;">
   <div class="badge {% if user.role == 'SUPERVISOR' %}b-purple{% else %}b-blue{% endif %}" style="margin-bottom:16px;">
-    {% if user.role == "SUPERVISOR" %}NEW BRANCH ADMIN{% else %}NEW AGENT{% endif %}
+    {% if user.role == "SUPERVISOR" %}NEW USER{% else %}NEW AGENT{% endif %}
   </div>
 
   {% if error %}
@@ -40,21 +40,43 @@
       </div>
 
       {% if user.role == "SUPERVISOR" %}
-      <div style="grid-column:1/-1;">
+      <div>
+        <label>Role *</label>
+        <select name="role" id="role-select" onchange="toggleBranch()">
+          <option value="ADMIN" selected>Admin</option>
+          <option value="SUPERVISOR">Supervisor</option>
+        </select>
+      </div>
+      <div id="branch-field">
         <label>Branch *</label>
-        <select name="branch_id" required>
+        <select name="branch_id" id="branch-select">
           <option value="">— Select a branch —</option>
           {% for branch in branches %}
           <option value="{{ branch.id }}">{{ branch.name }}</option>
           {% endfor %}
         </select>
       </div>
+      <script>
+      function toggleBranch() {
+        const role = document.getElementById('role-select').value;
+        const bf = document.getElementById('branch-field');
+        const bs = document.getElementById('branch-select');
+        if (role === 'SUPERVISOR') {
+          bf.style.display = 'none';
+          bs.removeAttribute('required');
+        } else {
+          bf.style.display = '';
+          bs.setAttribute('required', '');
+        }
+      }
+      toggleBranch();
+      </script>
       {% endif %}
     </div>
 
     <div style="display:flex;gap:10px;">
       <button class="btnPrimary" type="submit">
-        {% if user.role == "SUPERVISOR" %}Create Admin{% else %}Create Agent{% endif %}
+        {% if user.role == "SUPERVISOR" %}Create User{% else %}Create Agent{% endif %}
       </button>
       <a class="btnGhost" href="/agents">Cancel</a>
     </div>

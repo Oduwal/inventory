@@ -355,10 +355,12 @@ def reset_data_form(request: Request, db: Session = Depends(get_db)):
     <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
     <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:40px;max-width:480px;width:100%;text-align:center;">
       <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
-      <h2 style="color:#f87171;margin-bottom:8px;">Clear All Operational Data</h2>
+      <h2 style="color:#f87171;margin-bottom:8px;">Full System Reset</h2>
       <p style="color:#8a9bc4;font-size:14px;margin-bottom:24px;">
-        This will permanently delete all <strong style="color:#e7eefc;">deliveries, cash entries, stock transactions, and stock transfers</strong>.<br><br>
-        Branches, users, and items will be kept.<br><br>
+        This will permanently delete <strong style="color:#e7eefc;">ALL data</strong> including:<br>
+        deliveries, stock, cash entries, transfers, items,<br>
+        <strong style="color:#f87171;">all users (agents &amp; admins), and all branches</strong>.<br><br>
+        Only your supervisor account will be kept.<br><br>
         <strong style="color:#f87171;">This cannot be undone.</strong>
       </p>
       <form method="post" action="/admin/reset-data">
@@ -367,7 +369,7 @@ def reset_data_form(request: Request, db: Session = Depends(get_db)):
                style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#e7eefc;font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
         <button type="submit"
                 style="width:100%;padding:12px;background:linear-gradient(135deg,#ef4444,#dc2626);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">
-          🗑 Delete All Operational Data
+          🗑 Delete Everything &amp; Reset
         </button>
       </form>
       <a href="/supervisor" style="display:block;margin-top:16px;color:#8a9bc4;font-size:13px;text-decoration:none;">← Cancel</a>
@@ -429,6 +431,7 @@ async def reset_data_execute(
         return HTMLResponse("<script>alert('You must type RESET to confirm.');history.back();</script>")
 
     from sqlalchemy import text as _text
+    supervisor_id = user.id
     with db.bind.connect() as conn:
         # Delete in FK-safe order — child tables first
         conn.execute(_text("DELETE FROM stock_return_vettings"))
@@ -447,16 +450,27 @@ async def reset_data_execute(
         conn.execute(_text("DELETE FROM transactions"))
         conn.execute(_text("DELETE FROM items"))
         conn.execute(_text("DELETE FROM audit_logs"))
+        # Delete call_logs if table exists
+        try:
+            conn.execute(_text("DELETE FROM call_logs"))
+        except Exception:
+            pass
+        # Delete all users except the current supervisor
+        conn.execute(_text("DELETE FROM users WHERE id != :sid"), {"sid": supervisor_id})
+        # Delete all branches
+        conn.execute(_text("DELETE FROM branches"))
+        # Clear supervisor's branch_id since branches are gone
+        conn.execute(_text("UPDATE users SET branch_id = NULL WHERE id = :sid"), {"sid": supervisor_id})
         conn.commit()
 
-    audit_log(db, user.id, "DATA_RESET", "All operational data wiped by supervisor",
+    audit_log(db, user.id, "DATA_RESET", "Full system reset — all data, users, and branches deleted",
               ip=request.client.host if request.client else "")
     return HTMLResponse("""
     <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
     <div style="background:rgba(255,255,255,.04);border:1px solid rgba(34,197,94,.3);border-radius:16px;padding:40px;max-width:400px;text-align:center;">
       <div style="font-size:48px;margin-bottom:16px;">✅</div>
-      <h2 style="color:#4ade80;margin-bottom:8px;">Data Cleared</h2>
-      <p style="color:#8a9bc4;font-size:14px;margin-bottom:24px;">All operational data has been deleted. Branches, users, and items are intact.</p>
+      <h2 style="color:#4ade80;margin-bottom:8px;">System Reset Complete</h2>
+      <p style="color:#8a9bc4;font-size:14px;margin-bottom:24px;">All data, users, and branches have been deleted.<br>Only your supervisor account remains.<br><br>Start by creating a new branch.</p>
       <a href="/supervisor" style="display:inline-block;padding:12px 24px;background:linear-gradient(135deg,#4f7cff,#3b5bdb);border-radius:10px;color:#fff;text-decoration:none;font-weight:700;">Go to Dashboard</a>
     </div></body></html>
     """)

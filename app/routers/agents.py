@@ -230,20 +230,27 @@ async def agent_create(
         return redirect("/agents/new?error=Username+already+exists")
     if len(password or "") < 8:
         return redirect("/agents/new?error=Password+must+be+at+least+8+characters")
-    # Supervisor picks branch from form; admin uses their own branch
+    # Supervisor picks branch and role from form; admin uses their own branch
     if is_supervisor(user):
         form_data = await request.form()
-        branch_id_val = form_data.get("branch_id", "")
-        if not branch_id_val or not str(branch_id_val).isdigit():
-            return redirect("/agents/new?error=Please+select+a+branch")
-        assigned_branch_id = int(branch_id_val)
+        selected_role = (form_data.get("role", "ADMIN") or "ADMIN").upper()
+        if selected_role not in ("ADMIN", "SUPERVISOR"):
+            selected_role = "ADMIN"
+        if selected_role == "SUPERVISOR":
+            assigned_branch_id = None
+        else:
+            branch_id_val = form_data.get("branch_id", "")
+            if not branch_id_val or not str(branch_id_val).isdigit():
+                return redirect("/agents/new?error=Please+select+a+branch")
+            assigned_branch_id = int(branch_id_val)
     else:
+        selected_role = "AGENT"
         if not user.branch_id:
             return redirect("/agents/new?error=Admin+has+no+branch+assigned")
         assigned_branch_id = user.branch_id
     db.add(User(
         username=uname, password_hash=hash_password(password),
-        role="ADMIN" if is_supervisor(user) else "AGENT",
+        role=selected_role,
         branch_id=assigned_branch_id,
         full_name=sanitize_text(full_name, 140, "Full name") or None,
         phone=sanitize_phone(phone) or None,
