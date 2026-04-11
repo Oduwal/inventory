@@ -131,9 +131,10 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db))
               f"assignment_id={asgn_id} item={item.name if item else item_id} qty_returned={actual_return}/{qty_assigned} writeoff={existing_writeoff}",
               ip=request.client.host if request.client else "")
     db.commit()
+    remaining_shortfall = max(0, qty_assigned - (existing_writeoff + actual_return)) if not is_full else 0
     return JSONResponse({"ok": True, "item_name": item.name if item else "Item",
                          "qty_returned": actual_return, "qty_assigned": qty_assigned,
-                         "is_full": is_full})
+                         "is_full": is_full, "remaining_shortfall": remaining_shortfall})
 
 
 @router.post("/vetting/resolve-assign-shortfall", response_class=JSONResponse)
