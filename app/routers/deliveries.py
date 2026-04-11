@@ -468,10 +468,8 @@ async def delivery_create(
                 elif p_cname == db_name_lower:
                     name_ok = True
 
-            # Both available → require both; only one → that one is enough
-            if p_cphone and p_cname:
-                matched = phone_ok and name_ok
-            elif p_cphone:
+            # Phone is the strongest signal — always trust it
+            if p_cphone:
                 matched = phone_ok
             elif p_cname:
                 matched = name_ok

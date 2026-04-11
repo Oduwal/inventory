@@ -78,23 +78,20 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
 
     const opts = {};
     if (quotedKey && quotedBody) {
-        // STRICT PARTICIPANT LOGIC:
-        // If it's from the group (seller), we MUST use their explicit quoteSender ID.
-        // We only fall back to the Bot's ID if quoteFromMe is explicitly true.
-        let participantId = quoteSender;
-        if (!participantId) {
-            participantId = quoteFromMe ? (sock.user?.id || sock.user?.jid || '') : '';
-        }
+        // Use explicit sender ID if available, otherwise fall back to bot's own ID
+        // so the quote still renders (WhatsApp needs some participant to show the quote)
+        let participantId = quoteSender || sock.user?.id || sock.user?.jid || '';
 
         opts.quoted = {
             key: {
                 remoteJid:   jid,
-                fromMe:      quoteFromMe || false,
+                fromMe:      quoteFromMe || !quoteSender,
                 id:          quotedKey,
                 participant: participantId,
             },
             message: { conversation: quotedBody },
         };
+        console.log(`   → quoting with participant: ${participantId}, fromMe: ${!quoteSender || quoteFromMe}`);
     }
 
     const msgPayload = { text };
