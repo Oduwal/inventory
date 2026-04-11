@@ -60,7 +60,7 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
         if TWILIO_CONTENT_SID:
-            # Use approved template — works outside 24-hour window
+            # Use approved template — required for first-contact (outside 24h window)
             message = client.messages.create(
                 from_=TWILIO_WHATSAPP_NUMBER,
                 content_sid=TWILIO_CONTENT_SID,
@@ -71,6 +71,8 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
                 }),
                 to=whatsapp_to,
             )
+            logger.info("WhatsApp template sent to %s for delivery #%s. SID: %s, Status: %s",
+                        clean_phone, delivery_id, message.sid, message.status)
         else:
             # Freeform — only works within 24-hour window
             message = client.messages.create(
@@ -78,7 +80,8 @@ def send_whatsapp_fallback(delivery_id: int, phone: str, customer_name: str, ite
                 body=message_body,
                 to=whatsapp_to,
             )
+            logger.info("WhatsApp freeform sent to %s for delivery #%s. SID: %s, Status: %s",
+                        clean_phone, delivery_id, message.sid, message.status)
 
-        logger.info(f"WhatsApp fallback sent to {clean_phone} for delivery #{delivery_id}. SID: {message.sid}")
     except Exception as e:
         logger.error(f"Failed to send WhatsApp to {clean_phone}: {str(e)}")
