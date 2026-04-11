@@ -168,11 +168,16 @@ async function extractCustomerInfo(text) {
     if (GEMINI_KEY) {
         try {
             const prompt =
-                `You are reading a message from a Nigerian logistics WhatsApp group. ` +
-                `The message is a delivery order posted by a seller or dispatcher.\n\n` +
+                `You are reading a delivery order message from a Nigerian logistics WhatsApp group.\n\n` +
                 `Message:\n"${text}"\n\n` +
-                `Extract the CUSTOMER name and CUSTOMER phone number from this message. ` +
-                `The customer is the person receiving the delivery (not the sender/seller). ` +
+                `RULES:\n` +
+                `1. Extract the CUSTOMER name and CUSTOMER phone number.\n` +
+                `2. The customer is the RECIPIENT of the delivery (not the sender/seller/dispatcher).\n` +
+                `3. If the message has labeled fields like "Customer name:", "Name:", "Receiver:" — ALWAYS use that value as the name.\n` +
+                `4. If there are labeled fields (like "Order number:", "Customer name:", "Phone number:") then the first line is the SENDER — do NOT use it as the customer name.\n` +
+                `5. If there are NO labeled fields (just plain text with a name, address, phone), then the first line may be the customer name — use your judgment.\n` +
+                `6. "Phone number:" or "Whatsapp number:" fields contain the customer's phone.\n` +
+                `7. Return digits only for phone (no spaces, dashes, or +).\n\n` +
                 `Reply ONLY with valid JSON, no markdown:\n` +
                 `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
 
