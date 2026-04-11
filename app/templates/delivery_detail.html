@@ -649,14 +649,16 @@ function filterMembers(deliveryId) {
 
     if (!filtered.length) { list.style.display = 'none'; return; }
 
-    list.innerHTML = filtered.map(m =>
-        `<div onclick="pickMember(${deliveryId}, '${m.jid}', '${m.name || m.phone}')"
+    list.innerHTML = filtered.map(m => {
+        const display = m.name || ('+' + m.phone);
+        const sub = m.name ? ('+' + m.phone) : '';
+        return `<div onclick="pickMember(${deliveryId}, '${m.jid}', '${display.replace(/'/g,"\\\'")}')"
               style="padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06);"
               onmouseenter="this.style.background='#0b141a'" onmouseleave="this.style.background='transparent'">
-            <span style="color:#e9edef;font-size:12px;font-weight:600;">${m.name || 'Unknown'}</span>
-            <span style="color:#667;font-size:11px;">+${m.phone}</span>
-        </div>`
-    ).join('');
+            <span style="color:#e9edef;font-size:12px;font-weight:600;">${display}</span>
+            ${sub ? `<span style="color:#667;font-size:11px;">${sub}</span>` : ''}
+        </div>`;
+    }).join('');
     list.style.display = 'block';
 }
 

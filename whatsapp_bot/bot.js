@@ -59,6 +59,7 @@ const SELLER_GROUPS = new Set(
 let sock        = null;
 let clientReady = false;
 let latestQrUrl = null;   // pre-rendered data: URL for the /qr page
+const contactNames = new Map(); // jid → push name (cached from messages & contacts events)
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -349,9 +350,30 @@ async function connectToWhatsApp() {
         }
     });
 
+    // Cache contact names from contacts sync
+    sock.ev.on('contacts.upsert', (contacts) => {
+        for (const c of contacts) {
+            const name = c.notify || c.verifiedName || c.name || '';
+            if (name) contactNames.set(c.id, name);
+        }
+        console.log(`📇 Cached ${contactNames.size} contact names`);
+    });
+
+    sock.ev.on('contacts.update', (updates) => {
+        for (const c of updates) {
+            const name = c.notify || c.verifiedName || c.name || '';
+            if (name) contactNames.set(c.id, name);
+        }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         for (const msg of messages) {
+            // Cache push name from incoming messages
+            const sender = msg.key.participant || msg.key.remoteJid || '';
+            const pushName = msg.pushName || '';
+            if (sender && pushName) contactNames.set(sender, pushName);
+
             try {
                 await handleInbound(msg);
             } catch (e) {
@@ -403,7 +425,7 @@ app.get('/group-participants', async (req, res) => {
         const participants = metadata.participants.map(p => ({
             jid:    p.id,
             phone:  p.id.replace('@s.whatsapp.net', '').replace('@lid', ''),
-            name:   p.notify || p.vname || p.name || '',
+            name:   contactNames.get(p.id) || p.notify || p.vname || p.name || '',
             admin:  p.admin || null,
         }));
         res.json({ group: metadata.subject, participants });
