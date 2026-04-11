@@ -572,6 +572,51 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
+# GROUP PARTICIPANTS (fetch members for @mention picker)
+# ─────────────────────────────────────────────────────────────────
+@router.get("/api/group-participants/{delivery_id}")
+async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db)):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return JSONResponse({"error": "Not logged in"}, status_code=401)
+
+    delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
+    if not delivery:
+        return JSONResponse({"error": "Delivery not found"}, status_code=404)
+
+    # Find group JID: from outbound map or category map
+    orig_map = db.execute(text(
+        "SELECT group_jid FROM whatsapp_outbound_map "
+        "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
+    ), {"oid": delivery.id}).first()
+
+    group_jid = orig_map[0] if orig_map else None
+
+    if not group_jid:
+        try:
+            cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
+        except (ValueError, TypeError):
+            cgm = {}
+        cat = db.execute(
+            select(Item.category)
+            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .limit(1)
+        ).scalar()
+        group_jid = cgm.get(cat, "")
+
+    if not group_jid:
+        return JSONResponse({"participants": [], "group": ""})
+
+    try:
+        bot_url = os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000")
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, timeout=15)
+            return JSONResponse(resp.json())
+    except Exception as e:
+        return JSONResponse({"error": str(e), "participants": []})
+
+
 # AGENT FEEDBACK  (agent clicks a button → bot sends to group)
 # ─────────────────────────────────────────────────────────────────
 @router.post("/api/agent-feedback")
@@ -581,6 +626,7 @@ async def send_agent_feedback(
     issue_type: str = Form(...),
     custom_message: str = Form(""),
     group_name: str = Form(""),
+    mention_phone: str = Form(""),
     db: Session = Depends(get_db)
 ):
     # [SEC] Require login — prevent unauthenticated users from sending messages
@@ -597,19 +643,20 @@ async def send_agent_feedback(
         return JSONResponse({"status": "error", "message": "Seller WhatsApp messaging is currently disabled by the supervisor."}, status_code=403)
 
     update_templates = {
-        "OUT_FOR_DELIVERY": f"🚚 *Update: Out for Delivery*\nOrder #{delivery.id} - {delivery.customer_name}\nYour order is on its way and will be delivered shortly.",
-        "CALLED_CUSTOMER":  f"📞 *Update: Customer Called*\nOrder #{delivery.id} - {delivery.customer_name}\nOur agent has called the customer to confirm delivery.",
-        "NOT_PICKING":      f"📵 *Update: Customer Not Reachable*\nOrder #{delivery.id} - {delivery.customer_name}\nWe are unable to reach the customer. Please advise.",
-        "DELIVERED":        f"✅ *Update: Delivered*\nOrder #{delivery.id} - {delivery.customer_name}\nOrder has been successfully delivered. Thank you!",
+        "OUT_FOR_DELIVERY": f"🚚 *Out for Delivery*\n{delivery.customer_name} — on its way, will be delivered shortly.",
+        "CALLED_CUSTOMER":  f"📞 *Customer Called*\n{delivery.customer_name} — agent has called to confirm delivery.",
+        "NOT_PICKING":      f"📵 *Customer Not Reachable*\n{delivery.customer_name} — unable to reach. Please advise.",
+        "DELIVERED":        f"✅ *Delivered*\n{delivery.customer_name} — successfully delivered. Thank you!",
     }
     if issue_type == "CUSTOM" and custom_message.strip():
-        message = f"💬 *Note from Agent*\nOrder #{delivery.id} - {delivery.customer_name}\n{custom_message.strip()}"
+        message = custom_message.strip()
     else:
         message = update_templates.get(
             issue_type,
-            f"📣 *Update*\nOrder #{delivery.id} - {delivery.customer_name}\n{issue_type}"
+            f"📣 {delivery.customer_name} — {issue_type}"
         )
 
+    # Mention tag will be appended after we know who posted the original order
     # Always quote the ORIGINAL group order post (source='group'), not a bot update.
     # This anchors the reply thread to the seller's original message in the group,
     # making it obvious which order is being discussed regardless of how many updates
@@ -628,19 +675,45 @@ async def send_agent_feedback(
     else:
         quote_id = quote_body = quote_sender = fallback_grp = None
 
+    # Build mentions list and append @tags to the message
+    mention_jids = []
+    mention_tags = []
+
+    # Auto-mention the original seller
+    if quote_sender:
+        mention_jids.append(quote_sender)
+        phone = quote_sender.replace("@s.whatsapp.net", "").replace("@lid", "")
+        mention_tags.append(f"@{phone}")
+
+    # Agent-specified mention (UI sends full JID like 2348012345678@s.whatsapp.net)
+    if mention_phone:
+        if "@" in mention_phone:
+            # Already a JID from the picker
+            if mention_phone not in mention_jids:
+                mention_jids.append(mention_phone)
+                digits = mention_phone.replace("@s.whatsapp.net", "").replace("@lid", "")
+                mention_tags.append(f"@{digits}")
+        else:
+            # Raw phone number typed manually
+            from app.utils import format_nigerian_phone
+            clean = format_nigerian_phone(mention_phone)
+            if clean:
+                digits = clean.lstrip("+")
+                jid = f"{digits}@s.whatsapp.net"
+                if jid not in mention_jids:
+                    mention_jids.append(jid)
+                    mention_tags.append(f"@{digits}")
+
+    if mention_tags:
+        message += "\n\n" + " ".join(mention_tags)
+
     # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
     # Configurable via CATEGORY_GROUP_MAP env var as JSON, e.g.:
     # {"DAGGO":"120363418850903362@g.us","NEXTILE":"120363304493232977@g.us"}
-    _default_cgm = {
-        "DAGGO":   "120363418850903362@g.us",
-        "NEXTILE": "120363304493232977@g.us",
-        "NEWLIFE": "120363287198677451@g.us",
-        "LOCO":    "120363239510350827@g.us"
-    }
     try:
-        CATEGORY_GROUP_MAP = json.loads(os.getenv("CATEGORY_GROUP_MAP", "")) or _default_cgm
+        CATEGORY_GROUP_MAP = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
     except (ValueError, TypeError):
-        CATEGORY_GROUP_MAP = _default_cgm
+        CATEGORY_GROUP_MAP = {}
 
     delivery_category = db.execute(
         select(Item.category)
@@ -669,6 +742,7 @@ async def send_agent_feedback(
                     "quoteMessageSender": quote_sender,
                     "quoteMessageFromMe": False,
                     "targetGroupJid":     target_group,
+                    "mentions":           mention_jids,
                 },
                 timeout=60,
             )

@@ -32,7 +32,7 @@ console.log('🚀 Booting Clawbot (Baileys edition)...');
 // ─────────────────────────────────────────────
 // CONFIG
 // ─────────────────────────────────────────────
-const GROUP_JID      = process.env.WA_GROUP_ID    || '120363239510350827@g.us';
+const GROUP_JID      = process.env.WA_GROUP_ID    || '';
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
 
@@ -50,12 +50,7 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET  || '';
 // Set WA_SELLER_GROUPS="group1@g.us,group2@g.us" in env to override.
 // Check Railway logs for "NEW GROUP DETECTED" to discover new group IDs.
 const SELLER_GROUPS = new Set(
-    (process.env.WA_SELLER_GROUPS || [
-        '120363418850903362@g.us',  // DAGGO
-        '120363304493232977@g.us',  // NEXTILE
-        '120363287198677451@g.us',  // NEWLIFE
-        '120363239510350827@g.us',  // LOCO
-    ].join(',')).split(',').map(s => s.trim()).filter(Boolean)
+    (process.env.WA_SELLER_GROUPS || '').split(',').map(s => s.trim()).filter(Boolean)
 );
 
 // ─────────────────────────────────────────────
@@ -70,7 +65,7 @@ let latestQrUrl = null;   // pre-rendered data: URL for the /qr page
 // ─────────────────────────────────────────────
 
 /** Human-like delay — 2–4 seconds with typing presence */
-async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe) {
+async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe, mentions) {
     try {
         await sock.sendPresenceUpdate('composing', jid);
         const ms = 2000 + Math.random() * 2000;
@@ -101,7 +96,12 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
         };
     }
 
-    const result = await sock.sendMessage(jid, { text }, opts);
+    const msgPayload = { text };
+    if (mentions && mentions.length > 0) {
+        msgPayload.mentions = mentions;
+    }
+
+    const result = await sock.sendMessage(jid, msgPayload, opts);
     return result.key.id;
 }
 
@@ -390,6 +390,30 @@ app.get('/health', (_req, res) => {
 });
 
 /**
+ * GET /group-participants?jid=120363...@g.us
+ * Returns list of group members with name and JID.
+ */
+app.get('/group-participants', async (req, res) => {
+    const jid = req.query.jid;
+    if (!jid) return res.status(400).json({ error: 'jid query param required' });
+    if (!clientReady || !sock) return res.status(503).json({ error: 'Bot not connected' });
+
+    try {
+        const metadata = await sock.groupMetadata(jid);
+        const participants = metadata.participants.map(p => ({
+            jid:    p.id,
+            phone:  p.id.replace('@s.whatsapp.net', '').replace('@lid', ''),
+            name:   p.notify || p.vname || p.name || '',
+            admin:  p.admin || null,
+        }));
+        res.json({ group: metadata.subject, participants });
+    } catch (e) {
+        console.log('⚠️ Failed to fetch group participants:', e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
  * POST /send-group-feedback
  * Body (JSON):
  *   orderId          string  — delivery ID (for logging)
@@ -401,7 +425,7 @@ app.get('/health', (_req, res) => {
  * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid } = req.body;
+    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid, mentions } = req.body;
 
     if (!orderId || !message) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
@@ -420,7 +444,8 @@ app.post('/send-group-feedback', async (req, res) => {
             quoteMessageId   || null,
             quoteMessageBody || null,
             quoteMessageSender || null,
-            quoteMessageFromMe || false
+            quoteMessageFromMe || false,
+            mentions           || []
         );
         console.log(`✅ Sent (msg_id: ${msgId?.slice(0, 20)}...)`);
         res.json({ success: true, message_id: msgId });

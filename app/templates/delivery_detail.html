@@ -502,11 +502,21 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
     </div>
     <div id="wa-update-status" style="font-size:12px;min-height:14px;margin-bottom:4px;"></div>
   </div>
-  <div style="padding:8px 10px;background:#1f2c34;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:6px;align-items:center;">
-    <input id="wa-custom-msg-{{ d.id }}" type="text" placeholder="Type a message to seller group..."
-      style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#0b141a;color:#e9edef;font-size:13px;outline:none;"
-      onkeydown="if(event.key==='Enter')sendWaUpdate({{ d.id }}, 'CUSTOM')">
-    <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+  <div style="padding:8px 10px;background:#1f2c34;border-top:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;gap:6px;">
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input id="wa-custom-msg-{{ d.id }}" type="text" placeholder="Type a message to seller group..."
+        style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#0b141a;color:#e9edef;font-size:13px;outline:none;"
+        onkeydown="if(event.key==='Enter')sendWaUpdate({{ d.id }}, 'CUSTOM')">
+      <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+    </div>
+    <div style="position:relative;">
+      <input id="wa-mention-{{ d.id }}" type="text" autocomplete="off"
+        placeholder="@ mention someone (optional)"
+        style="width:100%;padding:6px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:#0b141a;color:#a0aec0;font-size:11px;outline:none;box-sizing:border-box;"
+        onfocus="loadGroupMembers({{ d.id }})" oninput="filterMembers({{ d.id }})">
+      <input type="hidden" id="wa-mention-jid-{{ d.id }}">
+      <div id="wa-mention-list-{{ d.id }}" style="display:none;position:absolute;bottom:100%;left:0;right:0;max-height:180px;overflow-y:auto;background:#1a2730;border:1px solid rgba(255,255,255,.15);border-radius:12px;margin-bottom:4px;z-index:50;"></div>
+    </div>
   </div>
 </div>
 
@@ -607,6 +617,65 @@ function addRejectionNote(form) {
   return true;
 }
 
+// ── @Mention picker ──
+let _groupMembers = [];
+let _membersLoaded = false;
+
+async function loadGroupMembers(deliveryId) {
+    if (_membersLoaded) return;
+    try {
+        const resp = await fetch('/api/group-participants/' + deliveryId);
+        const data = await resp.json();
+        _groupMembers = (data.participants || []).map(p => ({
+            jid: p.jid,
+            phone: p.phone,
+            name: p.name || p.phone,
+        }));
+        _membersLoaded = true;
+        filterMembers(deliveryId);
+    } catch(e) { console.log('Failed to load group members', e); }
+}
+
+function filterMembers(deliveryId) {
+    const input = document.getElementById('wa-mention-' + deliveryId);
+    const list = document.getElementById('wa-mention-list-' + deliveryId);
+    const query = input.value.replace('@','').toLowerCase();
+
+    if (!_groupMembers.length) { list.style.display = 'none'; return; }
+
+    const filtered = query
+        ? _groupMembers.filter(m => m.name.toLowerCase().includes(query) || m.phone.includes(query))
+        : _groupMembers;
+
+    if (!filtered.length) { list.style.display = 'none'; return; }
+
+    list.innerHTML = filtered.map(m =>
+        `<div onclick="pickMember(${deliveryId}, '${m.jid}', '${m.name || m.phone}')"
+              style="padding:8px 12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06);"
+              onmouseenter="this.style.background='#0b141a'" onmouseleave="this.style.background='transparent'">
+            <span style="color:#e9edef;font-size:12px;font-weight:600;">${m.name || 'Unknown'}</span>
+            <span style="color:#667;font-size:11px;">+${m.phone}</span>
+        </div>`
+    ).join('');
+    list.style.display = 'block';
+}
+
+function pickMember(deliveryId, jid, name) {
+    const input = document.getElementById('wa-mention-' + deliveryId);
+    const hiddenInput = document.getElementById('wa-mention-jid-' + deliveryId);
+    const list = document.getElementById('wa-mention-list-' + deliveryId);
+    input.value = name;
+    hiddenInput.value = jid;
+    list.style.display = 'none';
+}
+
+// Close mention list on outside click
+document.addEventListener('click', (e) => {
+    document.querySelectorAll('[id^="wa-mention-list-"]').forEach(el => {
+        if (!el.parentElement.contains(e.target)) el.style.display = 'none';
+    });
+});
+
 let _waSending = false; // prevent double-send
 
 async function sendWaUpdate(deliveryId, issueType) {
@@ -619,7 +688,10 @@ async function sendWaUpdate(deliveryId, issueType) {
     };
     const statusEl = document.getElementById('wa-update-status');
     const customEl = document.getElementById('wa-custom-msg-' + deliveryId);
+    const mentionJidEl = document.getElementById('wa-mention-jid-' + deliveryId);
+    const mentionEl = document.getElementById('wa-mention-' + deliveryId);
     const customText = customEl ? customEl.value.trim() : '';
+    const mentionPhone = mentionJidEl ? mentionJidEl.value.trim() : '';
 
     if (issueType === 'CUSTOM' && !customText) {
         statusEl.style.color = '#f59e0b';
@@ -640,12 +712,15 @@ async function sendWaUpdate(deliveryId, issueType) {
     statusEl.style.color = '#22c55e';
     statusEl.textContent = '✅ "' + labels[issueType] + '" sent to seller group!';
     if (issueType === 'CUSTOM' && customEl) customEl.value = '';
+    if (mentionEl) mentionEl.value = '';
+    if (mentionJidEl) mentionJidEl.value = '';
 
     const formData = new FormData();
     formData.append("delivery_id", deliveryId);
     formData.append("issue_type", issueType);
     formData.append("custom_message", customText);
     formData.append("group_name", "");
+    formData.append("mention_phone", mentionPhone);
 
     // Send in background — only surface errors
     fetch('/api/agent-feedback', { method: 'POST', body: formData })
