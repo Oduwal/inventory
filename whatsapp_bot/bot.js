@@ -501,6 +501,12 @@ app.get('/group-participants', async (req, res) => {
         console.log('⚠️ groupMetadata failed:', e.message, '— using cached participants');
         // Fallback: return participants seen from messages in this group
         const cached = groupParticipants.get(jid);
+        console.log(`📇 Cached participants for ${jid}: ${cached ? cached.size : 0} members`);
+        if (cached) {
+            for (const [pid, info] of cached.entries()) {
+                console.log(`   → ${pid} = "${info.name}" (${info.phone})`);
+            }
+        }
         if (cached && cached.size > 0) {
             const participants = Array.from(cached.entries()).map(([pid, info]) => ({
                 jid: pid,
