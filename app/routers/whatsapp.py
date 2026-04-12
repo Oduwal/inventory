@@ -729,13 +729,16 @@ async def send_agent_feedback(
         .limit(1)
     ).scalar()
 
-    # Priority: original group from DB (most accurate) → category guess → empty
-    if fallback_grp:
-        target_group = fallback_grp
-    elif delivery_category and delivery_category in CATEGORY_GROUP_MAP:
+    # Priority: category map from env (always current) → DB fallback → empty
+    # The DB group_jid can become stale when WhatsApp is reconnected with a new number,
+    # so prefer the env var which the user keeps up-to-date.
+    known_groups = set(CATEGORY_GROUP_MAP.values())
+    if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
         target_group = CATEGORY_GROUP_MAP[delivery_category]
+    elif fallback_grp and (not known_groups or fallback_grp in known_groups):
+        target_group = fallback_grp
     else:
-        target_group = ""
+        target_group = list(known_groups)[0] if known_groups else ""
 
     try:
         async with httpx.AsyncClient() as client:
