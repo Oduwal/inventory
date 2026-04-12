@@ -394,13 +394,32 @@ async function connectToWhatsApp() {
         }
     });
 
+    // Map @lid participant IDs to @s.whatsapp.net IDs for name resolution
+    // Baileys fires this with the mapping between lid and regular JIDs
+    sock.ev.on('messaging-history.set', ({ contacts }) => {
+        if (contacts) {
+            for (const c of contacts) {
+                const name = c.notify || c.verifiedName || c.name || '';
+                if (name && c.id) contactNames.set(c.id, name);
+                if (name && c.lidJid) contactNames.set(c.lidJid, name);
+            }
+            console.log(`📇 History sync: ${contactNames.size} contact names cached`);
+        }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         for (const msg of messages) {
-            // Cache push name from incoming messages
+            // Cache push name from incoming messages — store under both JID formats
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const pushName = msg.pushName || '';
-            if (sender && pushName) contactNames.set(sender, pushName);
+            if (sender && pushName) {
+                contactNames.set(sender, pushName);
+                // Cross-cache: @lid ↔ @s.whatsapp.net
+                const phone = sender.replace('@s.whatsapp.net', '').replace('@lid', '');
+                if (sender.endsWith('@s.whatsapp.net')) contactNames.set(phone + '@lid', pushName);
+                if (sender.endsWith('@lid')) contactNames.set(phone + '@s.whatsapp.net', pushName);
+            }
 
             try {
                 await handleInbound(msg);
@@ -450,12 +469,22 @@ app.get('/group-participants', async (req, res) => {
 
     try {
         const metadata = await sock.groupMetadata(jid);
-        const participants = metadata.participants.map(p => ({
-            jid:    p.id,
-            phone:  p.id.replace('@s.whatsapp.net', '').replace('@lid', ''),
-            name:   contactNames.get(p.id) || p.notify || p.vname || p.name || '',
-            admin:  p.admin || null,
-        }));
+        // Try to resolve names: check @lid ID, @s.whatsapp.net ID, and group metadata
+        const participants = metadata.participants.map(p => {
+            const phone = p.id.replace('@s.whatsapp.net', '').replace('@lid', '');
+            const altJid = p.id.endsWith('@lid')
+                ? phone + '@s.whatsapp.net'
+                : phone + '@lid';
+            const name = contactNames.get(p.id)
+                || contactNames.get(altJid)
+                || p.notify || p.vname || p.name || '';
+            // Cross-cache: if we found a name, store it for both formats
+            if (name) {
+                contactNames.set(p.id, name);
+                contactNames.set(altJid, name);
+            }
+            return { jid: p.id, phone, name, admin: p.admin || null };
+        });
         res.json({ group: metadata.subject, participants });
     } catch (e) {
         console.log('⚠️ Failed to fetch group participants:', e.message);
