@@ -278,7 +278,8 @@ async function handleInbound(msg) {
     const msgId                 = msg.key.id;
 
     if (!text) return;
-    console.log(`📨 Group msg from ${sender.split('@')[0]}: "${text.slice(0, 80)}"`);
+    const _pushName = msg.pushName || '';
+    console.log(`📨 Group msg from ${sender.split('@')[0]} (pushName: "${_pushName}"): "${text.slice(0, 80)}"`);
 
     if (quotedId) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
@@ -415,18 +416,21 @@ async function connectToWhatsApp() {
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const pushName = msg.pushName || '';
             const groupJid = msg.key.remoteJid || '';
+            const phone = sender.replace('@s.whatsapp.net', '').replace('@lid', '');
+
             if (sender && pushName) {
                 contactNames.set(sender, pushName);
                 // Cross-cache: @lid ↔ @s.whatsapp.net
-                const phone = sender.replace('@s.whatsapp.net', '').replace('@lid', '');
                 if (sender.endsWith('@s.whatsapp.net')) contactNames.set(phone + '@lid', pushName);
                 if (sender.endsWith('@lid')) contactNames.set(phone + '@s.whatsapp.net', pushName);
+            }
 
-                // Track group participants from messages (fallback when groupMetadata is forbidden)
-                if (groupJid.endsWith('@g.us') || groupJid.endsWith('@lid')) {
-                    if (!groupParticipants.has(groupJid)) groupParticipants.set(groupJid, new Map());
-                    groupParticipants.get(groupJid).set(sender, { name: pushName, phone });
-                }
+            // Always track group participants (even without pushName — shows phone at minimum)
+            if (sender && (groupJid.endsWith('@g.us') || groupJid.endsWith('@lid'))) {
+                if (!groupParticipants.has(groupJid)) groupParticipants.set(groupJid, new Map());
+                const existing = groupParticipants.get(groupJid).get(sender);
+                const name = pushName || (existing ? existing.name : '');
+                groupParticipants.get(groupJid).set(sender, { name, phone });
             }
 
             try {
