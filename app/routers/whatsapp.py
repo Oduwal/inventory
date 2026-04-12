@@ -584,26 +584,33 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
     if not delivery:
         return JSONResponse({"error": "Delivery not found"}, status_code=404)
 
-    # Find group JID: from outbound map or category map
-    orig_map = db.execute(text(
-        "SELECT group_jid FROM whatsapp_outbound_map "
-        "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
-    ), {"oid": delivery.id}).first()
+    # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
+    try:
+        cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
+    except (ValueError, TypeError):
+        cgm = {}
 
-    group_jid = orig_map[0] if orig_map else None
+    known_groups = set(cgm.values())
+
+    cat = db.execute(
+        select(Item.category)
+        .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+        .where(DeliveryItem.delivery_id == delivery.id)
+        .limit(1)
+    ).scalar()
+
+    group_jid = cgm.get(cat, "") if cat else ""
 
     if not group_jid:
-        try:
-            cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
-        except (ValueError, TypeError):
-            cgm = {}
-        cat = db.execute(
-            select(Item.category)
-            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
-            .where(DeliveryItem.delivery_id == delivery.id)
-            .limit(1)
-        ).scalar()
-        group_jid = cgm.get(cat, "")
+        orig_map = db.execute(text(
+            "SELECT group_jid FROM whatsapp_outbound_map "
+            "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
+        ), {"oid": delivery.id}).first()
+        db_jid = orig_map[0] if orig_map else ""
+        group_jid = db_jid if db_jid and (not known_groups or db_jid in known_groups) else ""
+
+    if not group_jid and known_groups:
+        group_jid = list(known_groups)[0]
 
     if not group_jid:
         return JSONResponse({"participants": [], "group": ""})
