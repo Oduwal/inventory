@@ -685,14 +685,8 @@ async def send_agent_feedback(
     mention_jids = []
     mention_tags = []
 
-    # Auto-mention the original seller
-    if quote_sender:
-        mention_jids.append(quote_sender)
-        phone = quote_sender.replace("@s.whatsapp.net", "").replace("@lid", "")
-        # Show name if available, otherwise phone
-        mention_tags.append(f"@{phone}")
-
-    # Agent-specified mention (UI sends full JID like 2348012345678@s.whatsapp.net)
+    # Only mention people explicitly picked by the agent from the live group picker.
+    # Auto-mentioning from DB is unreliable — JIDs change when WhatsApp is reconnected.
     if mention_phone:
         if "@" in mention_phone:
             # Already a JID from the picker
