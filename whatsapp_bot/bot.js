@@ -60,6 +60,7 @@ let sock        = null;
 let clientReady = false;
 let latestQrUrl = null;   // pre-rendered data: URL for the /qr page
 const contactNames = new Map(); // jid → push name (cached from messages & contacts events)
+const groupParticipants = new Map(); // groupJid → Map(participantJid → { name, phone })
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -413,12 +414,19 @@ async function connectToWhatsApp() {
             // Cache push name from incoming messages — store under both JID formats
             const sender = msg.key.participant || msg.key.remoteJid || '';
             const pushName = msg.pushName || '';
+            const groupJid = msg.key.remoteJid || '';
             if (sender && pushName) {
                 contactNames.set(sender, pushName);
                 // Cross-cache: @lid ↔ @s.whatsapp.net
                 const phone = sender.replace('@s.whatsapp.net', '').replace('@lid', '');
                 if (sender.endsWith('@s.whatsapp.net')) contactNames.set(phone + '@lid', pushName);
                 if (sender.endsWith('@lid')) contactNames.set(phone + '@s.whatsapp.net', pushName);
+
+                // Track group participants from messages (fallback when groupMetadata is forbidden)
+                if (groupJid.endsWith('@g.us') || groupJid.endsWith('@lid')) {
+                    if (!groupParticipants.has(groupJid)) groupParticipants.set(groupJid, new Map());
+                    groupParticipants.get(groupJid).set(sender, { name: pushName, phone });
+                }
             }
 
             try {
@@ -478,7 +486,6 @@ app.get('/group-participants', async (req, res) => {
             const name = contactNames.get(p.id)
                 || contactNames.get(altJid)
                 || p.notify || p.vname || p.name || '';
-            // Cross-cache: if we found a name, store it for both formats
             if (name) {
                 contactNames.set(p.id, name);
                 contactNames.set(altJid, name);
@@ -487,8 +494,20 @@ app.get('/group-participants', async (req, res) => {
         });
         res.json({ group: metadata.subject, participants });
     } catch (e) {
-        console.log('⚠️ Failed to fetch group participants:', e.message);
-        res.status(500).json({ error: e.message });
+        console.log('⚠️ groupMetadata failed:', e.message, '— using cached participants');
+        // Fallback: return participants seen from messages in this group
+        const cached = groupParticipants.get(jid);
+        if (cached && cached.size > 0) {
+            const participants = Array.from(cached.entries()).map(([pid, info]) => ({
+                jid: pid,
+                phone: info.phone,
+                name: info.name || '',
+                admin: null,
+            }));
+            res.json({ group: 'Seller Group', participants });
+        } else {
+            res.json({ group: '', participants: [] });
+        }
     }
 });
 
