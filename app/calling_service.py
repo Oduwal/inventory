@@ -112,17 +112,37 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "firstMessage": first_message,
                     "model": {
                         "provider": "google",
-                        "model": "gemini-2.5-flash", 
+                        "model": "gemini-2.0-flash",
                         "messages": [{"role": "system", "content": system_prompt}],
-                        "temperature": 0.7 
+                        "temperature": 0.7,
+                        "maxTokens": 200,
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "reschedule_delivery",
+                                    "description": "Trigger this to change the delivery date to tomorrow if the customer requests it.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "confirm_reschedule": {
+                                                "type": "boolean",
+                                                "description": "True if the customer agreed to reschedule"
+                                            }
+                                        },
+                                        "required": ["confirm_reschedule"]
+                                    }
+                                }
+                            }
+                        ]
                     },
                     "voice": {
-                        "provider": "11labs", 
+                        "provider": "11labs",
                         "voiceId": agent_voice_id
                     },
-                    "summaryPrompt": summary_prompt, 
+                    "summaryPrompt": summary_prompt,
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
-                    "serverMessages": ["end-of-call-report"],
+                    "serverMessages": ["end-of-call-report", "tool-calls"],
                     "clientMessages": ["transcript", "hang", "function-call"],
                     "endCallFunctionEnabled": True
                 },
