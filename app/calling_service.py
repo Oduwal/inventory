@@ -112,7 +112,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "firstMessage": first_message,
                     "model": {
                         "provider": "google",
-                        "model": "gemini-3.1-flash-lite",
+                        "model": "gemini-2.5-flash-lite",
                         "messages": [{"role": "system", "content": system_prompt}]
                     },
                     "voice": {
