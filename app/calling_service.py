@@ -17,14 +17,14 @@ VAPI_PHONE_NUMBER_ID = os.getenv("VAPI_PHONE_NUMBER_ID", "")
 # 1. THE AGENT ROSTER (Add as many as you want!)
 # ==============================================================
 AVAILABLE_AGENTS = [
-    {"name": "Olabisi", "voiceId": "Charon"},   # Deep, calm
-    {"name": "Flourish", "voiceId": "Kore"},     # Clear, warm
-    {"name": "Tobi",  "voiceId": "Puck"},        # Energetic, upbeat
-    {"name": "Tolani",  "voiceId": "Aoede"},     # Bright, professional
-    {"name": "Taiwo",  "voiceId": "Fenrir"},     # Confident, steady
-    {"name": "Chineye",  "voiceId": "Kore"},     # Clear, warm
-    {"name": "Samuel",  "voiceId": "Charon"},    # Deep, calm
-    {"name": "John",  "voiceId": "Puck"}         # Energetic, upbeat
+    {"name": "Olabisi", "voiceId": "eOHsvebhdtt0XFeHVMQY"}, # Deep, professional male
+    {"name": "Flourish", "voiceId": "3AKbojRHFojiSeAMRPt3"}, # Polite, clear female
+    {"name": "Tobi",  "voiceId": "D9xwB6HNBJ9h4YvQFWuE"},  # Energetic, young male
+    {"name": "Tolani",  "voiceId": "JMwQvjJt08OhYlPBWeyc"},
+    {"name": "Taiwo",  "voiceId": "RAVWJW17BPoSIf05iXxf"},
+    {"name": "Chineye",  "voiceId": "PSIwmc50KeuW20kehlBE"},
+    {"name": "Samuel",  "voiceId": "ddDFRErfhdc2asyySOG5"},
+    {"name": "John",  "voiceId": "3mwVS2Cu52S8MzAVx66c"}
 ]
 # ==============================================================
 # RESTORED HELPER FUNCTION (Prevents main.py from crashing)
@@ -109,42 +109,23 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                 "phoneNumberId": VAPI_PHONE_NUMBER_ID,
                 "customer": {"number": formatted_phone},
                 "assistant": {
-    "firstMessage": first_message,
-    "model": {
-        "provider": "google",
-        "model": "gemini-3.1-flash-live-preview",
-        "messages": [{"role": "system", "content": system_prompt}],
-        "thinkingLevel": "minimal",               # RESTORED: Forces instant reaction time
-        "tools": [                  
-            {
-                "type": "function",
-                "function": {
-                    "name": "reschedule_delivery",
-                    "description": "Trigger this to change the delivery date to tomorrow if the customer requests it.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "confirm_reschedule": {
-                                "type": "boolean",
-                                "description": "True if the customer agreed to reschedule"
-                            }
-                        },
-                        "required": ["confirm_reschedule"]
-                    }
-                }
-            }
-        ]
-    },
-    "voice": {
-        "provider": "google",
-        "voiceId": agent_voice_id  # Rotated from AVAILABLE_AGENTS roster
-    },
-    "summaryPrompt": summary_prompt, 
-    "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
-    "serverMessages": ["end-of-call-report", "tool-calls"], # Critical for catching the reschedule
-    "clientMessages": ["transcript", "hang", "function-call"],
-    "endCallFunctionEnabled": True
-},
+                    "firstMessage": first_message,
+                    "model": {
+                        "provider": "google",
+                        "model": "gemini-2.5-flash", 
+                        "messages": [{"role": "system", "content": system_prompt}],
+                        "temperature": 0.7 
+                    },
+                    "voice": {
+                        "provider": "11labs", 
+                        "voiceId": agent_voice_id
+                    },
+                    "summaryPrompt": summary_prompt, 
+                    "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
+                    "serverMessages": ["end-of-call-report"],
+                    "clientMessages": ["transcript", "hang", "function-call"],
+                    "endCallFunctionEnabled": True
+                },
                 "metadata": {
                     "delivery_id": delivery_id,
                     "backup_numbers": backup_numbers,
