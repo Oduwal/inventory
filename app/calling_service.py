@@ -109,23 +109,42 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                 "phoneNumberId": VAPI_PHONE_NUMBER_ID,
                 "customer": {"number": formatted_phone},
                 "assistant": {
-                    "firstMessage": first_message,
-                    "model": {
-                        "provider": "google",
-                        "model": "gemini-2.5-flash", 
-                        "messages": [{"role": "system", "content": system_prompt}],
-                        "temperature": 0.7 
-                    },
-                    "voice": {
-                        "provider": "11labs", 
-                        "voiceId": agent_voice_id
-                    },
-                    "summaryPrompt": summary_prompt, 
-                    "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
-                    "serverMessages": ["end-of-call-report"],
-                    "clientMessages": ["transcript", "hang", "function-call"],
-                    "endCallFunctionEnabled": True
-                },
+    "firstMessage": first_message,
+    "model": {
+        "provider": "google",
+        "model": "gemini-3.1-flash-live-preview", # UPGRADED to 3.1
+        "messages": [{"role": "system", "content": system_prompt}],
+        "thinkingLevel": "minimal",               # RESTORED: Forces instant reaction time
+        "tools": [                  
+            {
+                "type": "function",
+                "function": {
+                    "name": "reschedule_delivery",
+                    "description": "Trigger this to change the delivery date to tomorrow if the customer requests it.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "confirm_reschedule": {
+                                "type": "boolean",
+                                "description": "True if the customer agreed to reschedule"
+                            }
+                        },
+                        "required": ["confirm_reschedule"]
+                    }
+                }
+            }
+        ]
+    },
+    "voice": {
+        "provider": "google",
+        "voiceId": "Aoede" # Clear, professional native voice
+    },
+    "summaryPrompt": summary_prompt, 
+    "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
+    "serverMessages": ["end-of-call-report", "tool-calls"], # Critical for catching the reschedule
+    "clientMessages": ["transcript", "hang", "function-call"],
+    "endCallFunctionEnabled": True
+},
                 "metadata": {
                     "delivery_id": delivery_id,
                     "backup_numbers": backup_numbers,
