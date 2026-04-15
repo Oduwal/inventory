@@ -30,7 +30,8 @@ self.addEventListener("push", e => {
     let data = {};
     try { data = e.data ? e.data.json() : {}; } catch(_) {}
     const title = data.title || "Inventory Keeper";
-    e.waitUntil(self.registration.showNotification(title, {
+    e.waitUntil(
+      self.registration.showNotification(title, {
         body:             data.body || "",
         icon:             "/static/icon-192.png",
         badge:            "/static/badge-96.png",
@@ -39,7 +40,13 @@ self.addEventListener("push", e => {
         renotify:         true,
         requireInteraction: false,
         vibrate:          [200, 100, 200],
-    }));
+      }).then(() => {
+        // Tell open tabs so they can suppress duplicate poll-based toasts
+        return self.clients.matchAll({type: 'window'}).then(clients => {
+          clients.forEach(c => c.postMessage({type: 'push-shown', link: data.link || '/'}));
+        });
+      })
+    );
 });
 
 self.addEventListener("notificationclick", e => {

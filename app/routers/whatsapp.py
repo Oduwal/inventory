@@ -486,19 +486,15 @@ def _send_twilio_reply(to_number: str, message: str):
 
 
 # ─────────────────────────────────────────────────────────────────
-# SSE CONNECTION MANAGER
-# Each delivery page that is open holds an asyncio.Queue here.
-# When a new WA comment arrives we put an event into every queue.
+# SSE CONNECTION MANAGER (cross-worker via PostgreSQL LISTEN/NOTIFY)
+# See app/sse_bridge.py for the bridge that makes this work with
+# multiple uvicorn workers.
 # ─────────────────────────────────────────────────────────────────
-_sse_queues: dict[int, list[asyncio.Queue]] = {}   # delivery_id → [queue, ...]
+from app import sse_bridge
 
 def _sse_broadcast(delivery_id: int, html_fragment: str):
-    """Push an SSE event to all open browser tabs for this delivery."""
-    for q in _sse_queues.get(delivery_id, []):
-        try:
-            q.put_nowait(html_fragment)
-        except asyncio.QueueFull:
-            pass
+    """Push an SSE event to all open browser tabs across all workers."""
+    sse_bridge.broadcast(delivery_id, html_fragment)
 
 @router.get("/api/stream/{delivery_id}")
 async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(get_db)):
@@ -510,8 +506,7 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
     user = get_current_user(db, request)
     if not user:
         return PlainTextResponse("Unauthorized", status_code=401)
-    q: asyncio.Queue = asyncio.Queue(maxsize=50)
-    _sse_queues.setdefault(delivery_id, []).append(q)
+    q = sse_bridge.register_queue(delivery_id)
 
     async def generator():
         try:
@@ -525,9 +520,7 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"   # keep-alive comment
         finally:
-            lst = _sse_queues.get(delivery_id, [])
-            if q in lst:
-                lst.remove(q)
+            sse_bridge.unregister_queue(delivery_id, q)
 
     return StreamingResponse(generator(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

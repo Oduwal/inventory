@@ -22,6 +22,7 @@ _EXPORT_PRIVATE = [
     "_verify_webhook_token", "_send_web_push",
 ]
 import os
+import asyncio
 import html
 import json as _json
 import logging
@@ -116,6 +117,9 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _lifespan(app):
     _run_startup()
+    # Start the cross-worker SSE bridge (PG LISTEN/NOTIFY)
+    from . import sse_bridge
+    sse_bridge.start(asyncio.get_running_loop())
     yield
 
 app = FastAPI(lifespan=_lifespan)

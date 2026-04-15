@@ -668,6 +668,15 @@ const NOTIF_COLORS = {success:'#22c55e',warning:'#f59e0b',danger:'#ef4444',info:
 let lastNotifId = 0;
 let notifCache = [];
 
+// Push dedup: track links already shown via Web Push so poll-toasts don't duplicate
+const _recentPushLinks = new Set();
+navigator.serviceWorker?.addEventListener('message', e => {
+  if (e.data?.type === 'push-shown') {
+    _recentPushLinks.add(e.data.link);
+    setTimeout(() => _recentPushLinks.delete(e.data.link), 20000);
+  }
+});
+
 function playNotifSound() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -683,6 +692,7 @@ function playNotifSound() {
 }
 
 function showToast(notif) {
+  if (notif.link && _recentPushLinks.has(notif.link)) return; // already shown via Web Push
   const color = NOTIF_COLORS[notif.kind] || NOTIF_COLORS.info;
   const toast = document.createElement('div');
   toast.style.cssText = `pointer-events:all;background:var(--toast-bg, #1a2332);border:1px solid ${color};border-left:4px solid ${color};border-radius:10px;padding:12px 14px;min-width:280px;max-width:340px;box-shadow:0 6px 24px rgba(0,0,0,.7);cursor:pointer;transition:opacity .3s,transform .3s;opacity:0;transform:translateY(20px);`;
@@ -826,8 +836,26 @@ function autoDismissVisited() {
       autoDismissVisited();
     }
   } catch(e) {}
+  // Smart polling: visibility-aware + push-aware intervals
+  let _pollTimer = null;
+  const _POLL_FAST   = 10000;  // 10s when tab focused, no push
+  const _POLL_SLOW   = 30000;  // 30s when push active (catch-up only)
+  const _POLL_HIDDEN = 60000;  // 60s when tab hidden
+
+  function _startPoll() {
+    if (_pollTimer) clearInterval(_pollTimer);
+    if (document.hidden) {
+      _pollTimer = setInterval(pollNotifications, _POLL_HIDDEN);
+    } else {
+      _pollTimer = setInterval(pollNotifications, window._pushActive ? _POLL_SLOW : _POLL_FAST);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    _startPoll();
+    if (!document.hidden) pollNotifications(); // immediate check on tab focus
+  });
   pollNotifications();
-  setInterval(pollNotifications, 3000);
+  _startPoll();
 
   // Web push — subscribe this device so notifications arrive when screen is off
   const SW_VERSION = 'invkeeper-v6';  // Must match CACHE in sw.js
@@ -845,6 +873,7 @@ function autoDismissVisited() {
       if (existing && storedKey === publicKey && !needsResub) {
         // Same VAPID key, same SW version — just ensure server has it
         await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(existing.toJSON())});
+        window._pushActive = true; _startPoll(); // switch to slower poll cadence
         return;
       }
       // SW updated, VAPID key changed, or no stored key — drop old and resubscribe
@@ -861,6 +890,7 @@ function autoDismissVisited() {
       await fetch('/push/subscribe', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
       localStorage.setItem('push_vapid_key', publicKey);
       localStorage.setItem('push_sw_version', SW_VERSION);
+      window._pushActive = true; _startPoll(); // switch to slower poll cadence
       console.log('Push: subscribed successfully (fresh subscription)');
     } catch(e) { console.log('Push subscribe error:', e); }
   }
