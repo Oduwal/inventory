@@ -112,9 +112,9 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "firstMessage": first_message,
                     "model": {
                         "provider": "google",
-                        "model": "gemini-2.0-flash",
+                        "model": "gemini-2.5-flash",
                         "messages": [{"role": "system", "content": system_prompt}],
-                        "temperature": 0.7,
+                        "thinkingLevel": "minimal",
                         "tools": [
                             {
                                 "type": "function",
@@ -142,7 +142,8 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "summaryPrompt": summary_prompt,
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report", "tool-calls"],
-                    "clientMessages": ["transcript", "hang", "function-call"]
+                    "clientMessages": ["transcript", "hang", "function-call"],
+                    "endCallFunctionEnabled": True
                 },
                 "metadata": {
                     "delivery_id": delivery_id,
