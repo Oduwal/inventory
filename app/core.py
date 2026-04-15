@@ -703,9 +703,6 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_comments_delivery_id ON wa_comments (delivery_id)")
         # Structured Gemini classification stored as JSON per inbound comment
         _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS classification TEXT DEFAULT NULL")
-        # Image support: compressed JPEG bytes + MIME type
-        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_data BYTEA NULL")
-        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_mime VARCHAR(50) NULL")
 
         # Durable mapping of every bot-sent WhatsApp message_id → delivery order_id.
         # This table survives bot restarts; Python does O(1) lookup to route replies.
