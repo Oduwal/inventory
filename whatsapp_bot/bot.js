@@ -15,6 +15,7 @@ import makeWASocket, {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     Browsers,
+    downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 import P from 'pino';
 import express from 'express';
@@ -67,7 +68,7 @@ const groupParticipants = new Map(); // groupJid → Map(participantJid → { na
 // ─────────────────────────────────────────────
 
 /** Human-like delay — 2–4 seconds with typing presence */
-async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe, mentions) {
+async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quoteFromMe, mentions, imageBuffer) {
     try {
         await sock.sendPresenceUpdate('composing', jid);
         const ms = 2000 + Math.random() * 2000;
@@ -95,7 +96,9 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
         console.log(`   → quoting with participant: ${participantId}, fromMe: ${!quoteSender || quoteFromMe}`);
     }
 
-    const msgPayload = { text };
+    const msgPayload = imageBuffer
+        ? { image: imageBuffer, caption: text || '', }
+        : { text };
     if (mentions && mentions.length > 0) {
         msgPayload.mentions = mentions;
     }
@@ -277,7 +280,28 @@ async function handleInbound(msg) {
     const sender                = msg.key.participant || jid;
     const msgId                 = msg.key.id;
 
-    if (!text) return;
+    // Detect and download image media
+    let mediaBase64 = null;
+    let mediaMime = null;
+    const _m = msg.message;
+    const _imageMsg = _m?.imageMessage
+        || _m?.ephemeralMessage?.message?.imageMessage
+        || _m?.viewOnceMessage?.message?.imageMessage;
+    if (_imageMsg) {
+        try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+                logger: P({ level: 'silent' }),
+                reuploadRequest: sock.updateMediaMessage,
+            });
+            mediaBase64 = buffer.toString('base64');
+            mediaMime = _imageMsg.mimetype || 'image/jpeg';
+            console.log(`📷 Downloaded image: ${(buffer.length / 1024).toFixed(0)}KB`);
+        } catch (imgErr) {
+            console.log(`⚠️ Image download failed: ${imgErr.message}`);
+        }
+    }
+
+    if (!text && !mediaBase64) return;
     const _pushName = msg.pushName || '';
     console.log(`📨 Group msg from ${sender.split('@')[0]} (pushName: "${_pushName}"): "${text.slice(0, 80)}"`);
 
@@ -291,8 +315,11 @@ async function handleInbound(msg) {
             sender_phone:        sender,
             sender_name:         senderName,
             groupJid:            jid,
+            media_base64:        mediaBase64 || '',
+            media_mime:          mediaMime || '',
         }, {
-            timeout: 10000,
+            timeout: 30000,
+            maxContentLength: 15 * 1024 * 1024,
             headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
         }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
@@ -312,9 +339,12 @@ async function handleInbound(msg) {
         sender_name:     senderName,
         customer_name:   info.customer_name,
         customer_phone:  info.customer_phone,
-        groupJid:        jid,   // already normalised @lid → @g.us above
+        groupJid:        jid,
+        media_base64:    mediaBase64 || '',
+        media_mime:      mediaMime || '',
     }, {
-        timeout: 8000,
+        timeout: 15000,
+        maxContentLength: 15 * 1024 * 1024,
         headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
     }).then(() => console.log(`✅ Cached order → Python (group: ${jid.slice(0,20)}...)`)).catch(e => console.log('⚠️  Cache POST failed:', e.message));
 }
@@ -446,7 +476,7 @@ async function connectToWhatsApp() {
 // EXPRESS API
 // ─────────────────────────────────────────────
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '12mb' }));
 
 // QR code page — auto-refreshes every 30s
 app.get('/qr', async (_req, res) => {
@@ -533,9 +563,12 @@ app.get('/group-participants', async (req, res) => {
  * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
 app.post('/send-group-feedback', async (req, res) => {
-    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid, mentions } = req.body;
+    const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid, mentions, imageBase64 } = req.body;
 
-    if (!orderId || !message) {
+    const imageBuffer = imageBase64 ? Buffer.from(imageBase64, 'base64') : null;
+    if (imageBuffer) console.log(`   → image: ${(imageBuffer.length / 1024).toFixed(0)}KB`);
+
+    if (!orderId || (!message && !imageBuffer)) {
         return res.status(400).json({ success: false, error: 'orderId and message are required' });
     }
 
@@ -558,7 +591,8 @@ app.post('/send-group-feedback', async (req, res) => {
             quoteMessageBody || null,
             quoteMessageSender || null,
             quoteMessageFromMe || false,
-            mentions           || []
+            mentions           || [],
+            imageBuffer
         );
         console.log(`✅ Sent (msg_id: ${msgId?.slice(0, 20)}...)`);
         res.json({ success: true, message_id: msgId });

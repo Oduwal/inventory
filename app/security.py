@@ -531,6 +531,31 @@ def process_profile_image(content: bytes) -> tuple[bytes, str]:
     return buf.getvalue(), "image/jpeg"
 
 
+WA_IMAGE_MAX_DIM = 1200
+WA_IMAGE_QUALITY = 70
+
+def process_wa_image(content: bytes) -> tuple[bytes, str]:
+    """Resize and compress a WhatsApp chat image. Returns (jpeg_bytes, mime_type).
+    Shrinks to max 1200x1200 and compresses to JPEG quality 70."""
+    from PIL import Image
+    import io as _io
+
+    img = Image.open(_io.BytesIO(content))
+    if img.mode in ("RGBA", "LA", "P"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    img.thumbnail((WA_IMAGE_MAX_DIM, WA_IMAGE_MAX_DIM), Image.LANCZOS)
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=WA_IMAGE_QUALITY, optimize=True)
+    return buf.getvalue(), "image/jpeg"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # [SEC-10] PUSH SUBSCRIPTION ENDPOINT VALIDATION
 # ─────────────────────────────────────────────────────────────────────────────

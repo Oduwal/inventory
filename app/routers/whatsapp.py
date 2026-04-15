@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, Form
+from fastapi import APIRouter, Request, Depends, Form, UploadFile, File, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -527,6 +527,24 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
 
 
 # ─────────────────────────────────────────────────────────────────
+# MEDIA SERVING ENDPOINT — serves compressed images stored in wa_comments
+# ─────────────────────────────────────────────────────────────────
+@router.get("/api/wa-media/{comment_id}")
+def wa_media(comment_id: int, request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(db, request)
+    if not user:
+        return PlainTextResponse("Unauthorized", status_code=401)
+    row = db.execute(
+        text("SELECT media_data, media_mime FROM wa_comments WHERE id = :cid"),
+        {"cid": comment_id}
+    ).first()
+    if not row or not row.media_data:
+        return PlainTextResponse("Not found", status_code=404)
+    return Response(content=row.media_data, media_type=row.media_mime or "image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ─────────────────────────────────────────────────────────────────
 # GEMINI MULTI-TURN CLASSIFICATION (runs in threadpool so it doesn't
 # block the event loop — Gemini HTTP call can take 2-5s)
 # ─────────────────────────────────────────────────────────────────
@@ -640,6 +658,7 @@ async def send_agent_feedback(
     custom_message: str = Form(""),
     group_name: str = Form(""),
     mention_phone: str = Form(""),
+    image: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
     # [SEC] Require login — prevent unauthenticated users from sending messages
@@ -747,6 +766,17 @@ async def send_agent_feedback(
     else:
         target_group = list(known_groups)[0] if known_groups else ""
 
+    # Process optional image upload
+    import base64 as _b64
+    image_bytes = None
+    image_b64 = ""
+    if image and image.filename:
+        raw = await image.read()
+        validate_image_upload(image.filename, raw)
+        from app.security import process_wa_image
+        image_bytes, _mime = process_wa_image(raw)
+        image_b64 = _b64.b64encode(image_bytes).decode("ascii")
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -760,6 +790,7 @@ async def send_agent_feedback(
                     "quoteMessageFromMe": False,
                     "targetGroupJid":     target_group,
                     "mentions":           mention_jids,
+                    "imageBase64":        image_b64,
                 },
                 timeout=60,
             )
@@ -788,19 +819,30 @@ async def send_agent_feedback(
             db.commit()
 
         # Save outbound comment for the chat thread UI
-        db.execute(text(
-            "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-            "VALUES (:did, 'outbound', 'Agent', :body, :_now)"
-        ), {"did": delivery.id, "body": message, "_now": _now()})
-        db.commit()
+        if is_sqlite:
+            db.execute(text(
+                "INSERT INTO wa_comments (delivery_id, direction, sender, body, media_data, media_mime, created_at) "
+                "VALUES (:did, 'outbound', 'Agent', :body, :media_data, :media_mime, :_now)"
+            ), {"did": delivery.id, "body": message, "media_data": image_bytes, "media_mime": "image/jpeg" if image_bytes else None, "_now": _now()})
+            db.commit()
+            new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        else:
+            result = db.execute(text(
+                "INSERT INTO wa_comments (delivery_id, direction, sender, body, media_data, media_mime, created_at) "
+                "VALUES (:did, 'outbound', 'Agent', :body, :media_data, :media_mime, :_now) RETURNING id"
+            ), {"did": delivery.id, "body": message, "media_data": image_bytes, "media_mime": "image/jpeg" if image_bytes else None, "_now": _now()})
+            new_comment_id = result.fetchone()[0]
+            db.commit()
 
         # SSE broadcast so open tabs update immediately
         now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
         _sse_msg = html.escape(message)
+        _img_html = f'<img src="/api/wa-media/{new_comment_id}" style="max-width:200px;max-height:200px;border-radius:6px;cursor:pointer;margin-top:4px;" onclick="window.open(this.src)">' if image_bytes else ""
         fragment = (
             f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
             f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
             f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">Agent → Group</span>'
+            f'{_img_html}'
             f'<div style="white-space:pre-wrap;">{_sse_msg}</div>'
             f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
             f'</div>'
@@ -826,9 +868,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     sender              = data.get("sender_phone", "")
     sender_name         = data.get("sender_name", "").strip()
     group_jid           = data.get("groupJid", "").strip()
+    media_base64        = data.get("media_base64", "").strip()
+    media_mime_in       = data.get("media_mime", "").strip()
 
-    if not reply_text:
+    if not reply_text and not media_base64:
         return {"status": "ignored"}
+    if not reply_text and media_base64:
+        reply_text = "[Image]"
 
     _log = logging.getLogger("wa_webhook")
 
@@ -956,24 +1002,49 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
     comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
+    # Process inbound image if present
+    import base64 as _b64
+    inbound_image_bytes = None
+    if media_base64:
+        try:
+            raw_img = _b64.b64decode(media_base64)
+            from app.security import process_wa_image
+            inbound_image_bytes, _ = process_wa_image(raw_img)
+        except Exception as img_err:
+            _log.warning("Failed to process inbound image: %s", img_err)
+
     # Use friendly name for display, fall back to phone digits
     display_sender = sender_name or sender.replace("@s.whatsapp.net", "").replace("@lid", "")
-    db.execute(text(
-        "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
-        "VALUES (:did, 'inbound', :sender, :body, :clf, :_now)"
-    ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json, "_now": _now()})
-    db.commit()
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    if is_sqlite:
+        db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now)"
+        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+            "media_data": inbound_image_bytes, "media_mime": "image/jpeg" if inbound_image_bytes else None, "_now": _now()})
+        db.commit()
+        new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+    else:
+        result = db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now) RETURNING id"
+        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+            "media_data": inbound_image_bytes, "media_mime": "image/jpeg" if inbound_image_bytes else None, "_now": _now()})
+        new_comment_id = result.fetchone()[0]
+        db.commit()
 
     # SSE — push fragment to any open delivery detail tabs
     now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
     action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION</span>' if ai.get("action_required") else ""
     _sse_sender = html.escape(display_sender or "Seller")
     _sse_body   = html.escape(comment_body)
+    _img_html = f'<img src="/api/wa-media/{new_comment_id}" style="max-width:200px;max-height:200px;border-radius:6px;cursor:pointer;margin-top:4px;" onclick="window.open(this.src)">' if inbound_image_bytes else ""
     fragment = (
         f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
         f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
         f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">'
         f'{_sse_sender}{action_badge}</span>'
+        f'{_img_html}'
         f'<div style="white-space:pre-wrap;">{_sse_body}</div>'
         f'<div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{now_str}</div>'
         f'</div>'

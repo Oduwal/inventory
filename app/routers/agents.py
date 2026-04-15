@@ -601,7 +601,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             {"rid": pending_adj.id}
         ).fetchall()
     wa_comments = db.execute(
-        text("SELECT direction, sender, body, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        text("SELECT id, direction, sender, body, media_mime, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
         {"did": d.id}
     ).fetchall()
     return tpl(request, "delivery_detail.html", {
