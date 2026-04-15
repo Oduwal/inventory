@@ -14,6 +14,19 @@ router = APIRouter()
 _log = logging.getLogger("whatsapp")
 
 
+def _get_bot_url(group_jid: str = "") -> str:
+    """Resolve which bot service URL to use for a given group JID.
+    Uses GROUP_BOT_MAP env var to route to the correct bot instance.
+    Falls back to WHATSAPP_BOT_URL for backwards compatibility."""
+    try:
+        group_bot_map = json.loads(os.getenv("GROUP_BOT_MAP", "{}"))
+    except (ValueError, TypeError):
+        group_bot_map = {}
+    if group_jid and group_jid in group_bot_map:
+        return group_bot_map[group_jid]
+    return os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000")
+
+
 # ─────────────────────────────────────────────────────────────────
 # CALL WEBHOOK  (Vapi end-of-call report)
 # ─────────────────────────────────────────────────────────────────
@@ -616,7 +629,7 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
         return JSONResponse({"participants": [], "group": ""})
 
     try:
-        bot_url = os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000")
+        bot_url = _get_bot_url(group_jid)
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, timeout=15)
             return JSONResponse(resp.json())
@@ -744,7 +757,7 @@ async def send_agent_feedback(
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000") + "/send-group-feedback",
+                _get_bot_url(target_group) + "/send-group-feedback",
                 json={
                     "orderId":            str(delivery.id),
                     "message":            message,
