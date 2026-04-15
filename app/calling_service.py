@@ -113,27 +113,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "model": {
                         "provider": "google",
                         "model": "gemini-2.5-flash-lite",
-                        "messages": [{"role": "system", "content": system_prompt}],
-                        "thinkingLevel": "minimal",
-                        "tools": [
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": "reschedule_delivery",
-                                    "description": "Trigger this to change the delivery date to tomorrow if the customer requests it.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "confirm_reschedule": {
-                                                "type": "boolean",
-                                                "description": "True if the customer agreed to reschedule"
-                                            }
-                                        },
-                                        "required": ["confirm_reschedule"]
-                                    }
-                                }
-                            }
-                        ]
+                        "messages": [{"role": "system", "content": system_prompt}]
                     },
                     "voice": {
                         "provider": "11labs",
@@ -141,7 +121,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     },
                     "summaryPrompt": summary_prompt,
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
-                    "serverMessages": ["end-of-call-report", "tool-calls"],
+                    "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
                     "endCallFunctionEnabled": True
                 },
