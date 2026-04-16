@@ -379,6 +379,9 @@ async def agent_voice_reply(
             "VALUES (:did, :data, :mime, 'agent', :_now) RETURNING id"
         ), {"did": d.id, "data": audio_bytes, "mime": audio_mime, "_now": _now()}).scalar()
 
+    # Commit now so the audio row exists when Twilio fetches the signed URL
+    db.commit()
+
     # Generate signed URL for Twilio to fetch
     import hashlib, hmac as _hmac, time as _time, base64
     secret = os.getenv("SESSION_SECRET", os.getenv("SECRET_KEY", ""))
@@ -405,6 +408,7 @@ async def agent_voice_reply(
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         client.messages.create(
             from_=TWILIO_WHATSAPP_NUMBER,
+            body="Voice note",
             media_url=[media_url],
             to=f"whatsapp:{phone}",
         )
