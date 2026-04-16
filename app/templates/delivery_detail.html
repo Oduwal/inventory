@@ -47,14 +47,28 @@
         <div id="note-chat" style="max-height:250px;overflow-y:auto;padding:8px;background:#0b141a;border-radius:8px;margin-top:4px;display:flex;flex-direction:column;gap:4px;">
           {% for line in d.note.split('\n') if line.strip() %}
             {% if line.strip().startswith('[Customer WhatsApp]') or line.strip().startswith('[WhatsApp Reply]') %}
+              {% set content = line.strip().split(']: ', 1)[-1] %}
               <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
                 <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">Customer</span>
-                {{ line.strip().split(']: ', 1)[-1] }}
+                {% if 'audio_id=' in content %}
+                  {% set aid = content.split('audio_id=')[1].split(']')[0] %}
+                  <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/voice-note/{{ aid }}" type="audio/ogg"></audio>
+                  {% set after_bracket = content.split(']:', 1)[-1].strip() if ']:' in content else '' %}
+                  {% if after_bracket %}<div style="font-size:11px;color:#8696a0;margin-top:2px;">{{ after_bracket }}</div>{% endif %}
+                {% else %}
+                  {{ content }}
+                {% endif %}
               </div>
             {% elif line.strip().startswith('[Agent ') %}
+              {% set agent_content = line.strip().split(']: ', 1)[-1] %}
               <div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
                 <span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">{{ line.strip().split(']: ', 1)[0][1:] }}</span>
-                {{ line.strip().split(']: ', 1)[-1] }}
+                {% if 'audio_id=' in agent_content %}
+                  {% set aid = agent_content.split('audio_id=')[1].split(']')[0] %}
+                  <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/voice-note/{{ aid }}" type="audio/ogg"></audio>
+                {% else %}
+                  {{ agent_content }}
+                {% endif %}
               </div>
             {% elif line.strip().startswith('[AI Reply]') %}
               <div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
@@ -86,6 +100,8 @@
           style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#1f2c34;color:#e9edef;font-size:13px;outline:none;"
           onkeydown="if(event.key==='Enter')sendAgentReply()">
         <button onclick="sendAgentReply()" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+        <button id="cust-mic-btn" onclick="toggleCustVoiceRec({{ d.id }})" style="padding:8px 12px;border-radius:20px;border:none;background:#1a2530;color:#e9edef;font-size:16px;cursor:pointer;" title="Record voice note">🎤</button>
+        <span id="cust-rec-indicator" class="voice-rec-indicator" style="display:none;color:#ef4444;font-size:11px;animation:pulse 1s infinite;">Recording...</span>
       </div>
       <script>
       async function sendAgentReply(){
@@ -100,6 +116,55 @@
           else{alert(d2.error||'Failed to send');}
         }catch(e){alert('Error: '+e);}
         finally{inp.disabled=false;}
+      }
+      </script>
+      <script>
+      /* ── Shared Voice Recorder ── */
+      let _mediaRecorder=null, _audioChunks=[], _recording=false;
+      async function _startRec(indicatorId){
+        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+        const mime=MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')?'audio/ogg;codecs=opus'
+          :MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'';
+        _mediaRecorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+        _audioChunks=[];
+        _mediaRecorder.ondataavailable=e=>_audioChunks.push(e.data);
+        _mediaRecorder.start();
+        _recording=true;
+        const el=document.getElementById(indicatorId);
+        if(el)el.style.display='inline';
+      }
+      function _stopRec(){
+        return new Promise(resolve=>{
+          _mediaRecorder.onstop=()=>{
+            const blob=new Blob(_audioChunks,{type:_mediaRecorder.mimeType});
+            _mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+            _recording=false;
+            document.querySelectorAll('.voice-rec-indicator').forEach(el=>el.style.display='none');
+            resolve(blob);
+          };
+          _mediaRecorder.stop();
+        });
+      }
+      /* ── Customer voice note toggle ── */
+      async function toggleCustVoiceRec(deliveryId){
+        if(_recording){
+          const blob=await _stopRec();
+          const btn=document.getElementById('cust-mic-btn');
+          btn.textContent='...';btn.disabled=true;
+          const fd=new FormData();
+          fd.append('delivery_id',deliveryId);
+          fd.append('audio',blob,'voice.ogg');
+          try{
+            const r=await fetch('/api/agent-voice-reply',{method:'POST',body:fd});
+            const d2=await r.json();
+            if(d2.ok){location.reload();}
+            else{alert(d2.error||'Failed to send voice note');}
+          }catch(e){alert('Error: '+e);}
+          finally{btn.textContent='🎤';btn.disabled=false;}
+        }else{
+          try{await _startRec('cust-rec-indicator');}
+          catch(e){alert('Microphone access denied');}
+        }
       }
       </script>
       {% endif %}
@@ -468,13 +533,23 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
       {% if c.direction == 'outbound' %}
         <div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">
           <span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">Agent → Group</span>
-          <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          {% if c.media_mime and c.media_mime.startswith('audio/') %}
+            <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/wa-media/{{ c.id }}" type="{{ c.media_mime }}"></audio>
+            {% if c.body and c.body != '[Voice Note]' %}<div style="font-size:11px;color:#8696a0;margin-top:2px;white-space:pre-wrap;">{{ c.body }}</div>{% endif %}
+          {% else %}
+            <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          {% endif %}
           <div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}</div>
         </div>
       {% else %}
         <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
           <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
-          <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          {% if c.media_mime and c.media_mime.startswith('audio/') %}
+            <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/wa-media/{{ c.id }}" type="{{ c.media_mime }}"></audio>
+            {% if c.body and c.body != '[Voice Note]' %}<div style="font-size:11px;color:#8696a0;margin-top:2px;white-space:pre-wrap;">{{ c.body }}</div>{% endif %}
+          {% else %}
+            <div style="white-space:pre-wrap;">{{ c.body }}</div>
+          {% endif %}
           <div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{{ c.created_at.strftime('%d %b %H:%M') if c.created_at else '' }}</div>
         </div>
       {% endif %}
@@ -508,6 +583,8 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#0b141a;color:#e9edef;font-size:13px;outline:none;"
         onkeydown="if(event.key==='Enter')sendWaUpdate({{ d.id }}, 'CUSTOM')">
       <button onclick="sendWaUpdate({{ d.id }}, 'CUSTOM')" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+      <button id="wa-mic-btn" onclick="toggleWaVoiceRec({{ d.id }})" style="padding:8px 12px;border-radius:20px;border:none;background:#1a2530;color:#e9edef;font-size:16px;cursor:pointer;" title="Record voice note">🎤</button>
+      <span id="wa-rec-indicator" class="voice-rec-indicator" style="display:none;color:#ef4444;font-size:11px;animation:pulse 1s infinite;">Recording...</span>
     </div>
     <div style="position:relative;">
       <input id="wa-mention-{{ d.id }}" type="text" autocomplete="off"
@@ -745,5 +822,37 @@ async function sendWaUpdate(deliveryId, issueType) {
             }, 4000);
         });
 }
+
+/* ── Seller group voice note toggle ── */
+async function toggleWaVoiceRec(deliveryId){
+    const statusEl=document.getElementById('wa-update-status');
+    if(_recording){
+        const blob=await _stopRec();
+        const btn=document.getElementById('wa-mic-btn');
+        btn.textContent='...';btn.disabled=true;
+        statusEl.style.color='#22c55e';
+        statusEl.textContent='Sending voice note...';
+        const fd=new FormData();
+        fd.append('delivery_id',deliveryId);
+        fd.append('audio',blob,'voice.ogg');
+        try{
+            const r=await fetch('/api/agent-voice-feedback',{method:'POST',body:fd});
+            const result=await r.json();
+            if(result.status==='success'){
+                statusEl.textContent='✅ Voice note sent to seller group!';
+            }else{
+                statusEl.style.color='#f87171';
+                statusEl.textContent='❌ '+(result.message||'Failed to send voice note');
+            }
+        }catch(e){
+            statusEl.style.color='#f87171';
+            statusEl.textContent='❌ Could not reach server.';
+        }finally{btn.textContent='🎤';btn.disabled=false;}
+    }else{
+        try{await _startRec('wa-rec-indicator');}
+        catch(e){alert('Microphone access denied');}
+    }
+}
 </script>
+<style>@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}</style>
 {% endblock %}

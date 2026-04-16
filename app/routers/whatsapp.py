@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Request, Depends, Form
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Request, Depends, Form, UploadFile, File
+from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTextResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
@@ -177,6 +177,8 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     _log.info("WhatsApp reply from %s: body='%s' media=%d", sender, body[:200], num_media)
 
     # Handle voice notes / audio messages
+    _voice_audio_bytes = b""
+    _voice_audio_mime = ""
     if num_media > 0 and not body:
         media_url = form_data.get("MediaUrl0", "")
         media_type = form_data.get("MediaContentType0", "")
@@ -184,10 +186,11 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
         if media_type and media_type.startswith("audio/"):
             loop = asyncio.get_event_loop()
-            body = await loop.run_in_executor(None, _transcribe_voice_note, media_url, media_type)
-            if body:
-                _log.info("Voice note transcribed: %s", body[:200])
-                body = f"[Voice Note]: {body}"
+            result = await loop.run_in_executor(None, _transcribe_voice_note, media_url, media_type)
+            transcription, _voice_audio_bytes, _voice_audio_mime = result
+            if transcription:
+                _log.info("Voice note transcribed: %s", transcription[:200])
+                body = f"[Voice Note]: {transcription}"
             else:
                 body = "[Voice Note]: (could not transcribe)"
         elif media_type and media_type.startswith("image/"):
@@ -246,6 +249,24 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     ai_reply = ai_result.get("reply", "")
     classification = ai_result.get("classification", "OTHER")
     summary = ai_result.get("summary", body[:100])
+
+    # Store voice note audio in voice_notes table if present
+    if _voice_audio_bytes:
+        is_sqlite = str(db.bind.url).startswith("sqlite")
+        if is_sqlite:
+            db.execute(text(
+                "INSERT INTO voice_notes (delivery_id, audio_data, audio_mime, source, created_at) "
+                "VALUES (:did, :data, :mime, 'customer', :_now)"
+            ), {"did": d.id, "data": _voice_audio_bytes, "mime": _voice_audio_mime or "audio/ogg", "_now": _now()})
+            vn_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        else:
+            vn_id = db.execute(text(
+                "INSERT INTO voice_notes (delivery_id, audio_data, audio_mime, source, created_at) "
+                "VALUES (:did, :data, :mime, 'customer', :_now) RETURNING id"
+            ), {"did": d.id, "data": _voice_audio_bytes, "mime": _voice_audio_mime or "audio/ogg", "_now": _now()}).scalar()
+        # Embed audio_id reference in the body so the template can render a player
+        body = body.replace("[Voice Note]:", f"[Voice Note audio_id={vn_id}]:", 1)
+        _log.info("Stored customer voice note id=%s for delivery %s", vn_id, d.id)
 
     # Log the conversation on delivery notes
     d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
@@ -317,37 +338,103 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
 
 # ─────────────────────────────────────────────────────────────────
+# AGENT VOICE NOTE → CUSTOMER  (agent records voice → Twilio sends to customer)
+# ─────────────────────────────────────────────────────────────────
+@router.post("/api/agent-voice-reply")
+async def agent_voice_reply(
+    request: Request,
+    delivery_id: int = Form(...),
+    audio: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    user = get_current_user(db, request)
+    if not user:
+        return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
+
+    d = db.get(Delivery, int(delivery_id))
+    if not d:
+        return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not d.customer_phone:
+        return JSONResponse({"ok": False, "error": "No customer phone number"}, status_code=400)
+
+    audio_bytes = await audio.read()
+    if len(audio_bytes) > 5_000_000:
+        return JSONResponse({"ok": False, "error": "Voice note too large (max 5MB)"}, status_code=400)
+    if not audio_bytes:
+        return JSONResponse({"ok": False, "error": "Empty audio file"}, status_code=400)
+
+    audio_mime = audio.content_type or "audio/ogg"
+
+    # Store in voice_notes table
+    is_sqlite = str(db.bind.url).startswith("sqlite")
+    if is_sqlite:
+        db.execute(text(
+            "INSERT INTO voice_notes (delivery_id, audio_data, audio_mime, source, created_at) "
+            "VALUES (:did, :data, :mime, 'agent', :_now)"
+        ), {"did": d.id, "data": audio_bytes, "mime": audio_mime, "_now": _now()})
+        vn_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+    else:
+        vn_id = db.execute(text(
+            "INSERT INTO voice_notes (delivery_id, audio_data, audio_mime, source, created_at) "
+            "VALUES (:did, :data, :mime, 'agent', :_now) RETURNING id"
+        ), {"did": d.id, "data": audio_bytes, "mime": audio_mime, "_now": _now()}).scalar()
+
+    # Generate signed URL for Twilio to fetch
+    import hashlib, hmac as _hmac, time as _time, base64
+    secret = os.getenv("SESSION_SECRET", os.getenv("SECRET_KEY", ""))
+    exp = str(int(_time.time()) + 300)  # 5 minutes
+    sig = _hmac.new(secret.encode(), f"{vn_id}:{exp}".encode(), hashlib.sha256).hexdigest()
+
+    # Build public URL for Twilio
+    base_url = os.getenv("PUBLIC_URL", "").rstrip("/")
+    if not base_url:
+        host = request.headers.get("host", "")
+        scheme = request.headers.get("x-forwarded-proto", "https")
+        base_url = f"{scheme}://{host}"
+    media_url = f"{base_url}/api/voice-note/{vn_id}?sig={sig}&exp={exp}"
+
+    # Send via Twilio with media
+    from app.utils import format_nigerian_phone
+    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    if not phone:
+        return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
+
+    from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
+    try:
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client.messages.create(
+            from_=TWILIO_WHATSAPP_NUMBER,
+            media_url=[media_url],
+            to=f"whatsapp:{phone}",
+        )
+    except Exception as e:
+        _log.error("Failed to send voice note via Twilio: %s", e)
+        return JSONResponse({"ok": False, "error": f"Twilio error: {e}"}, status_code=502)
+
+    # Log on delivery notes
+    agent_name = user.full_name or user.username
+    existing_note = d.note or ""
+    d.note = (existing_note + f"\n[Agent {agent_name}]: [Voice Note audio_id={vn_id}]").strip()
+    db.commit()
+
+    _log.info("Agent %s sent voice note to delivery %s customer", agent_name, delivery_id)
+    return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────────────────────────
 # VOICE NOTE TRANSCRIPTION (Gemini)
 # ─────────────────────────────────────────────────────────────────
-def _transcribe_voice_note(media_url: str, media_type: str) -> str:
-    """Download audio from Twilio and transcribe via Gemini."""
+def _transcribe_audio_bytes(audio_bytes: bytes, media_type: str) -> str:
+    """Transcribe raw audio bytes via Gemini. Reusable for both Twilio and Baileys audio."""
     if not _GEMINI_KEY:
         _log.warning("No GEMINI_API_KEY — cannot transcribe voice note")
         return ""
-
-    # Twilio requires auth to download media
-    from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
-    try:
-        audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15, follow_redirects=True)
-        if audio_resp.status_code != 200:
-            _log.warning("Failed to download voice note: HTTP %s", audio_resp.status_code)
-            return ""
-        audio_bytes = audio_resp.content
-        if len(audio_bytes) > 10_000_000:  # 10MB limit
-            _log.warning("Voice note too large: %d bytes", len(audio_bytes))
-            return ""
-    except Exception as e:
-        _log.error("Error downloading voice note: %s", e)
-        return ""
-
     import base64
     audio_b64 = base64.b64encode(audio_bytes).decode()
-
-    # Map common Twilio media types to Gemini mime types
     mime_map = {"audio/ogg": "audio/ogg", "audio/mpeg": "audio/mpeg", "audio/amr": "audio/amr",
                 "audio/aac": "audio/aac", "audio/mp4": "audio/mp4", "audio/ogg; codecs=opus": "audio/ogg"}
     mime_type = mime_map.get(media_type, media_type.split(";")[0].strip())
-
     try:
         resp = httpx.post(
             f"{_GEMINI_URL}?key={_GEMINI_KEY}",
@@ -368,6 +455,31 @@ def _transcribe_voice_note(media_url: str, media_type: str) -> str:
     except Exception as e:
         _log.error("Gemini voice transcription failed: %s", e)
         return ""
+
+
+def _transcribe_voice_note(media_url: str, media_type: str) -> tuple:
+    """Download audio from Twilio and transcribe via Gemini.
+    Returns (transcription_text, audio_bytes, mime_type)."""
+    if not _GEMINI_KEY:
+        _log.warning("No GEMINI_API_KEY — cannot transcribe voice note")
+        return ("", b"", "")
+
+    from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
+    try:
+        audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15, follow_redirects=True)
+        if audio_resp.status_code != 200:
+            _log.warning("Failed to download voice note: HTTP %s", audio_resp.status_code)
+            return ("", b"", "")
+        audio_bytes = audio_resp.content
+        if len(audio_bytes) > 10_000_000:
+            _log.warning("Voice note too large: %d bytes", len(audio_bytes))
+            return ("", b"", "")
+    except Exception as e:
+        _log.error("Error downloading voice note: %s", e)
+        return ("", b"", "")
+
+    transcription = _transcribe_audio_bytes(audio_bytes, media_type)
+    return (transcription, audio_bytes, media_type)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -527,6 +639,54 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
 
 
 # ─────────────────────────────────────────────────────────────────
+# SERVE MEDIA (voice notes / future images) from wa_comments & voice_notes
+# ─────────────────────────────────────────────────────────────────
+@router.get("/api/wa-media/{comment_id}")
+async def serve_wa_media(comment_id: int, request: Request, db: Session = Depends(get_db)):
+    """Serve audio/media bytes from wa_comments for seller group chat playback."""
+    user = get_current_user(db, request)
+    if not user:
+        return PlainTextResponse("Unauthorized", status_code=401)
+    row = db.execute(
+        text("SELECT media_data, media_mime FROM wa_comments WHERE id = :cid"),
+        {"cid": comment_id}
+    ).first()
+    if not row or not row.media_data:
+        return PlainTextResponse("Not found", status_code=404)
+    return Response(content=row.media_data, media_type=row.media_mime or "audio/ogg",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/api/voice-note/{note_id}")
+async def serve_voice_note(note_id: int, request: Request, db: Session = Depends(get_db)):
+    """Serve audio from voice_notes table for customer feedback playback.
+    Auth: session cookie OR signed URL (?sig=<hmac>&exp=<ts>) for Twilio fetching."""
+    import hashlib, hmac as _hmac, time
+    user = get_current_user(db, request)
+    if not user:
+        # Check signed URL fallback (for Twilio media fetch)
+        sig = request.query_params.get("sig", "")
+        exp = request.query_params.get("exp", "")
+        secret = os.getenv("SESSION_SECRET", os.getenv("SECRET_KEY", ""))
+        if sig and exp and secret:
+            expected = _hmac.new(secret.encode(), f"{note_id}:{exp}".encode(), hashlib.sha256).hexdigest()
+            if _hmac.compare_digest(sig, expected) and float(exp) > time.time():
+                pass  # valid signed URL
+            else:
+                return PlainTextResponse("Unauthorized", status_code=401)
+        else:
+            return PlainTextResponse("Unauthorized", status_code=401)
+    row = db.execute(
+        text("SELECT audio_data, audio_mime FROM voice_notes WHERE id = :nid"),
+        {"nid": note_id}
+    ).first()
+    if not row or not row.audio_data:
+        return PlainTextResponse("Not found", status_code=404)
+    return Response(content=row.audio_data, media_type=row.audio_mime or "audio/ogg",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+# ─────────────────────────────────────────────────────────────────
 # GEMINI MULTI-TURN CLASSIFICATION (runs in threadpool so it doesn't
 # block the event loop — Gemini HTTP call can take 2-5s)
 # ─────────────────────────────────────────────────────────────────
@@ -628,6 +788,103 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
             return JSONResponse(resp.json())
     except Exception as e:
         return JSONResponse({"error": str(e), "participants": []})
+
+
+# ─────────────────────────────────────────────────────────────────
+# AGENT VOICE NOTE → SELLER GROUP  (agent records voice → bot sends to group)
+# ─────────────────────────────────────────────────────────────────
+@router.post("/api/agent-voice-feedback")
+async def agent_voice_feedback(
+    request: Request,
+    delivery_id: int = Form(...),
+    audio: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    user = require_login_or_redirect(db, request)
+    if isinstance(user, RedirectResponse):
+        return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
+
+    delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
+    if not delivery:
+        return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+
+    from app.feature_toggles import is_feature_on
+    if not is_feature_on(db, "whatsapp_seller_enabled"):
+        return JSONResponse({"status": "error", "message": "Seller WhatsApp messaging is currently disabled."}, status_code=403)
+
+    audio_bytes = await audio.read()
+    if len(audio_bytes) > 5_000_000:
+        return JSONResponse({"status": "error", "message": "Voice note too large (max 5MB)"}, status_code=400)
+    if not audio_bytes:
+        return JSONResponse({"status": "error", "message": "Empty audio file"}, status_code=400)
+
+    audio_mime = audio.content_type or "audio/ogg"
+
+    # Resolve target group (same logic as send_agent_feedback)
+    try:
+        cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
+    except (ValueError, TypeError):
+        cgm = {}
+    cat = db.execute(
+        select(Item.category).join(DeliveryItem, DeliveryItem.item_id == Item.id)
+        .where(DeliveryItem.delivery_id == delivery.id).limit(1)
+    ).scalar()
+    target_group = cgm.get(cat, "") if cat else ""
+    if not target_group:
+        known_groups = set(cgm.values())
+        if known_groups:
+            target_group = list(known_groups)[0]
+
+    if not target_group:
+        return JSONResponse({"status": "error", "message": "No WhatsApp group configured"}, status_code=400)
+
+    # Send to bot
+    import base64
+    bot_url = _get_bot_url(target_group)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                bot_url + "/send-group-voice",
+                json={
+                    "orderId": str(delivery.id),
+                    "audioBase64": base64.b64encode(audio_bytes).decode(),
+                    "targetGroupJid": target_group,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        _log.error("Failed to send voice note to bot: %s", e)
+        return JSONResponse({"status": "error", "message": f"Bot offline: {e}"}, status_code=502)
+
+    # Store in wa_comments
+    is_sqlite = str(db.bind.url).startswith("sqlite")
+    if is_sqlite:
+        db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, media_data, media_mime, created_at) "
+            "VALUES (:did, 'outbound', 'Agent', :body, :media_data, :media_mime, :_now)"
+        ), {"did": delivery.id, "body": "[Voice Note]", "media_data": audio_bytes, "media_mime": audio_mime, "_now": _now()})
+        new_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+    else:
+        new_id = db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, media_data, media_mime, created_at) "
+            "VALUES (:did, 'outbound', 'Agent', :body, :media_data, :media_mime, :_now) RETURNING id"
+        ), {"did": delivery.id, "body": "[Voice Note]", "media_data": audio_bytes, "media_mime": audio_mime, "_now": _now()}).scalar()
+    db.commit()
+
+    # SSE broadcast
+    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+    fragment = (
+        f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
+        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">Agent → Group</span>'
+        f'<audio controls preload="none" style="max-width:100%;height:36px;">'
+        f'<source src="/api/wa-media/{new_id}" type="{html.escape(audio_mime)}"></audio>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    )
+    _sse_broadcast(delivery.id, fragment)
+    return JSONResponse({"status": "success", "message": "Voice note sent to group!"})
 
 
 # AGENT FEEDBACK  (agent clicks a button → bot sends to group)
@@ -826,8 +1083,30 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     sender              = data.get("sender_phone", "")
     sender_name         = data.get("sender_name", "").strip()
     group_jid           = data.get("groupJid", "").strip()
+    audio_b64_in        = data.get("audio_b64", "").strip()
+    audio_mime_in       = data.get("audio_mime", "").strip()
 
-    if not reply_text:
+    # Decode inbound voice note if present
+    import base64 as _b64
+    inbound_audio_bytes = b""
+    if audio_b64_in:
+        try:
+            inbound_audio_bytes = _b64.b64decode(audio_b64_in)
+        except Exception:
+            inbound_audio_bytes = b""
+
+    # Transcribe voice note via Gemini if we have audio but no text
+    if inbound_audio_bytes and not reply_text:
+        loop = asyncio.get_event_loop()
+        transcription = await loop.run_in_executor(
+            None, _transcribe_audio_bytes, inbound_audio_bytes, audio_mime_in or "audio/ogg"
+        )
+        reply_text = f"[Voice Note]: {transcription}" if transcription else "[Voice Note]: (could not transcribe)"
+    elif inbound_audio_bytes and reply_text:
+        # Voice note with caption — keep text as-is, audio will be stored
+        pass
+
+    if not reply_text and not inbound_audio_bytes:
         return {"status": "ignored"}
 
     _log = logging.getLogger("wa_webhook")
@@ -958,10 +1237,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     # Use friendly name for display, fall back to phone digits
     display_sender = sender_name or sender.replace("@s.whatsapp.net", "").replace("@lid", "")
-    db.execute(text(
-        "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, created_at) "
-        "VALUES (:did, 'inbound', :sender, :body, :clf, :_now)"
-    ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json, "_now": _now()})
+    is_sqlite = str(db.bind.url).startswith("sqlite")
+    if is_sqlite:
+        db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now)"
+        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()})
+        new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+    else:
+        new_comment_id = db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now) RETURNING id"
+        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()}).scalar()
     db.commit()
 
     # SSE — push fragment to any open delivery detail tabs
@@ -969,11 +1258,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     action_badge = ' <span style="color:#f59e0b;font-size:10px;">⚠ ACTION</span>' if ai.get("action_required") else ""
     _sse_sender = html.escape(display_sender or "Seller")
     _sse_body   = html.escape(comment_body)
+    audio_html = ""
+    if inbound_audio_bytes and new_comment_id:
+        audio_html = (
+            f'<audio controls preload="none" style="max-width:100%;height:36px;">'
+            f'<source src="/api/wa-media/{new_comment_id}" type="{html.escape(audio_mime_in or "audio/ogg")}"></audio>'
+        )
     fragment = (
         f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
         f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
         f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">'
         f'{_sse_sender}{action_badge}</span>'
+        f'{audio_html}'
         f'<div style="white-space:pre-wrap;">{_sse_body}</div>'
         f'<div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{now_str}</div>'
         f'</div>'

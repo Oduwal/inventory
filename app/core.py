@@ -703,6 +703,9 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_wa_comments_delivery_id ON wa_comments (delivery_id)")
         # Structured Gemini classification stored as JSON per inbound comment
         _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS classification TEXT DEFAULT NULL")
+        # Media columns for voice notes (and future image support)
+        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_data BYTEA NULL")
+        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_mime VARCHAR(50) NULL")
 
         # Durable mapping of every bot-sent WhatsApp message_id → delivery order_id.
         # This table survives bot restarts; Python does O(1) lookup to route replies.
@@ -730,6 +733,18 @@ def ensure_schema() -> None:
             customer_phone  TEXT DEFAULT '',
             created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
+
+        # Voice notes storage for customer feedback chat (Delivery.note is text-only)
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS voice_notes (
+            id          """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            delivery_id INTEGER NOT NULL REFERENCES deliveries(id) ON DELETE CASCADE,
+            audio_data  BYTEA NOT NULL,
+            audio_mime  VARCHAR(50) NOT NULL DEFAULT 'audio/ogg',
+            duration    INTEGER DEFAULT 0,
+            source      VARCHAR(20) NOT NULL DEFAULT 'customer',
+            created_at  TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_voice_notes_delivery_id ON voice_notes (delivery_id)")
 
         # [SEC-2] Rate limiter table — survives redeploys
         _ddl(conn, """CREATE TABLE IF NOT EXISTS rate_limit_hits (

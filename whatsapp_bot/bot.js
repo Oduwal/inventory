@@ -15,6 +15,7 @@ import makeWASocket, {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     Browsers,
+    downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 import P from 'pino';
 import express from 'express';
@@ -277,9 +278,31 @@ async function handleInbound(msg) {
     const sender                = msg.key.participant || jid;
     const msgId                 = msg.key.id;
 
-    if (!text) return;
+    // Detect voice note (audioMessage with ptt=true)
+    let audioB64 = '';
+    let audioMime = '';
+    const m = msg.message || {};
+    const audioMsg = m.audioMessage
+        || m.ephemeralMessage?.message?.audioMessage
+        || m.viewOnceMessage?.message?.audioMessage;
+    if (audioMsg && audioMsg.ptt) {
+        try {
+            console.log(`🎤 Voice note detected — downloading...`);
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, {
+                logger: P({ level: 'silent' }),
+                reuploadRequest: sock.updateMediaMessage,
+            });
+            audioB64 = buffer.toString('base64');
+            audioMime = audioMsg.mimetype || 'audio/ogg; codecs=opus';
+            console.log(`🎤 Voice note downloaded: ${buffer.length} bytes, mime: ${audioMime}`);
+        } catch (dlErr) {
+            console.log(`⚠️ Failed to download voice note: ${dlErr.message}`);
+        }
+    }
+
+    if (!text && !audioB64) return;
     const _pushName = msg.pushName || '';
-    console.log(`📨 Group msg from ${sender.split('@')[0]} (pushName: "${_pushName}"): "${text.slice(0, 80)}"`);
+    console.log(`📨 Group msg from ${sender.split('@')[0]} (pushName: "${_pushName}"): "${(text || '[Voice Note]').slice(0, 80)}"`);
 
     if (quotedId) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
@@ -291,10 +314,18 @@ async function handleInbound(msg) {
             sender_phone:        sender,
             sender_name:         senderName,
             groupJid:            jid,
+            audio_b64:           audioB64,
+            audio_mime:          audioMime,
         }, {
-            timeout: 10000,
+            timeout: 30000,
             headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
         }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
+        return;
+    }
+
+    // Voice-only messages without a quote — still cache if they have text with customer info
+    if (!text) {
+        console.log(`🎤 Voice note without quote or text — skipping cache`);
         return;
     }
 
@@ -312,7 +343,7 @@ async function handleInbound(msg) {
         sender_name:     senderName,
         customer_name:   info.customer_name,
         customer_phone:  info.customer_phone,
-        groupJid:        jid,   // already normalised @lid → @g.us above
+        groupJid:        jid,
     }, {
         timeout: 8000,
         headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
@@ -446,7 +477,7 @@ async function connectToWhatsApp() {
 // EXPRESS API
 // ─────────────────────────────────────────────
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // QR code page — auto-refreshes every 30s
 app.get('/qr', async (_req, res) => {
@@ -564,6 +595,79 @@ app.post('/send-group-feedback', async (req, res) => {
         res.json({ success: true, message_id: msgId });
     } catch (e) {
         console.error('❌ Send error:', e.message);
+        if (!clientReady) {
+            setTimeout(connectToWhatsApp, 2000);
+        }
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+/**
+ * POST /send-group-voice
+ * Body (JSON):
+ *   orderId          string  — delivery ID (for logging)
+ *   audioBase64      string  — base64-encoded audio (OGG/Opus)
+ *   targetGroupJid?  string  — group to send to
+ *   quoteMessageId?  string  — Baileys ID to quote
+ *   quoteMessageBody? string — body of quoted message
+ *   quoteMessageSender? string — JID of original sender
+ *
+ * Response: { success, message_id }
+ */
+app.post('/send-group-voice', async (req, res) => {
+    const { orderId, audioBase64, targetGroupJid, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe } = req.body;
+
+    if (!orderId || !audioBase64) {
+        return res.status(400).json({ success: false, error: 'orderId and audioBase64 are required' });
+    }
+
+    if (!clientReady || !sock) {
+        return res.status(503).json({ success: false, error: 'Bot not ready — try again shortly.' });
+    }
+
+    console.log(`\n🎤 Sending voice note for Order #${orderId}...`);
+    console.log(`   → group: ${targetGroupJid || GROUP_JID || 'NONE'}`);
+
+    try {
+        const audioBuffer = Buffer.from(audioBase64, 'base64');
+        const jid = targetGroupJid || GROUP_JID;
+
+        // Typing indicator
+        try {
+            await sock.sendPresenceUpdate('recording', jid);
+            const ms = 1000 + Math.random() * 1500;
+            await new Promise(r => setTimeout(r, ms));
+            await sock.sendPresenceUpdate('paused', jid);
+        } catch (presenceErr) {
+            console.log(`⚠️ Presence update failed: ${presenceErr.message}`);
+        }
+
+        // Build quote options if present
+        const opts = {};
+        if (quoteMessageId && quoteMessageBody) {
+            let participantId = quoteMessageSender || sock.user?.id || '';
+            opts.quoted = {
+                key: {
+                    remoteJid:   jid,
+                    fromMe:      quoteMessageFromMe || !quoteMessageSender,
+                    id:          quoteMessageId,
+                    participant: participantId,
+                },
+                message: { conversation: quoteMessageBody },
+            };
+        }
+
+        const result = await sock.sendMessage(jid, {
+            audio: audioBuffer,
+            ptt: true,
+            mimetype: 'audio/ogg; codecs=opus',
+        }, opts);
+
+        const msgId = result.key.id;
+        console.log(`✅ Voice note sent (msg_id: ${msgId?.slice(0, 20)}...)`);
+        res.json({ success: true, message_id: msgId });
+    } catch (e) {
+        console.error('❌ Voice send error:', e.message);
         if (!clientReady) {
             setTimeout(connectToWhatsApp, 2000);
         }
