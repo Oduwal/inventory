@@ -94,34 +94,13 @@
       </div>
       <script>var nc=document.getElementById('note-chat');if(nc)nc.scrollTop=nc.scrollHeight;</script>
       {% endif %}
-      {% if d.customer_phone %}
-      <div style="margin-top:8px;display:flex;gap:6px;">
-        <input id="agent-reply-input" type="text" placeholder="Reply to customer via WhatsApp..."
-          style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#1f2c34;color:#e9edef;font-size:13px;outline:none;"
-          onkeydown="if(event.key==='Enter')sendAgentReply()">
-        <button onclick="sendAgentReply()" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
-        <button id="cust-mic-btn" onclick="toggleCustVoiceRec({{ d.id }})" style="padding:8px 12px;border-radius:20px;border:none;background:#1a2530;color:#e9edef;font-size:16px;cursor:pointer;" title="Record voice note">🎤</button>
-        <span id="cust-rec-indicator" class="voice-rec-indicator" style="display:none;color:#ef4444;font-size:11px;animation:pulse 1s infinite;">Recording...</span>
-      </div>
       <script>
-      async function sendAgentReply(){
-        const inp=document.getElementById('agent-reply-input');
-        const msg=inp.value.trim();
-        if(!msg)return;
-        inp.disabled=true;
-        try{
-          const r=await fetch('/api/agent-whatsapp-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delivery_id:{{d.id}},message:msg})});
-          const d2=await r.json();
-          if(d2.ok){inp.value='';location.reload();}
-          else{alert(d2.error||'Failed to send');}
-        }catch(e){alert('Error: '+e);}
-        finally{inp.disabled=false;}
-      }
-      </script>
-      <script>
-      /* ── Shared Voice Recorder ── */
+      /* ── Shared Voice Recorder (always loaded, used by both chat areas) ── */
       let _mediaRecorder=null, _audioChunks=[], _recording=false;
       async function _startRec(indicatorId){
+        if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+          throw new Error('Browser does not support audio recording');
+        }
         const stream=await navigator.mediaDevices.getUserMedia({audio:true});
         const mime=MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')?'audio/ogg;codecs=opus'
           :MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'';
@@ -145,7 +124,30 @@
           _mediaRecorder.stop();
         });
       }
-      /* ── Customer voice note toggle ── */
+      </script>
+      {% if d.customer_phone %}
+      <div style="margin-top:8px;display:flex;gap:6px;">
+        <input id="agent-reply-input" type="text" placeholder="Reply to customer via WhatsApp..."
+          style="flex:1;padding:8px 12px;border-radius:20px;border:1px solid rgba(255,255,255,.15);background:#1f2c34;color:#e9edef;font-size:13px;outline:none;"
+          onkeydown="if(event.key==='Enter')sendAgentReply()">
+        <button onclick="sendAgentReply()" style="padding:8px 16px;border-radius:20px;border:none;background:#005c4b;color:#fff;font-size:13px;cursor:pointer;white-space:nowrap;">Send ➤</button>
+        <button id="cust-mic-btn" onclick="toggleCustVoiceRec({{ d.id }})" style="padding:8px 12px;border-radius:20px;border:none;background:#1a2530;color:#e9edef;font-size:16px;cursor:pointer;" title="Record voice note">🎤</button>
+        <span id="cust-rec-indicator" class="voice-rec-indicator" style="display:none;color:#ef4444;font-size:11px;animation:pulse 1s infinite;">Recording...</span>
+      </div>
+      <script>
+      async function sendAgentReply(){
+        const inp=document.getElementById('agent-reply-input');
+        const msg=inp.value.trim();
+        if(!msg)return;
+        inp.disabled=true;
+        try{
+          const r=await fetch('/api/agent-whatsapp-reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delivery_id:{{d.id}},message:msg})});
+          const d2=await r.json();
+          if(d2.ok){inp.value='';location.reload();}
+          else{alert(d2.error||'Failed to send');}
+        }catch(e){alert('Error: '+e);}
+        finally{inp.disabled=false;}
+      }
       async function toggleCustVoiceRec(deliveryId){
         if(_recording){
           const blob=await _stopRec();
@@ -163,7 +165,7 @@
           finally{btn.textContent='🎤';btn.disabled=false;}
         }else{
           try{await _startRec('cust-rec-indicator');}
-          catch(e){alert('Microphone access denied');}
+          catch(e){alert('Mic error: '+e.message+'. Make sure you are on HTTPS and have granted microphone permission.');}
         }
       }
       </script>
@@ -850,7 +852,7 @@ async function toggleWaVoiceRec(deliveryId){
         }finally{btn.textContent='🎤';btn.disabled=false;}
     }else{
         try{await _startRec('wa-rec-indicator');}
-        catch(e){alert('Microphone access denied');}
+        catch(e){alert('Mic error: '+e.message+'. Make sure you are on HTTPS and have granted microphone permission.');}
     }
 }
 </script>
