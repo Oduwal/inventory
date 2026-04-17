@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTe
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-import json, os, logging, re, asyncio, httpx
+import json, os, logging, re, asyncio, httpx, subprocess, tempfile
 from app.core import *
 from app.models import *
 from app.security import *
@@ -338,6 +338,50 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
 
 # ─────────────────────────────────────────────────────────────────
+# AUDIO CONVERSION  (WebM/Opus → OGG/Opus via ffmpeg)
+# ─────────────────────────────────────────────────────────────────
+def _convert_to_ogg_opus(audio_bytes: bytes, source_mime: str) -> tuple[bytes, str]:
+    """Convert audio bytes to OGG/Opus format using ffmpeg.
+    Returns (converted_bytes, 'audio/ogg'). Falls back to original if ffmpeg
+    is not available or conversion fails."""
+    # If already OGG, no conversion needed
+    if source_mime in ("audio/ogg", "audio/ogg;codecs=opus") or audio_bytes[:4] == b'OggS':
+        return audio_bytes, "audio/ogg"
+    in_path = out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as inf:
+            inf.write(audio_bytes)
+            in_path = inf.name
+        out_path = in_path.replace(".webm", ".ogg")
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", in_path, "-c:a", "libopus", "-b:a", "48k", out_path],
+            capture_output=True, timeout=15
+        )
+        if result.returncode == 0 and os.path.exists(out_path):
+            with open(out_path, "rb") as f:
+                converted = f.read()
+            _log.info("Audio converted: %s (%d bytes) -> ogg/opus (%d bytes)",
+                      source_mime, len(audio_bytes), len(converted))
+            return converted, "audio/ogg"
+        else:
+            _log.warning("ffmpeg conversion failed: %s", result.stderr[:500] if result.stderr else "unknown")
+            return audio_bytes, "audio/ogg"
+    except FileNotFoundError:
+        _log.warning("ffmpeg not found, serving raw audio as audio/ogg")
+        return audio_bytes, "audio/ogg"
+    except Exception as e:
+        _log.warning("Audio conversion error: %s", e)
+        return audio_bytes, "audio/ogg"
+    finally:
+        for p in [in_path, out_path]:
+            if p:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+
+# ─────────────────────────────────────────────────────────────────
 # AGENT VOICE NOTE → CUSTOMER  (agent records voice → Twilio sends to customer)
 # ─────────────────────────────────────────────────────────────────
 @router.post("/api/agent-voice-reply")
@@ -363,15 +407,10 @@ async def agent_voice_reply(
     if not audio_bytes:
         return JSONResponse({"ok": False, "error": "Empty audio file"}, status_code=400)
 
-    # Normalize MIME — WhatsApp only accepts audio/ogg, not webm or codec suffixes
+    # Convert to proper OGG/Opus — browsers record WebM but WhatsApp requires real OGG container
     raw_mime = audio.content_type or "audio/ogg"
-    if "ogg" in raw_mime or "opus" in raw_mime:
-        audio_mime = "audio/ogg"
-    elif "webm" in raw_mime:
-        audio_mime = "audio/ogg"  # webm+opus is essentially ogg+opus, WhatsApp accepts it
-    else:
-        audio_mime = "audio/ogg"
-    _log.info("Agent voice note: raw_mime=%s normalized=%s size=%d", raw_mime, audio_mime, len(audio_bytes))
+    audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
+    _log.info("Agent voice note: raw_mime=%s final=%s size=%d", raw_mime, audio_mime, len(audio_bytes))
 
     # Store in voice_notes table
     is_sqlite = str(db.bind.url).startswith("sqlite")
@@ -697,15 +736,11 @@ async def serve_voice_note(note_id: int, request: Request, db: Session = Depends
     ).first()
     if not row or not row.audio_data:
         return PlainTextResponse("Not found", status_code=404)
-    # Normalize MIME for Twilio/WhatsApp compatibility — they need clean audio/ogg
-    mime = row.audio_mime or "audio/ogg"
-    if "ogg" in mime or "opus" in mime:
-        mime = "audio/ogg"
-    elif "webm" in mime:
-        mime = "audio/webm"
+    mime = "audio/ogg"  # Always serve as audio/ogg — stored data is already converted
     return Response(content=row.audio_data, media_type=mime,
                     headers={"Cache-Control": "public, max-age=3600",
-                             "Content-Length": str(len(row.audio_data))})
+                             "Content-Length": str(len(row.audio_data)),
+                             "Content-Disposition": f"inline; filename=voice_{note_id}.ogg"})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -840,7 +875,9 @@ async def agent_voice_feedback(
     if not audio_bytes:
         return JSONResponse({"status": "error", "message": "Empty audio file"}, status_code=400)
 
-    audio_mime = audio.content_type or "audio/ogg"
+    # Convert to OGG/Opus for WhatsApp compatibility and web playback
+    raw_mime = audio.content_type or "audio/ogg"
+    audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
     # Resolve target group (same logic as send_agent_feedback)
     try:
