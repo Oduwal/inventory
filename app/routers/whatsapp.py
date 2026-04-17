@@ -363,7 +363,15 @@ async def agent_voice_reply(
     if not audio_bytes:
         return JSONResponse({"ok": False, "error": "Empty audio file"}, status_code=400)
 
-    audio_mime = audio.content_type or "audio/ogg"
+    # Normalize MIME — WhatsApp only accepts audio/ogg, not webm or codec suffixes
+    raw_mime = audio.content_type or "audio/ogg"
+    if "ogg" in raw_mime or "opus" in raw_mime:
+        audio_mime = "audio/ogg"
+    elif "webm" in raw_mime:
+        audio_mime = "audio/ogg"  # webm+opus is essentially ogg+opus, WhatsApp accepts it
+    else:
+        audio_mime = "audio/ogg"
+    _log.info("Agent voice note: raw_mime=%s normalized=%s size=%d", raw_mime, audio_mime, len(audio_bytes))
 
     # Store in voice_notes table
     is_sqlite = str(db.bind.url).startswith("sqlite")
@@ -689,8 +697,15 @@ async def serve_voice_note(note_id: int, request: Request, db: Session = Depends
     ).first()
     if not row or not row.audio_data:
         return PlainTextResponse("Not found", status_code=404)
-    return Response(content=row.audio_data, media_type=row.audio_mime or "audio/ogg",
-                    headers={"Cache-Control": "public, max-age=3600"})
+    # Normalize MIME for Twilio/WhatsApp compatibility — they need clean audio/ogg
+    mime = row.audio_mime or "audio/ogg"
+    if "ogg" in mime or "opus" in mime:
+        mime = "audio/ogg"
+    elif "webm" in mime:
+        mime = "audio/webm"
+    return Response(content=row.audio_data, media_type=mime,
+                    headers={"Cache-Control": "public, max-age=3600",
+                             "Content-Length": str(len(row.audio_data))})
 
 
 # ─────────────────────────────────────────────────────────────────
