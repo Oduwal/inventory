@@ -402,16 +402,19 @@ async def agent_voice_reply(
     if not phone:
         return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
 
+    _log.info("Voice note media_url for Twilio: %s", media_url)
+
     from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
     try:
         from twilio.rest import Client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(
+        tw_msg = client.messages.create(
             from_=TWILIO_WHATSAPP_NUMBER,
             body="Voice note",
             media_url=[media_url],
             to=f"whatsapp:{phone}",
         )
+        _log.info("Twilio voice msg created: sid=%s status=%s", tw_msg.sid, tw_msg.status)
     except Exception as e:
         _log.error("Failed to send voice note via Twilio: %s", e)
         return JSONResponse({"ok": False, "error": f"Twilio error: {e}"}, status_code=502)
