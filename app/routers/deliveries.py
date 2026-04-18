@@ -234,6 +234,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
     _items_with_stock = get_items_with_stock(db, branch_id=effective_branch_id)
     items = [it for it, _ in _items_with_stock]
     csrf_token = get_csrf_token(request)
+    form_token = generate_form_token(request)
     items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": float(it.selling_price or 0), "stock": int(stk)} for it, stk in _items_with_stock]
     return tpl(request, "parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
@@ -242,6 +243,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
         "items_json": items_json,
         "branches": branches, "selected_branch_id": effective_branch_id,
         "today": date.today().isoformat(), "csrf_token": csrf_token,
+        "form_token": form_token,
     })
 
 
@@ -291,10 +293,12 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
                 "note": r[4] or "", "item_name": r[5],
             })
     csrf_token = get_csrf_token(request)
+    form_token = generate_form_token(request)
     return tpl(request, "delivery_new.html", {
         "request": request, "agents": agents, "items": items, "user": user,
         "active": "deliveries_new", "branches": branches, "selected_branch_id": branch_id,
         "today": date.today().isoformat(), "csrf_token": csrf_token,
+        "form_token": form_token,
         "pending_assignments": pending_assignments,
     })
 
@@ -314,6 +318,7 @@ async def delivery_create(
     line_amount: list[float] = Form(default=[]),
     assignment_ids: list[int] = Form(default=[]),
     csrf_token: str = Form(""),
+    form_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -321,6 +326,9 @@ async def delivery_create(
         return user_or
     user = user_or
     verify_csrf_token(request, csrf_token)
+    # [SEC] Idempotency — reject duplicate form submissions
+    if not consume_form_token(request, form_token):
+        return redirect("/deliveries?error=Duplicate+submission+detected.+Please+try+again.")
     if is_supervisor(user):
         # Supervisor creates unassigned order for a specific branch
         # Find the admin of that branch to assign, or leave agent_id as None

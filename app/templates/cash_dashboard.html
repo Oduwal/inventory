@@ -194,6 +194,7 @@ function closeDrawer() {
   <div class="ec-hd"><span class="ec-dot" style="background:#4f7cff;"></span>Give Operating Cash to Agent</div>
   <form method="post" action="/cash/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
     <input type="hidden" name="kind" value="OPERATING_CASH">
     <div class="inputs">
       <div>
@@ -225,6 +226,7 @@ function closeDrawer() {
   <div class="ec-hd"><span class="ec-dot" style="background:#f59e0b;"></span>Office Expense</div>
   <form method="post" action="/cash/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
     <input type="hidden" name="kind" value="OFFICE_EXPENSE">
     <div class="inputs">
       <div>
@@ -248,6 +250,7 @@ function closeDrawer() {
     <div class="ec-hd"><span class="ec-dot" style="background:#ef4444;"></span>Agent Expense</div>
     <form method="post" action="/cash/new">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <input type="hidden" name="kind" value="EXPENSE">
       <label>Amount (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
       <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. fuel, food">
@@ -260,6 +263,7 @@ function closeDrawer() {
     <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Record the balance an agent returns after deducting their expenses from operating cash.</p>
     <form method="post" action="/cash/new">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <input type="hidden" name="kind" value="RETURN_OPERATING_CASH">
       <label>Amount Returned (₦)</label><input type="number" name="amount" step="0.01" min="0.01" placeholder="0.00" required>
       <label style="margin-top:8px;">Note</label><input type="text" name="note" placeholder="e.g. balance returned by John">

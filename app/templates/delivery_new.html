@@ -17,6 +17,7 @@
   <!-- [FIX-4] CSRF token -->
   <form method="post" action="/deliveries/new">
     <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+    <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
 
     <div class="grid2">
       {% if user.role == "ADMIN" %}

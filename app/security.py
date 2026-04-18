@@ -5,7 +5,6 @@
 #   [SEC-3]  CSRF double-submit pattern
 #   [SEC-4]  Input sanitization
 #   [SEC-5]  Database-backed account lockout (5 failures → 15 min lock)
-#   [SEC-6]  Password reset token expiry (1 hour)
 #   [SEC-7]  Audit log helpers
 #   [SEC-8]  Security headers middleware
 #   [SEC-9]  File upload validation
@@ -17,11 +16,8 @@ import re
 import secrets
 import hmac
 import hashlib
-import html
 import logging
 from datetime import datetime, timedelta, timezone
-from collections import defaultdict
-from threading import Lock
 from typing import Optional
 
 from fastapi import Request, HTTPException
@@ -196,49 +192,6 @@ account_lockout = DbAccountLockout()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [SEC-6] PASSWORD RESET TOKEN STORE (1-hour expiry)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_RESET_TOKEN_EXPIRY = 3600  # 1 hour
-
-class PasswordResetTokenStore:
-    def __init__(self):
-        self._tokens: dict[str, tuple[int, datetime]] = {}  # token -> (user_id, expires_at)
-        self._lock = Lock()
-
-    def create(self, user_id: int) -> str:
-        token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=_RESET_TOKEN_EXPIRY)
-        with self._lock:
-            # Revoke any existing tokens for this user
-            self._tokens = {t: (uid, exp) for t, (uid, exp) in self._tokens.items() if uid != user_id}
-            self._tokens[token] = (user_id, expires_at)
-        return token
-
-    def verify(self, token: str) -> Optional[int]:
-        """Returns user_id if token is valid and not expired, else None."""
-        with self._lock:
-            entry = self._tokens.get(token)
-            if not entry:
-                return None
-            user_id, expires_at = entry
-            if datetime.now(timezone.utc) > expires_at:
-                del self._tokens[token]
-                return None
-            return user_id
-
-    def consume(self, token: str) -> Optional[int]:
-        """Verify and immediately invalidate the token (single-use)."""
-        user_id = self.verify(token)
-        if user_id:
-            with self._lock:
-                self._tokens.pop(token, None)
-        return user_id
-
-reset_token_store = PasswordResetTokenStore()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # [SEC-3] CSRF PROTECTION
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -263,6 +216,37 @@ def verify_csrf_token(request: Request, form_token: Optional[str]) -> None:
             status_code=403,
             detail="Invalid or missing CSRF token. Please refresh the page and try again.",
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [SEC-3c] FORM IDEMPOTENCY TOKEN — prevents double-submit on POST forms
+#   Generate a one-time token in GET handler, validate+consume on POST.
+#   Stored as a set of valid tokens in the session (max 5 to limit size).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FORM_TOKEN_SESSION_KEY = "_form_tokens"
+_MAX_FORM_TOKENS = 5
+
+def generate_form_token(request: Request) -> str:
+    """Generate a one-time form token and store in session. Returns the token."""
+    token = secrets.token_hex(16)
+    tokens: list = request.session.get(_FORM_TOKEN_SESSION_KEY, [])
+    tokens.append(token)
+    # Keep only the most recent tokens to avoid session bloat
+    request.session[_FORM_TOKEN_SESSION_KEY] = tokens[-_MAX_FORM_TOKENS:]
+    return token
+
+def consume_form_token(request: Request, submitted_token: str) -> bool:
+    """Validate and consume a one-time form token. Returns True if valid.
+    Returns False (instead of raising) so callers can redirect with a message."""
+    if not submitted_token:
+        return False
+    tokens: list = request.session.get(_FORM_TOKEN_SESSION_KEY, [])
+    if submitted_token in tokens:
+        tokens.remove(submitted_token)
+        request.session[_FORM_TOKEN_SESSION_KEY] = tokens
+        return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,17 +289,14 @@ def verify_origin_for_json(request: Request) -> None:
 # [SEC-4] INPUT SANITIZATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SCRIPT_PATTERN = re.compile(r"<[^>]+>", re.IGNORECASE)
-
 def sanitize_text(value: str, max_length: int = 400, field_name: str = "") -> str:
-    """Strip HTML tags and truncate. SQL injection is prevented by parameterized
-    queries. We do NOT call html.escape() here because Jinja2 auto-escapes
-    template output — double-escaping would turn '&' into '&amp;amp;'."""
+    """Trim whitespace and truncate to max_length. XSS is handled by Jinja2's
+    auto-escaping on template output. SQL injection is handled by parameterized
+    queries. No HTML stripping is needed — regex-based stripping was removed
+    because it mangled legitimate input containing < > characters."""
     if not value:
         return ""
-    cleaned = value.strip()
-    cleaned = _SCRIPT_PATTERN.sub("", cleaned)
-    return cleaned[:max_length]
+    return value.strip()[:max_length]
 
 def sanitize_username(value: str) -> str:
     cleaned = (value or "").strip()

@@ -121,6 +121,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     total_collection_expenses = sum(e["amount"] for e in coll_expense_entries)
 
     csrf_token = get_csrf_token(request)
+    form_token = generate_form_token(request)
     return tpl(request, "cash_dashboard.html", {
         "request": request, "user": user, "rows": rows,
         "total_collections": float(total_collections), "total_expenses": float(total_expenses),
@@ -138,6 +139,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         "start_date": sd.isoformat() if sd else "",
         "end_date": ed.isoformat() if ed else "",
         "active": "cash", "csrf_token": csrf_token,
+        "form_token": form_token,
     })
 
 
@@ -150,6 +152,7 @@ async def cash_new(
     delivery_id: str = Form(""),
     agent_id: str = Form(""),
     csrf_token: str = Form(""),
+    form_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
@@ -157,6 +160,9 @@ async def cash_new(
         return user_or
     user = user_or
     verify_csrf_token(request, csrf_token)
+    # [SEC] Idempotency — reject duplicate cash entry submissions
+    if not consume_form_token(request, form_token):
+        return redirect("/cash?error=Duplicate+submission+detected.+Please+try+again.")
     k = (kind or "").strip().upper()
     if k not in {"COLLECTION", "EXPENSE", "OPERATING_CASH", "OFFICE_EXPENSE", "RETURN_OPERATING_CASH", "CASH_PAYMENT", "TRANSFER_PAYMENT", "COLLECTION_EXPENSE"}:
         raise HTTPException(status_code=400, detail="Invalid kind")

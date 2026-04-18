@@ -115,6 +115,7 @@ const IS_SUPERVISOR = {{ 'true' if user and user.role == 'SUPERVISOR' else 'fals
 const SELECTED_BRANCH = {{ selected_branch_id or 0 }};
 const BRANCH_NAME = {{ (branches | selectattr('id','eq',selected_branch_id) | map(attribute='name') | first | default('this branch')) | tojson if selected_branch_id else '"this branch"' }};
 const CSRF = {{ csrf_token | tojson }};
+const FORM_TOKEN = {{ form_token | tojson }};
 const AGENTS = [{% for a in agents %}{"id":{{ a.id }},"name":{{ (a.full_name or a.username) | tojson }}}{% if not loop.last %},{% endif %}{% endfor %}];
 const TODAY = "{{ today }}";
 
@@ -281,6 +282,7 @@ function renderOrders(orders) {
       ${(order.items||[]).filter(i => i.matched && i.item_id && (ITEMS_BY_ID[i.item_id]?.stock ?? 99) > 0 && (ITEMS_BY_ID[i.item_id]?.stock ?? 99) < 5).map(i => `<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);color:#fbbf24;font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:8px;">⚠️ <strong>${i.item_name}</strong> is low — only ${ITEMS_BY_ID[i.item_id]?.stock} unit${ITEMS_BY_ID[i.item_id]?.stock !== 1 ? 's' : ''} left</div>`).join('')}
       <form method="post" action="/deliveries/new" id="form-${idx}" onsubmit="return confirmCreate(${idx})">
         <input type="hidden" name="csrf_token" value="${CSRF}" />
+        <input type="hidden" name="form_token" value="${FORM_TOKEN}" />
         ${agentField}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div><label>Customer Name *</label><input type="text" name="customer_name" value="${escHtml(order.customer_name||'')}" required placeholder="Full name" style="margin-top:4px;" /></div>
