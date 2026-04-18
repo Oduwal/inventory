@@ -171,15 +171,16 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
         return forbid
     branch_id = get_selected_branch_id(request, user)
     if is_supervisor(user):
-        # Supervisor sees all admins across all branches
+        # Supervisor sees all admins across all branches (including deactivated)
         agents = db.execute(
-            select(User).where(User.role == "ADMIN").where(User.is_active == True)
-            .order_by(User.username.asc())
+            select(User).where(User.role == "ADMIN")
+            .order_by(User.is_active.desc(), User.username.asc())
         ).scalars().all()
     else:
+        # Admin sees all agents in their branch (including deactivated)
         agents = db.execute(
             select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
-            .where(User.is_active == True).order_by(User.username.asc())
+            .order_by(User.is_active.desc(), User.username.asc())
         ).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return tpl(request, "agents_list.html", {
@@ -411,6 +412,44 @@ async def agent_reset_password(
     audit_log(db, user.id, "PASSWORD_RESET", f"user_id={agent_id} reset by {user.username}",
               ip=request.client.host if request.client else "")
     return redirect(f"/agents/{agent_id}?success=Password+reset+successfully")
+
+# ────────────────────────────────────────────────
+#  ACTIVATE / DEACTIVATE USER
+# ────────────────────────────────────────────────
+
+@router.post("/agents/{agent_id}/toggle-active")
+def toggle_agent_active(
+    request: Request,
+    agent_id: int,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    user_or = require_login_or_redirect(db, request)
+    if isinstance(user_or, RedirectResponse):
+        return user_or
+    user = user_or
+    if not is_admin(user) and not is_supervisor(user):
+        return HTMLResponse("Forbidden", status_code=403)
+    verify_csrf_token(request, csrf_token)
+    target = db.get(User, agent_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Admins can only toggle agents in their own branch
+    if is_admin(user) and not is_supervisor(user):
+        if target.branch_id != user.branch_id:
+            return HTMLResponse("Forbidden", status_code=403)
+        if target.role not in ("AGENT",):
+            return HTMLResponse("Forbidden — admins can only deactivate agents", status_code=403)
+    # Cannot deactivate yourself
+    if target.id == user.id:
+        return redirect(f"/agents/{agent_id}?error=You+cannot+deactivate+your+own+account")
+    target.is_active = not target.is_active
+    db.commit()
+    action = "REACTIVATED" if target.is_active else "DEACTIVATED"
+    audit_log(db, user.id, f"USER_{action}", f"user_id={agent_id} ({target.username}) by {user.username}",
+              ip=request.client.host if request.client else "")
+    msg = f"Account+{action.lower()}+successfully"
+    return redirect(f"/agents/{agent_id}?success={msg}")
 
 # ────────────────────────────────────────────────
 #  AGENT OVERVIEW

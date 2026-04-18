@@ -31,6 +31,7 @@
                     {% if user.role == "SUPERVISOR" %}
                     <th>Branch</th>
                     {% endif %}
+                    <th>Status</th>
                     <th>Created</th>
                     <th>Open</th>
                 </tr>
@@ -38,7 +39,7 @@
             <tbody>
                 {% if agents and agents|length > 0 %}
                 {% for a in agents %}
-                <tr>
+                <tr{% if not a.is_active %} style="opacity:.5;"{% endif %}>
                     <td>#{{ a.id }}</td>
                     <td>
                       <img src="/users/{{ a.id }}/avatar" alt=""
@@ -57,13 +58,20 @@
                         {% endif %}
                     </td>
                     {% endif %}
+                    <td>
+                        {% if a.is_active %}
+                        <span class="badge b-green">Active</span>
+                        {% else %}
+                        <span class="badge b-red">Inactive</span>
+                        {% endif %}
+                    </td>
                     <td>{{ a.created_at or "-" }}</td>
                     <td><a class="btnPrimary" href="/agents/{{ a.id }}">View</a></td>
                 </tr>
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="{% if user.role == 'SUPERVISOR' %}8{% else %}7{% endif %}" class="muted">
+                    <td colspan="{% if user.role == 'SUPERVISOR' %}9{% else %}8{% endif %}" class="muted">
                         {% if user.role == "SUPERVISOR" %}No admins found.{% else %}No agents found.{% endif %}
                     </td>
                 </tr>

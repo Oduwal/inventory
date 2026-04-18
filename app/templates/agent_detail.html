@@ -32,6 +32,7 @@
       <div style="font-size:18px;font-weight:800;">{{ agent.full_name or agent.username }}</div>
       <div class="muted" style="font-size:13px;margin-top:2px;">@{{ agent.username }}</div>
       <span class="badge {% if is_admin_profile %}b-purple{% else %}b-blue{% endif %}" style="margin-top:6px;">{{ agent.role }}</span>
+      {% if not agent.is_active %}<span class="badge b-red" style="margin-top:6px;">DEACTIVATED</span>{% endif %}
     </div>
     {% if agent.profile_picture_mime %}
     <form method="post" action="/agents/{{ agent.id }}/remove-picture" style="margin-left:auto;">
@@ -100,6 +101,38 @@
   </div>
   {% endif %}
 </div>
+
+{# ── Activate / Deactivate — admin only, not for self ────────────────── #}
+{% if agent.id != user.id %}
+<div class="card" style="margin-bottom:14px;border-top:3px solid {% if agent.is_active %}var(--danger){% else %}var(--accent2){% endif %};">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+      <div class="badge {% if agent.is_active %}b-red{% else %}b-green{% endif %}" style="margin-bottom:6px;">
+        {% if agent.is_active %}⚠️ DEACTIVATE ACCOUNT{% else %}✅ REACTIVATE ACCOUNT{% endif %}
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin:0;">
+        {% if agent.is_active %}
+          Deactivating will prevent <strong style="color:var(--text);">{{ agent.username }}</strong> from logging in. Their data is preserved.
+        {% else %}
+          <strong style="color:var(--text);">{{ agent.username }}</strong> is currently <span style="color:var(--danger);font-weight:700;">deactivated</span>. Reactivate to restore login access.
+        {% endif %}
+      </p>
+    </div>
+    <form method="post" action="/agents/{{ agent.id }}/toggle-active">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      {% if agent.is_active %}
+      <button type="submit" class="btnDanger" onclick="return confirm('Deactivate {{ agent.username }}? They will not be able to log in.')">
+        🚫 Deactivate
+      </button>
+      {% else %}
+      <button type="submit" class="btnPrimary" onclick="return confirm('Reactivate {{ agent.username }}?')">
+        ✅ Reactivate
+      </button>
+      {% endif %}
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {# ── Branch agents list — admin profile only ────────────────────────────── #}
 {% if is_admin_profile and branch_agents %}
