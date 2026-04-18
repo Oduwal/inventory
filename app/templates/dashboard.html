@@ -175,7 +175,7 @@
 </div>
 
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const _dashLabels     = {{ chart_labels | tojson if chart_labels else '[]' }};
 const _dashDeliveries = {{ chart_deliveries | tojson if chart_deliveries else '[]' }};
 const _dashExpenses   = {{ chart_expenses | tojson if chart_expenses else '[]' }};
@@ -245,7 +245,7 @@ function initDashCharts() {
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initDashCharts()"></script>
+<script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initDashCharts()"></script>
 
 
 
@@ -280,7 +280,7 @@ function initDashCharts() {
     </div>
   </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 function showCatModal(cat, items) {
   if (!items || items.length === 0) { alert('No items found in category: ' + cat); return; }
   document.getElementById('cat-modal-title').textContent = cat;

@@ -156,7 +156,7 @@
   <div id="toggle-feedback" style="font-size:12px;margin-top:10px;min-height:16px;color:#22c55e;"></div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 async function toggleFeature(key, isOn) {
   const fb = document.getElementById('toggle-feedback');
   try {
@@ -331,7 +331,7 @@ async function updateContactHour(key, hour) {
 
 
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const _supLabels     = {{ chart_labels | tojson }};
 const _supDeliveries = {{ chart_data | tojson }};
 const _supExpenses   = {{ chart_expenses | tojson }};
@@ -408,7 +408,7 @@ function initSupCharts() {
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initSupCharts()"></script>
+<script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initSupCharts()"></script>
 
 <!-- Category drill-down modal -->
 <div id="cat-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
@@ -440,7 +440,7 @@ function initSupCharts() {
     </div>
   </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 function showCatModal(cat, items) {
   if (!items || items.length === 0) { alert('No items found in category: ' + cat); return; }
   document.getElementById('cat-modal-title').textContent = cat;

@@ -154,7 +154,7 @@
 
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const fmtN = n => '₦' + parseFloat(n || 0).toLocaleString('en-NG', {minimumFractionDigits:2, maximumFractionDigits:2});
 const fmtQ = n => parseInt(n || 0).toLocaleString();
 

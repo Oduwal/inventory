@@ -594,7 +594,7 @@
     <button onclick="dismissBanner()" style="background:rgba(255,255,255,.2);color:white;border:none;padding:8px 12px;border-radius:10px;cursor:pointer;font-size:13px;">✕</button>
   </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 // ── Theme toggle ──
 function applyTheme(mode) {
   if (mode === 'light') {
@@ -631,7 +631,7 @@ document.querySelectorAll('.nav a').forEach(a => {
 });
 </script>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 let deferredPrompt=null;
 const banner=document.getElementById('pwa-banner');
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;banner.style.display='flex';});
@@ -662,7 +662,7 @@ function _urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=atob((b+
 <div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column-reverse;gap:10px;pointer-events:none;"></div>
 
 <!-- Notification sound (Web Audio API — no file needed) -->
-<script>
+<script nonce="{{ csp_nonce }}">
 {% if user %}
 const NOTIF_COLORS = {success:'#22c55e',warning:'#f59e0b',danger:'#ef4444',info:'#4f7cff'};
 let lastNotifId = 0;
@@ -904,7 +904,7 @@ function autoDismissVisited() {
 {% endif %}
 </script>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 {% if role == "ADMIN" %}
 (async function() {
   try {
@@ -934,7 +934,7 @@ function autoDismissVisited() {
   <div class="cele-sparkle"></div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // ── Celebration Animation Engine ──
 const CELE_SCENES = {
   // Stock transfer: packed & sent
@@ -1096,7 +1096,7 @@ function dismissCele() {
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function previewAvatar(input) {
   if (input.files && input.files[0]) {
     const file = input.files[0];
@@ -1138,7 +1138,7 @@ function previewAvatar(input) {
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Lightbox — open full-size image on click
 function openLightbox(src) {
   const lb = document.getElementById('img-lightbox');

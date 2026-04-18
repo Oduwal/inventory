@@ -429,7 +429,7 @@ async def reset_data_execute(
     if not is_supervisor(user): return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     if confirm.strip() != "RESET":
-        return HTMLResponse("<script>alert('You must type RESET to confirm.');history.back();</script>")
+        return RedirectResponse("/supervisor?error=You+must+type+RESET+to+confirm.", status_code=303)
 
     from sqlalchemy import text as _text
     supervisor_id = user.id

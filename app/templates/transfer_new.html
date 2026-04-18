@@ -87,7 +87,7 @@
   </div>
 </form>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const itemOptions = `{% for row in items %}<option value="{{ row.Item.id }}" data-stock="{{ row.stock }}" {% if row.stock <= 0 %}disabled style="color:#f87171;"{% endif %}>{{ row.Item.name }} — {{ row.stock }} in stock{% if row.stock <= 0 %} — OUT OF STOCK{% endif %}</option>{% endfor %}`;
 let rowCount = 1;
 function updateStock(index) {

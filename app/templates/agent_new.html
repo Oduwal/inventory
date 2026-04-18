@@ -56,7 +56,7 @@
           {% endfor %}
         </select>
       </div>
-      <script>
+      <script nonce="{{ csp_nonce }}">
       function toggleBranch() {
         const role = document.getElementById('role-select').value;
         const bf = document.getElementById('branch-field');

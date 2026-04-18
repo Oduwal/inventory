@@ -65,7 +65,7 @@
     <div class="chart-wrap"><canvas id="chartExpenses"></canvas></div>
   </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 const _aoLabels     = {{ chart_labels | tojson }};
 const _aoDeliveries = {{ chart_deliveries | tojson }};
 const _aoExpenses   = {{ chart_expenses | tojson }};
@@ -116,7 +116,7 @@ function initCharts() {
   }
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initCharts()"></script>
+<script nonce="{{ csp_nonce }}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" onload="initCharts()"></script>
 {% endif %}
 
 <!-- Quick links -->
@@ -154,7 +154,7 @@ function initCharts() {
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const ALL_DELIVERIES = {{ deliveries_json | tojson }};
 
 function openDeliveryModal(filter) {

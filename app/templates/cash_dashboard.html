@@ -71,7 +71,7 @@
     <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Apply</button></div>
   </form>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 const ps=document.getElementById('preset-sel');
 const cur="{{ preset }}";
 if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
@@ -131,7 +131,7 @@ if(cur){for(let o of ps.options){if(o.value===cur){o.selected=true;break;}}}
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const _data = {
   expenses:    {{ expense_entries    | tojson }},
   collections: {{ collection_entries | tojson }},

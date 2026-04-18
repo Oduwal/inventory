@@ -107,7 +107,7 @@ Mike: order 5 soaps. 14 Broad Street. 08033333333"></textarea>
   </div>
 </template>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const ITEMS = {{ items_json | tojson }};
 const ITEMS_BY_ID = {};
 ITEMS.forEach(i => { ITEMS_BY_ID[i.id] = i; });

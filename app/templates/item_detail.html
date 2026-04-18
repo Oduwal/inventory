@@ -213,7 +213,7 @@
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 async function submitFaultyFlag(e, itemId) {
   e.preventDefault();
   const qty    = document.getElementById('faulty-qty').value;

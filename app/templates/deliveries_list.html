@@ -228,7 +228,7 @@
 </div>
 
 {% if user.role == "ADMIN" and agents %}
-<script>
+<script nonce="{{ csp_nonce }}">
 function getChecked() {
   return Array.from(document.querySelectorAll('.delivery-chk:checked')).map(c => parseInt(c.dataset.id));
 }

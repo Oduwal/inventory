@@ -92,9 +92,9 @@
           {% endfor %}
         </div>
       </div>
-      <script>var nc=document.getElementById('note-chat');if(nc)nc.scrollTop=nc.scrollHeight;</script>
+      <script nonce="{{ csp_nonce }}">var nc=document.getElementById('note-chat');if(nc)nc.scrollTop=nc.scrollHeight;</script>
       {% endif %}
-      <script>
+      <script nonce="{{ csp_nonce }}">
       /* ── Shared Voice Recorder (always loaded, used by both chat areas) ── */
       let _mediaRecorder=null, _audioChunks=[], _recording=false;
       async function _startRec(indicatorId){
@@ -134,7 +134,7 @@
         <button id="cust-mic-btn" onclick="toggleCustVoiceRec({{ d.id }})" style="padding:8px 12px;border-radius:20px;border:none;background:#1a2530;color:#e9edef;font-size:16px;cursor:pointer;" title="Record voice note">🎤</button>
         <span id="cust-rec-indicator" class="voice-rec-indicator" style="display:none;color:#ef4444;font-size:11px;animation:pulse 1s infinite;">Recording...</span>
       </div>
-      <script>
+      <script nonce="{{ csp_nonce }}">
       async function sendAgentReply(){
         const inp=document.getElementById('agent-reply-input');
         const msg=inp.value.trim();
@@ -257,7 +257,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const ORDER_TOTAL = {{ d_items | map(attribute=0) | map(attribute='line_amount') | map('float') | sum | float }};
 
 function handleStatusSave() {
@@ -475,7 +475,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         </div>
       </div>
       {% endfor %}
-      <script>
+      <script nonce="{{ csp_nonce }}">
       function onQtyChange(id, origQty, origAmt) {
         const qty = parseInt(document.getElementById('qty-' + id).value) || 0;
         const amtField = document.getElementById('amt-' + id);
@@ -599,7 +599,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
   const thread   = document.getElementById('wa-chat-thread');
   const liveDot  = document.getElementById('wa-live-dot');
@@ -689,7 +689,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
 })();
 </script>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function addRejectionNote(form) {
   const note = prompt('Reason for rejection (optional):') || '';
   form.querySelector('[id^="rej-note-"]').value = note;

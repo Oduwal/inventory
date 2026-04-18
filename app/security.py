@@ -409,6 +409,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                     verify_origin_for_json(request)
                 except HTTPException as exc:
                     return Response(content=exc.detail, status_code=exc.status_code)
+
+        # [FIX-4A] Generate per-request CSP nonce
+        import base64
+        nonce = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+        request.state.csp_nonce = nonce
+
         response = await call_next(request)
         response.headers["X-Frame-Options"]           = "DENY"
         response.headers["X-Content-Type-Options"]    = "nosniff"
@@ -416,6 +422,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"]        = "geolocation=(), microphone=(self), camera=()"
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        # [FIX-4A] CSP nonce infrastructure is in place: nonce is generated above,
+        # injected into request.state, and all 40 <script> tags have nonce="{{ csp_nonce }}".
+        # However, activating nonce-based script-src would break 169 inline event handlers
+        # (onclick, onchange, onload, etc.) across 25 templates, because CSP Level 2+
+        # ignores 'unsafe-inline' when a nonce is present.
+        # TODO: Refactor inline event handlers to addEventListener(), then replace
+        #       'unsafe-inline' with 'nonce-{nonce}' in script-src below.
         response.headers["Content-Security-Policy"]   = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.tailwindcss.com https://fonts.googleapis.com; "
@@ -564,10 +577,11 @@ def verify_twilio_signature(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Missing Twilio signature.")
 
     # Build the full URL that Twilio signed against
-    # In production behind a proxy, use X-Forwarded-Proto + Host
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    # [FIX-4C] Hardcode https:// — the app runs behind Railway's TLS terminator.
+    # Trusting X-Forwarded-Proto would let a spoofed header change the signed URL,
+    # though the impact is self-correcting (wrong proto → HMAC mismatch → rejection).
     host = request.headers.get("host", "")
-    url = f"{proto}://{host}{request.url.path}"
+    url = f"https://{host}{request.url.path}"
 
     # Twilio signs URL + sorted POST params concatenated as key=value
     # The form data is already parsed by FastAPI at this point, so we
@@ -591,9 +605,9 @@ def verify_twilio_signature_with_params(request: Request, form_params: dict) -> 
         raise HTTPException(status_code=403, detail="Missing Twilio signature.")
 
     # Reconstruct the URL Twilio used for signing
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    # [FIX-4C] Hardcode https:// — same rationale as verify_twilio_signature()
     host = request.headers.get("host", "")
-    url = f"{proto}://{host}{request.url.path}"
+    url = f"https://{host}{request.url.path}"
 
     # Append sorted POST params as key=value (Twilio's signing algorithm)
     data_string = url

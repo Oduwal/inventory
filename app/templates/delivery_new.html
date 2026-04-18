@@ -124,7 +124,7 @@
   </form>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // Convert int keys → string keys
 const _rawAsgn = {{ pending_assignments | tojson if pending_assignments is defined else '{}' }};
 const pendingAsgn = {};

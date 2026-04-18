@@ -172,7 +172,7 @@
   .filter-card.active { outline: 2px solid var(--accent); }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 let _activeStatus = 'all';
 
 // Maps DB status values that qualify as "sent" from sender perspective

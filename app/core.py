@@ -247,9 +247,11 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 # Automatically inject csrf_token into every TemplateResponse context
 # so base.html logout form always has it — no need to pass per-route.
 def tpl(request, name: str, context: dict, status_code: int = 200):
-    """Render a Jinja2 template with auto-injected csrf_token."""
+    """Render a Jinja2 template with auto-injected csrf_token and csp_nonce."""
     if "csrf_token" not in context:
         context["csrf_token"] = get_csrf_token(request)
+    if "csp_nonce" not in context:
+        context["csp_nonce"] = getattr(request.state, "csp_nonce", "")
     if "request" not in context:
         context["request"] = request
     tmpl = templates.env.get_template(name)

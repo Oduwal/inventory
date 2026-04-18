@@ -366,7 +366,7 @@
   {% endfor %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 const CSRF = {{ csrf_token | tojson }};
 
 async function confirmSingleReturn(deliveryId, diId, btn, notReturned=false) {
@@ -890,7 +890,7 @@ async function confirmAgent(agentId, dateStr, btn) {
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function toggleWrittenOff() {
   const d = document.getElementById('wo-details');
   const c = document.getElementById('wo-chevron');
