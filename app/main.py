@@ -28,5 +28,6 @@ app.include_router(transfers.router)
 app.include_router(whatsapp.router)
 
 if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run('app.main:app', host='0.0.0.0', port=8000, reload=True)
+    import os, uvicorn
+    uvicorn.run('app.main:app', host='0.0.0.0', port=8000,
+                reload=os.getenv("DEV_RELOAD", "0") == "1")

@@ -130,15 +130,15 @@ app = FastAPI(lifespan=_lifespan)
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 if not WEBHOOK_SECRET:
     logging.getLogger("inventory_keeper.security").warning(
-        "WEBHOOK_SECRET is not set — webhook endpoints (/api/call-webhook, "
-        "/api/whatsapp-webhook, /api/cache-wa-message) are UNPROTECTED. "
-        "Set WEBHOOK_SECRET in your environment variables for production."
+        "WEBHOOK_SECRET is not set — webhook endpoints will REJECT all requests. "
+        "Set WEBHOOK_SECRET in your environment variables."
     )
 
 def _verify_webhook_token(request: Request) -> None:
-    """Raise 403 if WEBHOOK_SECRET doesn't match.  Skip check if not configured."""
+    """Raise 403 if WEBHOOK_SECRET doesn't match. Fail-closed: rejects all
+    requests when WEBHOOK_SECRET is not configured."""
     if not WEBHOOK_SECRET:
-        return  # no secret configured — allow (startup already logged a warning)
+        raise HTTPException(status_code=403, detail="Webhook authentication not configured.")
     token = (
         request.headers.get("x-webhook-secret", "")
         or request.query_params.get("token", "")
@@ -408,11 +408,19 @@ def require_admin_or_403(user: User) -> HTMLResponse | None:
     return None
 
 
+_ddl_logger = logging.getLogger("inventory_keeper.ddl")
+
 def _ddl(conn, sql: str) -> None:
     try:
         conn.execute(text(sql))
         conn.execute(text("COMMIT"))
-    except Exception:
+    except Exception as e:
+        err_msg = str(e).lower()
+        # Suppress expected "already exists" / "duplicate" noise at DEBUG
+        if "already exists" in err_msg or "duplicate" in err_msg:
+            _ddl_logger.debug("DDL skipped (already exists): %s", sql[:120])
+        else:
+            _ddl_logger.warning("DDL migration failed: %s — SQL: %s", e, sql[:200])
         try:
             conn.execute(text("ROLLBACK"))
         except Exception:
@@ -921,7 +929,8 @@ def _parse_iso_date(d: str | None) -> date | None:
         return None
 
 
-def _ngn(n: float) -> str:
+def _ngn(n) -> str:
+    """Format a number as Nigerian Naira. Accepts float, Decimal, or int."""
     try:
         return f"₦{float(n):,.0f}"
     except Exception:

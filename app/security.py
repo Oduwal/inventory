@@ -75,21 +75,25 @@ class DbRateLimiter:
             except Exception: pass
 
     def is_allowed(self, ip: str, max_requests: int, window_seconds: int) -> bool:
+        """Atomic rate check: INSERT first, then COUNT. Eliminates the TOCTOU
+        race where concurrent requests could all pass a SELECT-then-INSERT check."""
         from sqlalchemy import text
         db = self._get_db()
         try:
             now = datetime.now(timezone.utc)
             cutoff = now - timedelta(seconds=window_seconds)
-            count = db.execute(text(
-                "SELECT COUNT(*) FROM rate_limit_hits "
-                "WHERE ip = :ip AND created_at > :cutoff"
-            ), {"ip": ip[:45], "cutoff": cutoff}).scalar() or 0
-            if count >= max_requests:
-                return False
+            # Always record the hit first (atomic)
             db.execute(text(
                 "INSERT INTO rate_limit_hits (ip, created_at) VALUES (:ip, :now)"
             ), {"ip": ip[:45], "now": now})
             db.commit()
+            # Then check if total count exceeds limit
+            count = db.execute(text(
+                "SELECT COUNT(*) FROM rate_limit_hits "
+                "WHERE ip = :ip AND created_at > :cutoff"
+            ), {"ip": ip[:45], "cutoff": cutoff}).scalar() or 0
+            if count > max_requests:
+                return False
             # Cleanup old entries every ~100 requests (probabilistic)
             if secrets.randbelow(100) == 0:
                 self._cleanup(db)
@@ -240,7 +244,7 @@ reset_token_store = PasswordResetTokenStore()
 
 CSRF_TOKEN_LENGTH = 32
 CSRF_SESSION_KEY  = "_csrf_token"
-CSRF_EXEMPT_PATHS = {"/login"}
+CSRF_EXEMPT_PATHS: set[str] = set()  # [SEC] No exemptions — login form already sends CSRF token
 
 def get_csrf_token(request: Request) -> str:
     token = request.session.get(CSRF_SESSION_KEY)
@@ -328,10 +332,14 @@ def sanitize_phone(value: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid phone number format.")
     return cleaned[:40]
 
-def sanitize_amount(value: float, field_name: str = "amount") -> float:
+def sanitize_amount(value, field_name: str = "amount"):
+    """Validate and return a positive monetary amount as Decimal.
+    Uses Decimal (not float) to avoid floating-point rounding errors
+    in financial calculations. DB columns are already Numeric(12,2)."""
+    from decimal import Decimal, InvalidOperation
     try:
-        amt = float(value)
-    except (TypeError, ValueError):
+        amt = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}.")
     if amt <= 0:
         raise HTTPException(status_code=400, detail=f"{field_name} must be greater than zero.")
@@ -510,6 +518,16 @@ def process_profile_image(content: bytes) -> tuple[bytes, str]:
     from PIL import Image
     import io as _io
 
+    # [SEC] Guard against decompression bombs — a small file on disk can
+    # decompress to gigabytes of pixel data in RAM.
+    Image.MAX_IMAGE_PIXELS = 25_000_000  # 25 megapixels max
+
+    img = Image.open(_io.BytesIO(content))
+    try:
+        img.verify()  # Validate image structural integrity
+    except Exception:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.")
+    # Re-open after verify() since verify() leaves the file in an unusable state
     img = Image.open(_io.BytesIO(content))
 
     # Convert to RGB (handles PNG with transparency, RGBA, etc.)

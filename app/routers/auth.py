@@ -11,6 +11,12 @@ from app.security import *
 
 router = APIRouter()
 
+# [SEC] Pre-computed dummy hash for constant-time login responses.
+# When a non-existent username is submitted, we still run the password
+# verification against this dummy so the response time is indistinguishable
+# from a real-user check (prevents username enumeration via timing).
+_DUMMY_HASH = hash_password("dummy-timing-pad")
+
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
     csrf_token = get_csrf_token(request)
@@ -50,7 +56,10 @@ async def login(
         }, status_code=429)
 
     u = db.scalar(select(User).where(User.username == username_clean))
-    if not u or not verify_password(password, u.password_hash):
+    # [SEC] Always run verify_password — even for non-existent users — to
+    # prevent timing-based username enumeration.
+    pw_ok = verify_password(password, u.password_hash if u else _DUMMY_HASH)
+    if not u or not pw_ok:
         account_lockout.record_failure(username_clean)  # [SEC-5] record failure
         remaining = account_lockout.remaining_attempts(username_clean)
         audit_log(db, u.id if u else None, "LOGIN_FAILED", f"username={username_clean}", ip=ip)
@@ -68,12 +77,12 @@ async def login(
         u.password_hash = hash_password(password)
         db.commit()
     audit_log(db, u.id, "LOGIN", f"username={username_clean}", ip=ip)
+    # [SEC] Clear old session state before setting new values to prevent
+    # session fixation and stale role/branch leakage.
+    request.session.clear()
     request.session["user_id"] = u.id
-    request.session["role"] = u.role
     if u.branch_id is not None:
         request.session["branch_id"] = u.branch_id
-    else:
-        request.session.pop("branch_id", None)
     return redirect("/")
 
 
