@@ -63,6 +63,7 @@ class User(Base):
     branch_id:     Mapped[int | None] = mapped_column(ForeignKey("branches.id"), nullable=True)
     full_name:     Mapped[str | None] = mapped_column(String(140), nullable=True)
     phone:         Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_active:     Mapped[bool]       = mapped_column(Boolean, default=True, nullable=False, server_default="TRUE")
     created_at:    Mapped[datetime]   = mapped_column(DateTime, default=_utcnow, nullable=False)
     # Profile picture — stored as compressed binary in DB
     profile_picture:      Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)

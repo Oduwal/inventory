@@ -28,11 +28,25 @@ import json as _json
 import logging
 import secrets
 import threading
+import atexit
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, timezone
 
-# Background task executor to prevent OOM
+# Background task executor — bounded queue prevents OOM under load
+_MAX_PENDING_TASKS = 100
 task_queue = ThreadPoolExecutor(max_workers=10)
+atexit.register(task_queue.shutdown, wait=True)
+
+def submit_task(fn, *args, **kwargs):
+    """Submit a background task with backpressure. Drops tasks if the queue
+    exceeds _MAX_PENDING_TASKS to prevent unbounded memory growth."""
+    pending = task_queue._work_queue.qsize()
+    if pending >= _MAX_PENDING_TASKS:
+        logging.getLogger("task_queue").warning(
+            "Task queue full (%d pending) — dropping %s", pending, fn.__name__
+        )
+        return None
+    return task_queue.submit(fn, *args, **kwargs)
 
 try:
     from pywebpush import webpush as _webpush, WebPushException as _WebPushException
@@ -203,7 +217,7 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
             "VALUES (:uid, :title, :body, :link, :kind, :now)"
         ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
         db.commit()
-        task_queue.submit(_send_web_push, user_id, title, body, link)
+        submit_task(_send_web_push, user_id, title, body, link)
     except Exception as e:
         db.rollback()
         logging.getLogger("notifications").warning(f"Notify failed: {e}")
@@ -213,15 +227,17 @@ def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: s
     try:
         admins = db.execute(
             select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id)
+            .where(User.is_active == True)
         ).scalars().all()
         for admin in admins:
             notify(db, admin.id, title, body, link, kind)
     except Exception as e:
         import logging; logging.getLogger("notifications").warning(f"Notify branch failed: {e}")
 
-# [FIX-6] Trust the X-Forwarded-For header from Railway's proxy
-# Use TRUSTED_PROXY_HOSTS env var for production; defaults to Railway's internal network.
-_trusted_hosts = os.getenv("TRUSTED_PROXY_HOSTS", "127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+# [FIX-6] Trust the X-Forwarded-For header from Railway's proxy.
+# Default to localhost only — set TRUSTED_PROXY_HOSTS explicitly in production
+# to match your infrastructure (e.g. Railway's internal proxy IPs).
+_trusted_hosts = os.getenv("TRUSTED_PROXY_HOSTS", "127.0.0.1")
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[h.strip() for h in _trusted_hosts.split(",")])
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -390,7 +406,11 @@ def get_current_user(db: Session, request: Request) -> User | None:
     if not user_id:
         return None
     try:
-        return db.get(User, int(user_id))
+        user = db.get(User, int(user_id))
+        if user and not user.is_active:
+            request.session.clear()  # force logout deactivated user
+            return None
+        return user
     except Exception:
         return None
 
@@ -454,6 +474,9 @@ def ensure_schema() -> None:
         # Profile picture columns
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture BYTEA NULL")
         _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture_mime VARCHAR(50) NULL")
+        # [SEC] Soft-delete flag — deactivated users can't log in but history is preserved
+        _ddl(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+        _ddl(conn, "UPDATE users SET is_active = TRUE WHERE is_active IS NULL")
         # Username change history — preserves audit trail when accounts change hands
         _ddl(conn, """CREATE TABLE IF NOT EXISTS username_history (
             id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
@@ -881,19 +904,34 @@ def seed_default_branch_if_missing() -> None:
 
 
 def _schedule_daily_backup() -> None:
-    """Run database backup once daily in a background thread."""
+    """Run database backup daily at 02:00 UTC in a background thread.
+    Calculates sleep until the next 02:00 UTC so backups happen reliably
+    even if the server restarts frequently."""
     import time
+    _log = logging.getLogger("backup")
+
+    def _seconds_until_next(hour: int = 2) -> float:
+        now = datetime.now(timezone.utc)
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return (target - now).total_seconds()
+
     def _backup_loop():
         while True:
-            time.sleep(24 * 60 * 60)  # Wait 24 hours
+            wait = _seconds_until_next(2)
+            _log.info("Next backup in %.0f seconds (02:00 UTC)", wait)
+            time.sleep(wait)
             try:
                 from backup_database import run_backup
                 run_backup()
+                _log.info("Scheduled backup completed successfully.")
             except Exception as e:
-                logging.getLogger("backup").error("Scheduled backup failed: %s", e)
+                _log.error("Scheduled backup failed: %s", e)
+
     t = threading.Thread(target=_backup_loop, daemon=True)
     t.start()
-    logging.getLogger("backup").info("Daily database backup scheduled.")
+    _log.info("Daily database backup scheduled for 02:00 UTC.")
 
 
 def _run_startup() -> None:

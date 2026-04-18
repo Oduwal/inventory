@@ -118,7 +118,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
 
                     # Launch the backup call using the metadata we saved
                     from app.calling_service import _do_call
-                    task_queue.submit(
+                    submit_task(
                         _do_call, d.id, next_number, remaining_backups,
                         metadata.get("status", "PENDING"),
                         metadata.get("customer_name", d.customer_name),

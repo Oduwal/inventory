@@ -489,7 +489,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
 
     # All agents in this branch
     agents = db.execute(
-        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+        select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
+        .where(User.is_active == True).order_by(User.username.asc())
     ).scalars().all()
 
     selected_agent_id = int(agent_id) if agent_id and agent_id.isdigit() else None

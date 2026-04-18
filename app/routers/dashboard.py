@@ -129,7 +129,8 @@ def home(request: Request, db: Session = Depends(get_db)):
     if is_admin(user):
         try:
             branch_agents = db.execute(
-                select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+                select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
+                .where(User.is_active == True).order_by(User.username.asc())
             ).scalars().all()
             for agent in branch_agents:
                 rows = db.execute(

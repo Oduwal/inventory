@@ -59,7 +59,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
         if status: stmt = stmt.where(Delivery.status == status)
         if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
         rows = db.execute(stmt).scalars().all()
-        agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+        agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())
         agents = db.execute(agents_stmt).scalars().all()
 
     delivery_ids = [d.id for d in rows]
@@ -230,7 +230,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
         effective_branch_id = branch_id or (branches[0].id if branches else 0)
     else:
         effective_branch_id = get_selected_branch_id(request, user) or 0
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == effective_branch_id).order_by(User.username.asc())).scalars().all()
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == effective_branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all()
     _items_with_stock = get_items_with_stock(db, branch_id=effective_branch_id)
     items = [it for it, _ in _items_with_stock]
     csrf_token = get_csrf_token(request)
@@ -254,7 +254,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db)):
     if is_agent(user):
         return HTMLResponse("Forbidden — only admins can create orders", status_code=403)
     branch_id = get_selected_branch_id(request, user)
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all()
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all()
     # Get items with current stock levels for out-of-stock labelling
     _items_with_stock = get_items_with_stock(db, branch_id=branch_id)
     items = [(it, int(stock)) for it, stock in _items_with_stock]
@@ -327,7 +327,7 @@ async def delivery_create(
         if not branch_id:
             raise HTTPException(status_code=400, detail="Branch required")
         # Assign to first admin of the branch (they will re-delegate to agents)
-        branch_admin = db.scalar(select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id))
+        branch_admin = db.scalar(select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id).where(User.is_active == True))
         target_agent_id = branch_admin.id if branch_admin else None
         if not target_agent_id:
             raise HTTPException(status_code=400, detail="No admin found for selected branch")
@@ -516,7 +516,7 @@ async def delivery_create(
     # Auto-send WhatsApp template to customer when delivery is created
     if d.customer_phone:
         try:
-            task_queue.submit(send_whatsapp_fallback, d.id, d.customer_phone, d.customer_name or "Customer", items_summary)
+            submit_task(send_whatsapp_fallback, d.id, d.customer_phone, d.customer_name or "Customer", items_summary)
         except Exception as e:
             logging.getLogger("whatsapp").warning("Failed to queue WA template for delivery #%s: %s", d.id, e)
 

@@ -93,7 +93,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
     remittance = float(total_collections) - float(total_expenses) - float(total_office_expenses)
     net_position = remittance + operating_balance
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
 
     # Fetch individual expense entries for the drill-down modal
     def _entries(kind_list):
@@ -227,7 +227,7 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
     if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
         return HTMLResponse("Forbidden", status_code=403)
     branch_id = get_selected_branch_id(request, user)
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
     return tpl(request, "reports_sales.html", {
         "request": request, "user": user, "agents": agents,
@@ -746,7 +746,7 @@ def transfer_new_form(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("Forbidden", status_code=403)
     branches = db.execute(select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)).scalars().all()
     items = get_items_with_stock(db, branch_id=user.branch_id)
-    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).order_by(User.username)).scalars().all()
+    agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).where(User.is_active == True).order_by(User.username)).scalars().all()
     csrf_token = get_csrf_token(request)
     return tpl(request, "transfer_new.html", {
         "request": request, "user": user, "branches": branches, "items": items, "agents": agents,
@@ -832,8 +832,8 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
     packed_by          = db.get(User, getattr(transfer, "packed_by_id", None)) if getattr(transfer, "packed_by_id", None) else None
     is_delegated_receiver = is_agent(user) and transfer.delegated_receiver_id == user.id
     # Agents for sender branch (for delegation dropdown — sender admin only)
-    sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
-    receiver_agents = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.to_branch_id).order_by(User.username)).scalars().all()  if (is_admin(user) and user.branch_id==transfer.to_branch_id)   else []
+    sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).where(User.is_active==True).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
+    receiver_agents = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.to_branch_id).where(User.is_active==True).order_by(User.username)).scalars().all()  if (is_admin(user) and user.branch_id==transfer.to_branch_id)   else []
     csrf_token = get_csrf_token(request)
     return tpl(request, "transfer_detail.html", {
         "request": request, "user": user, "transfer": transfer, "branches": branches,

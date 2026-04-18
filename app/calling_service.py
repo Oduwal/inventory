@@ -195,5 +195,5 @@ def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name
     primary = raw_numbers[0]
     backups = raw_numbers[1:]
 
-    from app.core import task_queue
-    task_queue.submit(_do_call, delivery_id, primary, backups, status, customer_name, items, address)
+    from app.core import submit_task
+    submit_task(_do_call, delivery_id, primary, backups, status, customer_name, items, address)

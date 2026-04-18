@@ -173,11 +173,13 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
     if is_supervisor(user):
         # Supervisor sees all admins across all branches
         agents = db.execute(
-            select(User).where(User.role == "ADMIN").order_by(User.username.asc())
+            select(User).where(User.role == "ADMIN").where(User.is_active == True)
+            .order_by(User.username.asc())
         ).scalars().all()
     else:
         agents = db.execute(
-            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).order_by(User.username.asc())
+            select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
+            .where(User.is_active == True).order_by(User.username.asc())
         ).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return tpl(request, "agents_list.html", {
@@ -303,7 +305,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         deliveries = db.execute(d_stmt).scalars().all()
         branch_agents = db.execute(
             select(User).where(User.role == "AGENT").where(User.branch_id == branch_id_for_admin)
-            .order_by(User.username.asc())
+            .where(User.is_active == True).order_by(User.username.asc())
         ).scalars().all()
     else:
         is_admin_profile = False
@@ -587,7 +589,8 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     exp = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.delivery_id == d.id).where(CashEntry.kind == "EXPENSE")) or 0
     csrf_token = get_csrf_token(request)
     agents = db.execute(
-        select(User).where(User.role == "AGENT").where(User.branch_id == d.branch_id).order_by(User.username.asc())
+        select(User).where(User.role == "AGENT").where(User.branch_id == d.branch_id)
+        .where(User.is_active == True).order_by(User.username.asc())
     ).scalars().all() if is_admin(user) or is_supervisor(user) else []
     # Load any pending adjustment request
     pending_adj = db.execute(

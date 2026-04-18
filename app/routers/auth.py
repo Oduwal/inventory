@@ -72,6 +72,15 @@ async def login(
         })
 
     account_lockout.clear(username_clean)  # [SEC-5] reset on success
+    # [SEC] Reject deactivated accounts
+    if not u.is_active:
+        audit_log(db, u.id, "LOGIN_BLOCKED_INACTIVE", f"username={username_clean}", ip=ip)
+        token = get_csrf_token(request)
+        return tpl(request, "login.html", {
+            "request": request,
+            "error": "This account has been deactivated. Contact your administrator.",
+            "csrf_token": token,
+        })
     # Auto-rehash legacy bcrypt passwords to current scheme (pbkdf2_sha256)
     if (u.password_hash or "").startswith("$2"):
         u.password_hash = hash_password(password)
