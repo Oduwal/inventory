@@ -21,9 +21,8 @@ def notifications_poll(request: Request, after: int = 0, db: Session = Depends(g
         limiter.check(request, max_requests=60, window_seconds=60)
     except HTTPException:
         return JSONResponse({"notifications": []})
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"notifications": []})
-    user = user_or
+    user = get_current_user(db, request)
+    if not user: return JSONResponse({"notifications": []})
     rows = db.execute(text(
         "SELECT id, title, body, link, kind, created_at FROM notifications "
         "WHERE user_id = :uid AND read_at IS NULL AND id > :after "
@@ -40,9 +39,8 @@ def notifications_poll(request: Request, after: int = 0, db: Session = Depends(g
 @router.post("/notifications/dismiss", response_class=JSONResponse)
 async def notifications_dismiss(request: Request, db: Session = Depends(get_db)):
     """Mark one or all notifications as read."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False})
-    user = user_or
+    user = get_current_user(db, request)
+    if not user: return JSONResponse({"ok": False})
     body = await request.json()
     notif_id = body.get("id")  # None = dismiss all
     if notif_id:
@@ -57,9 +55,8 @@ async def notifications_dismiss(request: Request, db: Session = Depends(get_db))
 
 @router.get("/notifications/unread-count", response_class=JSONResponse)
 def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
-    user = user_or
+    user = get_current_user(db, request)
+    if not user: return JSONResponse({"count": 0})
     count = db.execute(text(
         "SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read_at IS NULL"
     ), {"uid": user.id}).scalar() or 0
@@ -76,10 +73,7 @@ def push_vapid_public_key():
 
 
 @router.post("/push/subscribe", response_class=JSONResponse)
-async def push_subscribe(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False}, status_code=401)
-    user = user_or
+async def push_subscribe(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     body     = await request.json()
     endpoint = body.get("endpoint", "")
     keys     = body.get("keys", {})
@@ -99,11 +93,8 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/push/test", response_class=JSONResponse)
-def push_test(request: Request, db: Session = Depends(get_db)):
+def push_test(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     """Send a test push to the logged-in user."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
-    user = user_or
     if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return JSONResponse({"error": "VAPID keys not configured on server"})
     has_sub = db.execute(text("SELECT 1 FROM push_subscriptions WHERE user_id=:uid LIMIT 1"), {"uid": user.id}).first()
@@ -114,9 +105,7 @@ def push_test(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/push/unsubscribe", response_class=JSONResponse)
-async def push_unsubscribe(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"ok": False}, status_code=401)
+async def push_unsubscribe(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     body     = await request.json()
     endpoint = body.get("endpoint", "")
     if endpoint:

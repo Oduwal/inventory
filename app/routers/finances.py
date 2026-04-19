@@ -15,11 +15,7 @@ router = APIRouter()
 # ────────────────────────────────────────────────
 
 @router.get("/cash", response_class=HTMLResponse)
-def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end_date: str = "", agent_id: str = "", db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end_date: str = "", agent_id: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     branch_id = get_selected_branch_id(request, user)
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
     start_dt = None
@@ -154,11 +150,8 @@ async def cash_new(
     csrf_token: str = Form(""),
     form_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     # [SEC] Idempotency — reject duplicate cash entry submissions
     if not consume_form_token(request, form_token):
@@ -225,13 +218,7 @@ async def cash_new(
 # ────────────────────────────────────────────────
 
 @router.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
+def reports_page(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
@@ -242,13 +229,7 @@ def reports_page(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/reports/preview")
-def reports_preview(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
+def reports_preview(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
     if d1 and not d2: d2 = d1
@@ -411,13 +392,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
 
 
 @router.get("/reports/txt", response_class=PlainTextResponse)
-def reports_txt(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return PlainTextResponse("Unauthorized", status_code=401)
-    user = user_or
-    if not (is_admin(user) or is_agent(user) or is_supervisor(user)):
-        return PlainTextResponse("Forbidden", status_code=403)
+def reports_txt(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
     if d1 and not d2: d2 = d1
@@ -506,13 +481,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
 # ────────────────────────────────────────────────
 
 @router.get("/merchant-receipt/new", response_class=HTMLResponse)
-def merchant_receipt_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+def merchant_receipt_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     branch_id = get_selected_branch_id(request, user)
     items = get_items_with_stock(db, branch_id=branch_id)
     csrf_token = get_csrf_token(request)
@@ -540,13 +509,8 @@ async def merchant_receipt_create(
     quantities: list[int] = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
@@ -589,12 +553,8 @@ async def merchant_receipt_create(
 
 
 @router.get("/merchant-return/new", response_class=HTMLResponse)
-def merchant_return_form(request: Request, db: Session = Depends(get_db)):
+def merchant_return_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """Return goods back to a merchant — creates OUT transactions."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
     branch_id = get_selected_branch_id(request, user)
     items = get_items_with_stock(db, branch_id=branch_id)
     # Get distinct merchant names from item categories for this branch
@@ -624,12 +584,9 @@ async def merchant_return_create(
     quantities: list[int] = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
     """Record goods returned to merchant — OUT transaction per item."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
@@ -672,11 +629,7 @@ async def merchant_return_create(
 
 
 @router.get("/transfers", response_class=HTMLResponse)
-def transfers_list(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def transfers_list(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     if is_agent(user):
         # Agents see transfers delegated to them (send or receive side) — hide cancelled from receiver
         transfers = db.execute(
@@ -744,13 +697,7 @@ def transfers_list(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/transfers/new", response_class=HTMLResponse)
-def transfer_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
+def transfer_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     branches = db.execute(select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)).scalars().all()
     items = get_items_with_stock(db, branch_id=user.branch_id)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).where(User.is_active == True).order_by(User.username)).scalars().all()
@@ -772,13 +719,8 @@ async def transfer_create(
     quantities: list[int] = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     if to_branch_id == user.branch_id:
         return redirect("/transfers/new?error=Cannot+transfer+to+your+own+branch")
@@ -818,11 +760,7 @@ async def transfer_create(
 
 
 @router.get("/transfers/{transfer_id}", response_class=HTMLResponse)
-def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
@@ -857,11 +795,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
 
 
 @router.post("/transfers/{transfer_id}/receive")
-async def transfer_receive(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+async def transfer_receive(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     is_recv_agent = is_agent(user)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
@@ -906,11 +840,8 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
 
 
 @router.post("/transfers/{transfer_id}/pack")
-async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
+async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     """Agent marks transfer as packed/ready to send."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
@@ -960,11 +891,9 @@ async def transfer_expense(
     csrf_token: str = Form(""),
     form_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
     """Record expense against a transfer — agent or admin."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     if not consume_form_token(request, form_token):
         return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
@@ -1023,11 +952,8 @@ async def transfer_delegate_receiver(
     delegated_receiver_id: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer: raise HTTPException(status_code=404)
@@ -1052,10 +978,8 @@ async def transfer_receive_expense(
     csrf_token: str = Form(""),
     form_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     if not consume_form_token(request, form_token):
         return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
@@ -1105,11 +1029,7 @@ async def transfer_receive_expense(
     return redirect(f"/transfers/{transfer_id}")
 
 @router.post("/transfers/{transfer_id}/cancel")
-async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
@@ -1190,13 +1110,7 @@ def _merchant_remittance_query(db, sd, ed, bid):
 
 
 @router.get("/merchant-remittance", response_class=HTMLResponse)
-def merchant_remittance_page(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
+def merchant_remittance_page(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
     today = date.today().isoformat()
     return tpl(request, "merchant_remittance.html", {
@@ -1212,14 +1126,8 @@ def merchant_remittance_data(
     end_date: str = "",
     branch_id: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"error": "not logged in"}, status_code=401)
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return JSONResponse({"error": "forbidden"}, status_code=403)
-
     sd = _parse_iso_date(start_date)
     ed = _parse_iso_date(end_date)
     if not sd or not ed:
@@ -1284,15 +1192,10 @@ def merchant_remittance_csv(
     end_date: str = "",
     branch_id: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     from fastapi.responses import Response as _Resp
     import csv, io
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
 
     sd = _parse_iso_date(start_date) or date.today()
     ed = _parse_iso_date(end_date) or date.today()

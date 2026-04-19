@@ -15,17 +15,13 @@ router = APIRouter()
 # ────────────────────────────────────────────────
 
 @router.post("/admin/wipe-data", response_class=JSONResponse)
-async def wipe_all_data(request: Request, db: Session = Depends(get_db)):
+async def wipe_all_data(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """Wipe all operational data except users and branches.
     Deletes: deliveries, transactions, cash entries, stock transfers,
     items, notifications, audit logs, assignments, faulty stock, vettings.
     Keeps: users, branches.
     """
     limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
-    user = user_or
-    if not is_supervisor(user): return JSONResponse({"error": "forbidden — supervisor only"}, status_code=403)
     verify_origin_for_json(request)  # [SEC] CSRF defense for JSON endpoint
     body = await request.json()
     if body.get("confirm") != "WIPE ALL DATA":
@@ -56,14 +52,7 @@ async def wipe_all_data(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/admin/reset-system", response_class=HTMLResponse)
-def reset_system_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def reset_system_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     csrf_token = get_csrf_token(request)
     return HTMLResponse(f"""<!doctype html><html><head><title>Reset System</title>
 <style>body{{font-family:sans-serif;max-width:500px;margin:80px auto;padding:20px}}
@@ -87,15 +76,9 @@ async def reset_system_execute(
     confirm: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
     verify_csrf_token(request, csrf_token)
     if confirm.strip() != "RESET":
         return HTMLResponse("Confirmation text incorrect. <a href='/admin/reset-system'>Go back</a>", status_code=400)

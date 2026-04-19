@@ -23,11 +23,7 @@ def forgot_password_page(request: Request):
 
 
 @router.get("/items", response_class=HTMLResponse)
-def items_list(request: Request, q: str = "", view: str = "combined", branch_filter: str = "", db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def items_list(request: Request, q: str = "", view: str = "combined", branch_filter: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     branch_id = get_selected_branch_id(request, user)
     all_rows = list(get_items_with_stock(db))
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
@@ -94,14 +90,7 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
 
 
 @router.get("/items/new", response_class=HTMLResponse)
-def item_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def item_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     csrf_token = get_csrf_token(request)
     return tpl(request, "item_new.html", {
         "request": request, "user": user,
@@ -121,14 +110,8 @@ async def item_create(
     selling_price: float = Form(0),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
     verify_csrf_token(request, csrf_token)
     name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
@@ -149,13 +132,7 @@ async def item_create(
 
 
 @router.get("/items/import", response_class=HTMLResponse)
-def items_import_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
+def items_import_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
     csrf_token = get_csrf_token(request)
     return tpl(request, "items_import.html", {
@@ -168,14 +145,8 @@ def items_import_form(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/items/import")
-async def items_import_upload(request: Request, db: Session = Depends(get_db)):
+async def items_import_upload(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     import csv, io
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
     form = await request.form()
     verify_csrf_token(request, str(form.get("csrf_token", "")))
     file = form.get("csv_file")
@@ -231,11 +202,7 @@ async def items_import_upload(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/items/{item_id}", response_class=HTMLResponse)
-def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     row = get_item_with_stock(db, item_id)
     if not row:
         return HTMLResponse("Item not found", status_code=404)
@@ -261,14 +228,7 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/items/{item_id}/edit", response_class=HTMLResponse)
-def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     item = db.get(Item, item_id)
     require_item_access(request, user, item)
     csrf_token = get_csrf_token(request)
@@ -294,14 +254,8 @@ async def item_edit_save(
     adjust_note: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
     verify_csrf_token(request, csrf_token)
     item = db.get(Item, item_id)
     require_item_access(request, user, item)
@@ -343,12 +297,9 @@ async def flag_faulty_stock(
     item_id: int, request: Request, db: Session = Depends(get_db),
     qty_faulty: int = Form(...), reason: str = Form(""),
     csrf_token: str = Form(""),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
     """Admin flags a quantity of an item as faulty/bad. Stock count unchanged."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
-    user = user_or
-    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
     verify_csrf_token(request, csrf_token)
 
     item = db.get(Item, item_id)
@@ -375,15 +326,12 @@ async def flag_faulty_stock(
 @router.post("/faulty-stock/{faulty_id}/resolve", response_class=JSONResponse)
 async def resolve_faulty_stock(
     faulty_id: int, request: Request, db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
     """Admin resolves a faulty stock record.
     action='remove'           → OUT transaction, stock reduced
     action='return_merchant'  → OUT transaction labelled as merchant return
     """
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"}, status_code=401)
-    user = user_or
-    if not is_admin(user): return JSONResponse({"error": "forbidden"}, status_code=403)
 
     body         = await request.json()
     action       = body.get("action", "")    # "remove" | "return_merchant"
@@ -448,11 +396,7 @@ async def resolve_faulty_stock(
 # ────────────────────────────────────────────────
 
 @router.get("/transactions", response_class=HTMLResponse)
-def transactions_list(request: Request, branch_filter: str = "", db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def transactions_list(request: Request, branch_filter: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     branch_id = get_selected_branch_id(request, user)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     filter_bid = int(branch_filter) if branch_filter and branch_filter.isdigit() else None
@@ -475,14 +419,7 @@ def transactions_list(request: Request, branch_filter: str = "", db: Session = D
 
 
 @router.get("/transactions/new", response_class=HTMLResponse)
-def tx_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def tx_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branch_id = get_selected_branch_id(request, user)
     items = [i for (i, _s) in get_items_with_stock(db) if i.branch_id == branch_id]
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
@@ -504,14 +441,8 @@ async def tx_create(
     note: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
     verify_csrf_token(request, csrf_token)
     tx_type_clean = (tx_type or "").strip().upper()
     if tx_type_clean not in {"IN", "OUT"}:

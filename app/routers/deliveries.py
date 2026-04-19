@@ -16,11 +16,7 @@ router = APIRouter()
 # ────────────────────────────────────────────────
 
 @router.get("/deliveries", response_class=HTMLResponse)
-def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
     status = request.query_params.get("status", "").strip().upper()
@@ -130,12 +126,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/admin/fix-cash-constraint", response_class=JSONResponse)
-def fix_cash_constraint(request: Request, db: Session = Depends(get_db)):
+def fix_cash_constraint(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """One-time: update cash_entries kind constraint to include TRANSFER_PAYMENT."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"})
-    user = user_or
-    if not is_supervisor(user): return JSONResponse({"error": "forbidden"})
     try:
         with db.bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text("ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind"))
@@ -146,12 +138,8 @@ def fix_cash_constraint(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/admin/check-env", response_class=JSONResponse)
-def check_env(request: Request, db: Session = Depends(get_db)):
+def check_env(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """Supervisor-only: verify environment variables are loaded."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"error": "not logged in"})
-    user = user_or
-    if not is_supervisor(user): return JSONResponse({"error": "forbidden"})
     groq = os.getenv("GROQ_API_KEY", "")
     return JSONResponse({
         "GROQ_API_KEY": f"set ({len(groq)} chars)" if groq else "NOT SET",
@@ -160,15 +148,9 @@ def check_env(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/parse-order/api", response_class=JSONResponse)
-async def parse_order_api(request: Request, db: Session = Depends(get_db)):
+async def parse_order_api(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     """Backend proxy — calls Groq API server-side to avoid CORS."""
     limiter.check(request, max_requests=60, window_seconds=60)
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return JSONResponse({"error": "Forbidden"}, status_code=403)
 
     import httpx
     body = await request.json()
@@ -218,12 +200,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/parse-order", response_class=HTMLResponse)
-def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
+def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     # Supervisor must pick a branch first
     if is_supervisor(user):
@@ -248,13 +225,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
 
 
 @router.get("/deliveries/new", response_class=HTMLResponse)
-def delivery_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if is_agent(user):
-        return HTMLResponse("Forbidden — only admins can create orders", status_code=403)
+def delivery_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all()
     # Get items with current stock levels for out-of-stock labelling
@@ -320,11 +291,8 @@ async def delivery_create(
     csrf_token: str = Form(""),
     form_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     # [SEC] Idempotency — reject duplicate form submissions
     if not consume_form_token(request, form_token):

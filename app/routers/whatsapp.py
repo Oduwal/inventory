@@ -813,17 +813,13 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 # GROUP PARTICIPANTS (fetch members for @mention picker)
 # ─────────────────────────────────────────────────────────────────
 @router.get("/api/group-participants/{delivery_id}")
-async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"error": "Not logged in"}, status_code=401)
-
+async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"error": "Delivery not found"}, status_code=404)
 
     # [FIX-5B] Verify branch access — prevent cross-branch data leakage
-    require_delivery_access(request, user_or, delivery)
+    require_delivery_access(request, user, delivery)
 
     # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
     try:
@@ -873,12 +869,9 @@ async def agent_voice_feedback(
     request: Request,
     delivery_id: int = Form(...),
     audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user = require_login_or_redirect(db, request)
-    if isinstance(user, RedirectResponse):
-        return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
-
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
@@ -974,13 +967,9 @@ async def send_agent_feedback(
     custom_message: str = Form(""),
     group_name: str = Form(""),
     mention_phone: str = Form(""),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    # [SEC] Require login — prevent unauthenticated users from sending messages
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return JSONResponse({"status": "error", "message": "Not logged in"}, status_code=401)
-
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)

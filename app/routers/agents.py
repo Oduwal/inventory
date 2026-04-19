@@ -49,12 +49,9 @@ async def upload_profile_picture(
     file: UploadFile = File(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
     """Upload and auto-resize a profile picture for the currently logged-in user."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
 
     file_bytes = await file.read()
@@ -82,14 +79,9 @@ async def remove_agent_picture(
     agent_id: int,
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     """Admin/supervisor removes a user's profile picture."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user) and not is_supervisor(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
 
     from sqlalchemy.orm import undefer
@@ -113,14 +105,9 @@ async def edit_agent_profile(
     phone: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     """Admin/supervisor edits an agent/admin's name and phone."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user) and not is_supervisor(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
 
     target = db.get(User, agent_id)
@@ -161,14 +148,7 @@ async def edit_agent_profile(
 # ────────────────────────────────────────────────
 
 @router.get("/agents", response_class=HTMLResponse)
-def agents_list(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def agents_list(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     branch_id = get_selected_branch_id(request, user)
     if is_supervisor(user):
         # Supervisor sees all admins across all branches (including deactivated)
@@ -190,14 +170,7 @@ def agents_list(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/agents/new", response_class=HTMLResponse)
-def agent_new_form(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def agent_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     csrf_token = get_csrf_token(request)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return tpl(request, "agent_new.html", {
@@ -217,14 +190,8 @@ async def agent_create(
     phone: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
     verify_csrf_token(request, csrf_token)
     uname = sanitize_username(username)
     if not uname:
@@ -263,14 +230,7 @@ async def agent_create(
 
 
 @router.get("/agents/{agent_id}", response_class=HTMLResponse)
-def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    forbid = require_admin_or_403(user)
-    if forbid:
-        return forbid
+def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     agent = db.get(User, agent_id)
     require_agent_access(request, user, agent)
 
@@ -386,14 +346,8 @@ async def agent_reset_password(
     new_password: str = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    # Admins can reset agents in their branch; supervisors can reset anyone
-    if not is_admin(user) and not is_supervisor(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     target = db.get(User, agent_id)
     if not target:
@@ -423,13 +377,8 @@ def toggle_agent_active(
     agent_id: int,
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
-    if not is_admin(user) and not is_supervisor(user):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     target = db.get(User, agent_id)
     if not target:
@@ -456,11 +405,7 @@ def toggle_agent_active(
 # ────────────────────────────────────────────────
 
 @router.get("/agent-overview", response_class=HTMLResponse)
-def agent_overview(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def agent_overview(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     if is_admin(user) or is_supervisor(user):
         return redirect("/")
     branch_id = get_selected_branch_id(request, user)
@@ -535,11 +480,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
     })
 
 @router.get("/my-deliveries", response_class=HTMLResponse)
-def my_deliveries(request: Request, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def my_deliveries(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     branch_id = get_selected_branch_id(request, user)
     rows = db.execute(
         select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
@@ -592,10 +533,8 @@ def my_deliveries(request: Request, db: Session = Depends(get_db)):
 @router.get("/deliveries/adjustment-count", response_class=JSONResponse)
 def adjustment_count(request: Request, db: Session = Depends(get_db)):
     """Badge count for admin nav — pending adjustment requests."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return JSONResponse({"count": 0})
-    user = user_or
-    if not is_admin(user): return JSONResponse({"count": 0})
+    user = get_current_user(db, request)
+    if not user or not is_admin(user): return JSONResponse({"count": 0})
     count = db.execute(
         text("SELECT COUNT(*) FROM adjustment_requests ar JOIN deliveries d ON d.id = ar.delivery_id WHERE ar.status = 'PENDING' AND d.branch_id = :bid"),
         {"bid": user.branch_id}
@@ -604,11 +543,7 @@ def adjustment_count(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
-def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db)):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
+def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     d = db.get(Delivery, delivery_id)
     require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
@@ -664,11 +599,8 @@ async def deliveries_bulk_assign(
     delivery_ids: list[int] = Form(...),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     agent = db.get(User, agent_id)
@@ -710,12 +642,8 @@ async def delivery_assign_agent(
     request: Request, delivery_id: int,
     agent_id: int = Form(...), csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not (is_admin(user) or is_supervisor(user)):
-        return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404, detail="Delivery not found")
@@ -743,11 +671,8 @@ async def update_delivery_date(
     request: Request, delivery_id: int,
     delivery_date: str = Form(...), csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
     d = db.get(Delivery, delivery_id)
     require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
@@ -771,10 +696,8 @@ async def request_adjustment(
     remove_flags: list[str] = Form(default=[]),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
     verify_csrf_token(request, csrf_token)
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404)
@@ -843,11 +766,8 @@ async def review_adjustment(
     rejection_note: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN")),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
-    if not is_admin(user): return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404)
@@ -947,11 +867,9 @@ async def delivery_collect(
     transfer_amount: float = Form(0.0),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
     """Mark delivery as DELIVERED with cash/transfer payment breakdown."""
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse): return user_or
-    user = user_or
     d = db.get(Delivery, delivery_id)
     require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
@@ -1025,11 +943,8 @@ async def update_delivery_status(
     request: Request, delivery_id: int,
     status: str = Form(...), csrf_token: str = Form(""),
     db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
 ):
-    user_or = require_login_or_redirect(db, request)
-    if isinstance(user_or, RedirectResponse):
-        return user_or
-    user = user_or
     d = db.get(Delivery, delivery_id)
     require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
