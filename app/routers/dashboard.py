@@ -77,9 +77,9 @@ def home(request: Request, db: Session = Depends(get_db)):
     inventory_value = 0.0
     for item, stock in all_items_with_stock:
         if item.branch_id == branch_id:
-            s = float(stock or 0)
+            s = stock or 0
             total_stock += int(s)
-            inventory_value += s * float(item.cost_price or 0)
+            inventory_value += s * (item.cost_price or 0)
             cat = item.category or "Uncategorized"
             cat_map[cat] = cat_map.get(cat, 0) + s
             cat_items.setdefault(cat, []).append({"name": item.name, "stock": int(s), "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)})
@@ -120,7 +120,7 @@ def home(request: Request, db: Session = Depends(get_db)):
         .where(CashEntry.created_at >= datetime.now(timezone.utc) - timedelta(days=14))
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
-        if k: exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
+        if k: exp_by_day[k] = exp_by_day.get(k, 0) + (e.amount or 0)
 
     # Agent collections for today — for admin cash confirmation panel
     today_start = datetime.combine(date.today(), datetime.min.time())
@@ -143,10 +143,10 @@ def home(request: Request, db: Session = Depends(get_db)):
                 ).scalars().all()
                 if not rows:
                     continue
-                total     = sum(float(r.amount) for r in rows)
+                total     = sum(r.amount for r in rows)
                 confirmed = all(getattr(r, "confirmed_by_admin", False) for r in rows)
-                cash_sum  = sum(float(r.amount) for r in rows if r.kind in ("COLLECTION","CASH_PAYMENT"))
-                trans_sum = sum(float(r.amount) for r in rows if r.kind == "TRANSFER_PAYMENT")
+                cash_sum  = sum(r.amount for r in rows if r.kind in ("COLLECTION","CASH_PAYMENT"))
+                trans_sum = sum(r.amount for r in rows if r.kind == "TRANSFER_PAYMENT")
                 agent_collections.append({
                     "agent_id":   agent.id,
                     "agent_name": agent.full_name or agent.username,
@@ -199,10 +199,10 @@ def backfill_collections(request: Request, db: Session = Depends(get_db)):
         if existing > 0:
             skipped += 1
             continue
-        total = float(db.scalar(
+        total = db.scalar(
             select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
             .where(DeliveryItem.delivery_id == d.id)
-        ) or 0)
+        ) or 0
         if total > 0:
             db.add(CashEntry(
                 branch_id=d.branch_id, agent_id=d.agent_id,
@@ -533,7 +533,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     ).scalars().all():
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
-            exp_by_day[k] = exp_by_day.get(k, 0) + float(e.amount or 0)
+            exp_by_day[k] = exp_by_day.get(k, 0) + (e.amount or 0)
     # Build chart days — use isoformat keys throughout for consistency
     delivery_days = {r.day.isoformat() if hasattr(r.day, 'isoformat') else str(r.day)[:10] for r in daily_chart}
     expense_days  = set(exp_by_day.keys())
@@ -555,7 +555,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_top_rows_raw = []
     for item, stock in get_items_with_stock(db):
         s = int(stock or 0)
-        all_inventory_value += s * float(item.cost_price or 0)
+        all_inventory_value += s * (item.cost_price or 0)
         all_total_stock += s
         cat = item.category or "Uncategorized"
         all_cat_map[cat] = all_cat_map.get(cat, 0) + s

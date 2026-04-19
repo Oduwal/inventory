@@ -244,6 +244,18 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=[h.strip() for h in _tr
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# [FIX-5D] Custom JSON encoder so Jinja2's |tojson handles Decimal values
+import json as _json
+from decimal import Decimal as _Decimal
+
+class _DecimalEncoder(_json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, _Decimal):
+            return float(o)
+        return super().default(o)
+
+templates.env.policies["json.dumps_kwargs"] = {"cls": _DecimalEncoder}
+
 # Automatically inject csrf_token into every TemplateResponse context
 # so base.html logout form always has it — no need to pass per-route.
 def tpl(request, name: str, context: dict, status_code: int = 200):

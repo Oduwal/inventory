@@ -235,7 +235,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
     items = [it for it, _ in _items_with_stock]
     csrf_token = get_csrf_token(request)
     form_token = generate_form_token(request)
-    items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": float(it.selling_price or 0), "stock": int(stk)} for it, stk in _items_with_stock]
+    items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": it.selling_price or 0, "stock": int(stk)} for it, stk in _items_with_stock]
     return tpl(request, "parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
         "agents": agents, "items": items,
@@ -379,7 +379,7 @@ async def delivery_create(
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0
         if q > 0:
-            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=float(amt or 0)))
+            db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=amt or 0))
             # Supervisor-created orders: no OUT transaction — stock only leaves when
             # the branch admin assigns the delivery to an agent.
             if is_supervisor(user):

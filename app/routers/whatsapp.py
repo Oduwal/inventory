@@ -32,9 +32,18 @@ def _get_bot_url(group_jid: str = "") -> str:
 # ─────────────────────────────────────────────────────────────────
 @router.post("/api/call-webhook")
 async def call_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receives the end-of-call report from Vapi and updates call_logs + delivery notes.
-    No webhook token check — Vapi is an external service that cannot send custom headers.
-    Protected by delivery_id metadata validation instead."""
+    """Receives the end-of-call report from Vapi and updates call_logs + delivery notes."""
+    # [FIX-5A] Authenticate Vapi webhook — fail-closed if secret not configured
+    import hmac as _hmac
+    vapi_secret = os.getenv("VAPI_WEBHOOK_SECRET", "")
+    if not vapi_secret:
+        _log.error("VAPI_WEBHOOK_SECRET not set — rejecting webhook")
+        return JSONResponse({"error": "Webhook not configured"}, status_code=403)
+    provided = request.headers.get("x-vapi-secret", "")
+    if not _hmac.compare_digest(provided, vapi_secret):
+        _log.warning("Invalid Vapi webhook secret from %s", request.client.host if request.client else "?")
+        return JSONResponse({"error": "Invalid webhook secret"}, status_code=403)
+
     try:
         payload = await request.json()
         _log = logging.getLogger("webhook")
@@ -464,6 +473,12 @@ async def agent_voice_reply(
         _log.info("Twilio voice msg created: sid=%s status=%s", tw_msg.sid, tw_msg.status)
     except Exception as e:
         _log.error("Failed to send voice note via Twilio: %s", e)
+        # [FIX-5C] Clean up orphaned voice_note row since Twilio failed
+        try:
+            db.execute(text("DELETE FROM voice_notes WHERE id = :vid"), {"vid": vn_id})
+            db.commit()
+        except Exception:
+            pass
         return JSONResponse({"ok": False, "error": f"Twilio error: {e}"}, status_code=502)
 
     # Log on delivery notes
@@ -806,6 +821,9 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"error": "Delivery not found"}, status_code=404)
+
+    # [FIX-5B] Verify branch access — prevent cross-branch data leakage
+    require_delivery_access(request, user_or, delivery)
 
     # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
     try:

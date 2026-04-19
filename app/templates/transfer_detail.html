@@ -245,6 +245,7 @@
     <div class="badge b-yellow" style="margin-bottom:12px;">💸 RECORD TRANSFER EXPENSE</div>
     <form method="post" action="/transfers/{{ transfer.id }}/expense">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <div class="inputs" style="flex-wrap:wrap;">
         <div>
           <label>Expense Type</label>
@@ -279,6 +280,7 @@
     <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">This expense will be deducted from collections.</p>
     <form method="post" action="/transfers/{{ transfer.id }}/expense">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <input type="hidden" name="expense_kind" value="COLLECTION_DEDUCTION" />
       <div class="inputs" style="flex-wrap:wrap;">
         <div>
@@ -341,6 +343,7 @@
     <div class="badge b-yellow" style="margin-bottom:12px;">💸 RECORD RECEIVE EXPENSE</div>
     <form method="post" action="/transfers/{{ transfer.id }}/receive-expense">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <div class="inputs" style="flex-wrap:wrap;">
         <div>
           <label>Expense Type</label>
@@ -373,6 +376,7 @@
     <p style="color:var(--muted);font-size:12px;margin-bottom:14px;">This expense will be deducted from collections.</p>
     <form method="post" action="/transfers/{{ transfer.id }}/receive-expense">
       <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}" />
+      <input type="hidden" name="form_token" value="{{ form_token or '' }}" />
       <input type="hidden" name="receive_expense_kind" value="COLLECTION_DEDUCTION" />
       <div class="inputs" style="flex-wrap:wrap;">
         <div>

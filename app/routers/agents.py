@@ -287,7 +287,7 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
                 CashEntry.kind.in_(kind_list)).where(CashEntry.branch_id == branch_id_for_admin)
             if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
             if end_dt: stmt = stmt.where(CashEntry.created_at < end_dt)
-            return float(db.scalar(stmt) or 0)
+            return db.scalar(stmt) or 0
 
         total_collections   = _branch_sum(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"])
         total_expenses      = _branch_sum(["EXPENSE"])
@@ -315,9 +315,9 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
         if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
         if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
-        total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
-        operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
-        remittance = float(total_collections) - float(total_office_expenses)
+        total_return_op_cash = db.scalar(_ret_stmt) or 0
+        operating_balance = total_operating - total_expenses - total_return_op_cash
+        remittance = total_collections - total_office_expenses
         net_position = remittance + operating_balance
         _eff = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
         d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(_eff)).limit(300)
@@ -361,10 +361,10 @@ def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: 
         "request": request, "user": user, "agent": agent, "rows": rows,
         "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
         "deliveries": deliveries, "items_summary": items_summary, "cash_entries": cash_entries,
-        "total_collections": float(total_collections), "total_expenses": float(total_expenses),
-        "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
-        "operating_balance": float(operating_balance), "total_office_expenses": float(total_office_expenses),
-        "remittance": float(remittance), "net_position": float(net_position),
+        "total_collections": total_collections, "total_expenses": total_expenses,
+        "total_operating_cash": total_operating, "total_return_op_cash": total_return_op_cash,
+        "operating_balance": operating_balance, "total_office_expenses": total_office_expenses,
+        "remittance": remittance, "net_position": net_position,
         "preset": preset_norm or (preset or ""),
         "start_date": sd.isoformat() if sd else "",
         "end_date": ed.isoformat() if ed else "",
@@ -493,28 +493,28 @@ def agent_overview(request: Request, db: Session = Depends(get_db)):
     for e in expenses_raw:
         k = e.created_at.date().isoformat() if e.created_at else None
         if k:
-            expense_by_day[k] = expense_by_day.get(k, 0) + float(e.amount or 0)
+            expense_by_day[k] = expense_by_day.get(k, 0) + (e.amount or 0)
 
-    total_collected = float(db.scalar(
+    total_collected = db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.agent_id == user.id)
         .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT", "TRANSFER_PAYMENT"]))
-    ) or 0)
-    cash_collected = float(db.scalar(
+    ) or 0
+    cash_collected = db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.agent_id == user.id)
         .where(CashEntry.kind.in_(["COLLECTION", "CASH_PAYMENT"]))
-    ) or 0)
-    transfer_collected = float(db.scalar(
+    ) or 0
+    transfer_collected = db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.agent_id == user.id)
         .where(CashEntry.kind == "TRANSFER_PAYMENT")
-    ) or 0)
-    total_expenses = float(db.scalar(
+    ) or 0
+    total_expenses = db.scalar(
         select(func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.agent_id == user.id)
         .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
-    ) or 0)
+    ) or 0
 
     import json as _json
     deliveries_json = [
@@ -648,8 +648,8 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     ).fetchall()
     return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
-        "collection_total": float(col), "expense_total": float(exp),
-        "cash_total": float(cash_total), "transfer_total": float(transfer_total),
+        "collection_total": col, "expense_total": exp,
+        "cash_total": cash_total, "transfer_total": transfer_total,
         "back_url": "/deliveries" if is_admin(user) else "/my-deliveries",
         "active": "deliveries", "csrf_token": csrf_token, "agents": agents,
         "pending_adj": pending_adj, "adj_items": adj_items,
@@ -796,20 +796,28 @@ async def request_adjustment(
     for i, item_id in enumerate(item_ids):
         if item_id not in item_map: continue
         di, it = item_map[item_id]
-        new_amt  = float(new_amounts[i]) if i < len(new_amounts) else float(di.line_amount)
+        from decimal import Decimal as _D, InvalidOperation as _IO
+        try:
+            new_amt = _D(str(new_amounts[i])) if i < len(new_amounts) else (di.line_amount or 0)
+        except (_IO, ValueError):
+            new_amt = di.line_amount or 0
         new_qty  = int(new_quantities[i]) if i < len(new_quantities) and new_quantities[i] else di.quantity
         new_qty  = max(0, min(new_qty, di.quantity))  # clamp 0..original
         remove   = remove_flags[i] == "1" if i < len(remove_flags) else (new_qty == 0)
         db.execute(text(
             "INSERT INTO adjustment_request_items (request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item) "
             "VALUES (:rid, :diid, :name, :orig, :new, :rem)"
-        ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": float(di.line_amount), "new": new_amt if not remove else 0, "rem": remove})
+        ), {"rid": req_id, "diid": di.id, "name": it.name, "orig": di.line_amount or 0, "new": new_amt if not remove else 0, "rem": remove})
         # Store new quantity in remove_item logic — use new_amount=0 + note for qty reduction
         if not remove and new_qty != di.quantity:
             # Update the line amount proportionally
             if di.quantity > 0:
-                proportional_amt = float(di.line_amount) * new_qty / di.quantity
-                new_amt = proportional_amt if float(new_amounts[i] if i < len(new_amounts) else 0) == 0 else new_amt
+                proportional_amt = (di.line_amount or 0) * new_qty / di.quantity
+                try:
+                    _user_amt = _D(str(new_amounts[i])) if i < len(new_amounts) else 0
+                except (_IO, ValueError):
+                    _user_amt = 0
+                new_amt = proportional_amt if _user_amt == 0 else new_amt
             db.execute(text(
                 "UPDATE adjustment_request_items SET new_amount=:amt WHERE request_id=:rid AND delivery_item_id=:diid"
             ), {"amt": new_amt, "rid": req_id, "diid": di.id})
@@ -954,8 +962,15 @@ async def delivery_collect(
     if d.status == "ADJUSTMENT_PENDING":
         return redirect(f"/deliveries/{delivery_id}?error=Status+is+locked+%E2%80%94+an+adjustment+request+is+pending+approval.+Approve+or+reject+it+first.")
 
-    cash_amt     = max(0.0, float(cash_amount or 0))
-    transfer_amt = max(0.0, float(transfer_amount or 0))
+    from decimal import Decimal as _D, InvalidOperation as _IO
+    try:
+        cash_amt = max(0, _D(str(cash_amount or 0)))
+    except (_IO, ValueError):
+        cash_amt = _D("0")
+    try:
+        transfer_amt = max(0, _D(str(transfer_amount or 0)))
+    except (_IO, ValueError):
+        transfer_amt = _D("0")
     total_paid   = cash_amt + transfer_amt
 
     # Mark delivered
@@ -984,10 +999,10 @@ async def delivery_collect(
         ))
     # If nothing entered, use full order total
     if cash_amt == 0 and transfer_amt == 0:
-        order_total = float(db.scalar(
+        order_total = db.scalar(
             select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
             .where(DeliveryItem.delivery_id == d.id)
-        ) or 0)
+        ) or 0
         if order_total > 0:
             db.add(CashEntry(
                 branch_id=d.branch_id, agent_id=d.agent_id, delivery_id=d.id,
@@ -1063,7 +1078,6 @@ async def update_delivery_status(
                     select(func.coalesce(func.sum(DeliveryItem.line_amount), 0))
                     .where(DeliveryItem.delivery_id == d.id)
                 ) or 0
-                order_total = float(order_total)
                 if order_total > 0:
                     db.add(CashEntry(
                         branch_id=d.branch_id,

@@ -56,7 +56,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if start_dt: stmt = stmt.where(CashEntry.created_at >= start_dt)
         if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
         if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
-        return float(db.scalar(stmt) or 0)
+        return db.scalar(stmt) or 0
 
     # Per-day breakdown — query each kind separately then merge by day
     def _day_kind_map(kind_list, agent_id=None):
@@ -68,7 +68,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         if end_dt:   stmt = stmt.where(CashEntry.created_at < end_dt)
         if agent_id: stmt = stmt.where(CashEntry.agent_id == agent_id)
         stmt = stmt.group_by(func.date(CashEntry.created_at))
-        return {str(r.day): float(r.total) for r in db.execute(stmt).all()}
+        return {str(r.day): r.total for r in db.execute(stmt).all()}
 
     col_map  = _day_kind_map(["COLLECTION","CASH_PAYMENT","TRANSFER_PAYMENT"], selected_agent_id)
     exp_map  = _day_kind_map(["EXPENSE"], selected_agent_id)
@@ -89,9 +89,9 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt:   _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
     if selected_agent_id: _ret_stmt = _ret_stmt.where(CashEntry.agent_id == selected_agent_id)
-    total_return_op_cash = float(db.scalar(_ret_stmt) or 0)
-    operating_balance = float(total_operating) - float(total_expenses) - total_return_op_cash
-    remittance = float(total_collections) - float(total_expenses) - float(total_office_expenses)
+    total_return_op_cash = db.scalar(_ret_stmt) or 0
+    operating_balance = total_operating - total_expenses - total_return_op_cash
+    remittance = total_collections - total_expenses - total_office_expenses
     net_position = remittance + operating_balance
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
 
@@ -108,7 +108,7 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
         umap = {u.id: (u.full_name or u.username) for u in agents} if agents else {}
         return [
             {"date": e.created_at.strftime("%d %b %Y") if e.created_at else "—",
-             "amount": float(e.amount), "note": e.note or "—",
+             "amount": e.amount, "note": e.note or "—",
              "agent": umap.get(e.agent_id, "—"), "kind": e.kind}
             for e in _entries(kind_list)
         ]
@@ -124,10 +124,10 @@ def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end
     form_token = generate_form_token(request)
     return tpl(request, "cash_dashboard.html", {
         "request": request, "user": user, "rows": rows,
-        "total_collections": float(total_collections), "total_expenses": float(total_expenses),
-        "total_operating_cash": float(total_operating), "total_return_op_cash": total_return_op_cash,
-        "operating_balance": float(operating_balance), "total_office_expenses": float(total_office_expenses),
-        "remittance": float(remittance), "net_position": float(net_position),
+        "total_collections": total_collections, "total_expenses": total_expenses,
+        "total_operating_cash": total_operating, "total_return_op_cash": total_return_op_cash,
+        "operating_balance": operating_balance, "total_office_expenses": total_office_expenses,
+        "remittance": remittance, "net_position": net_position,
         "agents": agents, "agent_id": agent_id,
         "expense_entries": expense_entries,
         "coll_expense_entries": coll_expense_entries,
@@ -183,24 +183,24 @@ async def cash_new(
     # Auto-detect expense source for agents:
     # If agent records EXPENSE and has no remaining op cash balance → use COLLECTION_EXPENSE instead
     if k == "EXPENSE" and is_agent(user):
-        op_given = float(db.scalar(
+        op_given = db.scalar(
             select(func.coalesce(func.sum(CashEntry.amount), 0))
             .where(CashEntry.agent_id == target_agent_id)
             .where(CashEntry.branch_id == branch_id)
             .where(CashEntry.kind == "OPERATING_CASH")
-        ) or 0)
-        op_spent = float(db.scalar(
+        ) or 0
+        op_spent = db.scalar(
             select(func.coalesce(func.sum(CashEntry.amount), 0))
             .where(CashEntry.agent_id == target_agent_id)
             .where(CashEntry.branch_id == branch_id)
             .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
-        ) or 0)
-        op_returned = float(db.scalar(
+        ) or 0
+        op_returned = db.scalar(
             select(func.coalesce(func.sum(CashEntry.amount), 0))
             .where(CashEntry.agent_id == target_agent_id)
             .where(CashEntry.branch_id == branch_id)
             .where(CashEntry.kind == "RETURN_OPERATING_CASH")
-        ) or 0)
+        ) or 0
         op_balance = op_given - op_spent - op_returned
         if op_balance <= 0:
             k = "COLLECTION_EXPENSE"  # Op cash exhausted — deduct from collection
@@ -212,7 +212,7 @@ async def cash_new(
     # Notify agent when admin gives them operating cash
     if k == "OPERATING_CASH" and is_admin(user) and target_agent_id != user.id:
         notify(db, target_agent_id, "💰 Operating Cash Received",
-               f"Admin has given you ₦{float(amt):,.0f} operating cash." + (f" Note: {(note or '').strip()}" if note else ""),
+               f"Admin has given you ₦{amt:,.0f} operating cash." + (f" Note: {(note or '').strip()}" if note else ""),
                "/cash", "success")
     db.commit()
     if d_id:
@@ -277,7 +277,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.line_amount, Item.selling_price)
             .join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id.in_(delivery_ids))
         ).all():
-            q = float(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
+            q = qty or 0; la = line_amt or 0; sp = selling_price or 0
             # Skip items removed by adjustment (line_amount == 0 means customer refused/returned)
             if la == 0 and q > 0:
                 continue
@@ -296,7 +296,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         _agent_ce_filter = True  # supervisor: no agent filter
     # agent_exp_map: AGENT expenses EXCLUDING waybill-tagged ones (those go to waybill section)
     # agent_exp_map: includes both EXPENSE (from op cash) and COLLECTION_EXPENSE (from collection)
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(
+    agent_exp_map = {int(aid): t for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
@@ -306,7 +306,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         .group_by(CashEntry.agent_id)
     ).all()}
     # Separate collection-funded expenses per agent for report breakdown
-    agent_coll_exp_map = {int(aid): float(t) for aid, t in db.execute(
+    agent_coll_exp_map = {int(aid): t for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "COLLECTION_EXPENSE")
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
@@ -314,7 +314,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         .where(_agent_ce_filter if not is_supervisor(user) else True)
         .group_by(CashEntry.agent_id)
     ).all()}
-    op_cash_map = {int(aid): float(t) for aid, t in db.execute(
+    op_cash_map = {int(aid): t for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt)
         .where(CashEntry.created_at <= end_dt).where(_ce_branch)
@@ -336,7 +336,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     elif target_agent_id:
         _wb_stmt = _wb_stmt.where(CashEntry.agent_id == target_agent_id)
     waybill_entries_raw = db.execute(_wb_stmt).all()
-    waybill_entries = [{"amount": float(r[0]), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
+    waybill_entries = [{"amount": r[0], "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
     waybill_total = sum(e["amount"] for e in waybill_entries)
     # office_total = non-waybill OFFICE_EXPENSE + waybill_total
     _off_stmt = (
@@ -350,7 +350,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         _off_stmt = _off_stmt.where(CashEntry.agent_id == user.id)
     elif target_agent_id:
         _off_stmt = _off_stmt.where(CashEntry.agent_id == target_agent_id)
-    office_non_waybill = float(db.scalar(_off_stmt) or 0)
+    office_non_waybill = db.scalar(_off_stmt) or 0
     office_total = office_non_waybill + waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
@@ -358,28 +358,28 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         users_map = {int(u.id): u for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
         uname = {uid: (u.full_name or u.username) for uid, u in users_map.items()}
     delivery_rows = []
-    grand_total = 0.0
+    grand_total = 0
     for idx, d in enumerate(deliveries, 1):
         d_items = items_by_delivery.get(int(d.id), [])
         total = sum(i["amount"] for i in d_items)
         grand_total += total
         delivery_rows.append({"idx": idx, "customer": d.customer_name, "date": (d.delivery_date or d.created_at).strftime("%d %b %Y"), "items": d_items, "total": total})
     agent_op_summary = []
-    total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0.0
+    total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0
     for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
-        exp       = agent_exp_map.get(aid, 0.0)
-        coll_exp  = agent_coll_exp_map.get(aid, 0.0)
+        exp       = agent_exp_map.get(aid, 0)
+        coll_exp  = agent_coll_exp_map.get(aid, 0)
         op_exp    = exp - coll_exp   # expenses from operating cash only
-        op        = op_cash_map.get(aid, 0.0)
+        op        = op_cash_map.get(aid, 0)
         # Subtract confirmed returns from balance (agent already handed back cash)
-        ret_confirmed = float(db.scalar(
+        ret_confirmed = db.scalar(
             select(func.coalesce(func.sum(CashEntry.amount), 0))
             .where(CashEntry.agent_id == aid)
             .where(CashEntry.kind == "RETURN_OPERATING_CASH")
             .where(CashEntry.confirmed_by_admin == True)
             .where(CashEntry.created_at >= start_dt)
             .where(CashEntry.created_at <= end_dt)
-        ) or 0)
+        ) or 0
         balance   = op - op_exp - ret_confirmed
         total_op_cash_given += op
         expenses_from_collections += coll_exp
@@ -442,17 +442,17 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all():
-            q = float(qty or 0); la = float(line_amt or 0)
+            q = qty or 0; la = line_amt or 0
             # Skip items removed by adjustment (line_amount == 0 means customer refused/returned)
             if la == 0 and q > 0:
                 continue
             items_by_delivery.setdefault(int(did), []).append((str(iname), q, la))
     _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
-    agent_exp_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
-    agent_coll_exp_txt = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
-    op_cash_map = {int(aid): float(t) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
-    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0)
-    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    agent_exp_map = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    agent_coll_exp_txt = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
+    op_cash_map = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
+    office_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0
+    waybill_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0
     other_office_total = office_total - waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname: dict[int, str] = {}
@@ -570,11 +570,12 @@ async def merchant_receipt_create(
             reference=ref, note=full_note,
         ))
     # Record expense if provided
-    exp_amt = 0.0
+    from decimal import Decimal as _D, InvalidOperation
+    exp_amt = 0
     try:
-        exp_amt = float(expense_amount) if expense_amount else 0.0
-    except ValueError:
-        exp_amt = 0.0
+        exp_amt = _D(str(expense_amount)) if expense_amount else 0
+    except (InvalidOperation, ValueError):
+        exp_amt = 0
     if exp_amt > 0:
         db.add(CashEntry(
             branch_id=branch_id,
@@ -652,11 +653,11 @@ async def merchant_return_create(
             reference=ref, note=full_note,
         ))
     # Record expense if provided
-    exp_amt = 0.0
+    exp_amt = 0
     try:
-        exp_amt = float(expense_amount) if expense_amount else 0.0
-    except ValueError:
-        exp_amt = 0.0
+        exp_amt = _D(str(expense_amount)) if expense_amount else 0
+    except (InvalidOperation, ValueError):
+        exp_amt = 0
     if exp_amt > 0:
         db.add(CashEntry(
             branch_id=branch_id, agent_id=user.id,
@@ -841,6 +842,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
     sender_agents   = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.from_branch_id).where(User.is_active==True).order_by(User.username)).scalars().all() if (is_admin(user) and user.branch_id==transfer.from_branch_id) else []
     receiver_agents = db.execute(select(User).where(User.role=="AGENT").where(User.branch_id==transfer.to_branch_id).where(User.is_active==True).order_by(User.username)).scalars().all()  if (is_admin(user) and user.branch_id==transfer.to_branch_id)   else []
     csrf_token = get_csrf_token(request)
+    form_token = generate_form_token(request)
     return tpl(request, "transfer_detail.html", {
         "request": request, "user": user, "transfer": transfer, "branches": branches,
         "delegated_agent": delegated_agent, "delegated_receiver": delegated_receiver,
@@ -848,7 +850,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
         "is_delegated": is_delegated, "is_delegated_receiver": is_delegated_receiver,
         "sender_agents": sender_agents, "receiver_agents": receiver_agents,
         "active": "transfers", "selected_branch_id": getattr(user, "branch_id", None),
-        "csrf_token": csrf_token,
+        "csrf_token": csrf_token, "form_token": form_token,
         "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
     })
@@ -888,7 +890,7 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
         db.add(Transaction(branch_id=recv_branch_id, item_id=dest_item.id, type="IN", quantity=line.quantity,
                            reference=f"TRANSFER #{transfer.id}", note=f"Stock received from branch {transfer.from_branch.name}"))
     # Require receive expense to be recorded before confirming receipt
-    if not transfer.receive_expense_amount or float(transfer.receive_expense_amount) <= 0:
+    if not transfer.receive_expense_amount or transfer.receive_expense_amount <= 0:
         return redirect(f"/transfers/{transfer_id}?error=Please+record+your+receiving+expenses+before+confirming+receipt")
     transfer.status = "RECEIVED"
     transfer.received_by_id = user.id
@@ -919,7 +921,7 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
     if transfer.status != "PENDING":
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+not+pending")
     # Require expense to be recorded before marking as sent
-    if not transfer.expense_amount or float(transfer.expense_amount) <= 0:
+    if not transfer.expense_amount or transfer.expense_amount <= 0:
         return redirect(f"/transfers/{transfer_id}?error=Please+record+your+sending+expenses+before+marking+as+sent")
     # Deduct stock from sender branch — only if not already deducted (guard against old transfers)
     already_deducted = db.scalar(
@@ -956,6 +958,7 @@ async def transfer_expense(
     expense_kind: str = Form(""),
     expense_note: str = Form(""),
     csrf_token: str = Form(""),
+    form_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Record expense against a transfer — agent or admin."""
@@ -963,6 +966,8 @@ async def transfer_expense(
     if isinstance(user_or, RedirectResponse): return user_or
     user = user_or
     verify_csrf_token(request, csrf_token)
+    if not consume_form_token(request, form_token):
+        return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404)
@@ -1045,12 +1050,15 @@ async def transfer_receive_expense(
     receive_expense_kind: str = Form(""),
     receive_expense_note: str = Form(""),
     csrf_token: str = Form(""),
+    form_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user_or = require_login_or_redirect(db, request)
     if isinstance(user_or, RedirectResponse): return user_or
     user = user_or
     verify_csrf_token(request, csrf_token)
+    if not consume_form_token(request, form_token):
+        return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer: raise HTTPException(status_code=404)
 
@@ -1121,22 +1129,22 @@ async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = 
                 reference=f"TRANSFER #{transfer.id} CANCELLED", note="Stock returned — transfer cancelled"
             ))
     # Reverse send-side expense cash entry — find original by matching the "waybill - to" note pattern
-    if transfer.expense_amount and float(transfer.expense_amount) > 0:
+    if transfer.expense_amount and transfer.expense_amount > 0:
         to_branch_name = transfer.to_branch.name if transfer.to_branch else ""
         orig_exp = db.scalar(
             select(CashEntry).where(CashEntry.branch_id == transfer.from_branch_id)
-            .where(CashEntry.amount == float(transfer.expense_amount))
+            .where(CashEntry.amount == transfer.expense_amount)
             .where(CashEntry.note.like(f"waybill - to {to_branch_name}%"))
             .order_by(CashEntry.created_at.desc())
         )
         if orig_exp:
             db.delete(orig_exp)
     # Reverse receive-side expense cash entry — find original by matching the "waybill - from" note pattern
-    if transfer.receive_expense_amount and float(transfer.receive_expense_amount) > 0:
+    if transfer.receive_expense_amount and transfer.receive_expense_amount > 0:
         from_branch_name = transfer.from_branch.name if transfer.from_branch else ""
         orig_recv_exp = db.scalar(
             select(CashEntry).where(CashEntry.branch_id == transfer.to_branch_id)
-            .where(CashEntry.amount == float(transfer.receive_expense_amount))
+            .where(CashEntry.amount == transfer.receive_expense_amount)
             .where(CashEntry.note.like(f"waybill - from {from_branch_name}%"))
             .order_by(CashEntry.created_at.desc())
         )
@@ -1231,10 +1239,10 @@ def merchant_remittance_data(
         cat = r.category
         did = r.delivery_id
         qty = int(r.qty or 0)
-        amt = float(r.collection or 0)
+        amt = r.collection or 0
 
         if cat not in categories:
-            categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0.0}
+            categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0}
 
         key = (cat, did)
         if key not in delivery_map:
@@ -1301,12 +1309,12 @@ def merchant_remittance_csv(
         if key not in delivery_map:
             delivery_map[key] = {
                 "category": cat, "customer": r.customer_name or "—",
-                "items": [], "qty": 0, "collection": 0.0,
+                "items": [], "qty": 0, "collection": 0,
             }
             categories_order.append(key)
         delivery_map[key]["items"].append(f"{r.item_name} x{int(r.qty or 0)}")
         delivery_map[key]["qty"] += int(r.qty or 0)
-        delivery_map[key]["collection"] += float(r.collection or 0)
+        delivery_map[key]["collection"] += r.collection or 0
 
     output = io.StringIO()
     w = csv.writer(output)

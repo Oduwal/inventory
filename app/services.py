@@ -98,9 +98,9 @@ def dashboard_kpis(db: Session, branch_id: int | None = None):
     )
     if branch_id is not None:
         value_stmt = value_stmt.where(Item.branch_id == branch_id)
-    inventory_value = float(db.scalar(value_stmt) or 0)
+    inventory_value = db.scalar(value_stmt) or 0
 
-    return int(total_stock), float(inventory_value)
+    return int(total_stock), inventory_value
 
 
 def stock_by_category(db: Session, branch_id: int | None = None):
@@ -367,15 +367,15 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
     for r in delivery_rows:
         key = str(r.day)
         ensure(key)
-        by_day[key]["collections"] += float(r.delivery_collections or 0)
+        by_day[key]["collections"] += (r.delivery_collections or 0)
 
     for r in cash_rows:
         key = str(r.day)
         ensure(key)
-        by_day[key]["collections"] += float(r.extra_collections or 0)
-        by_day[key]["operating_cash"] += float(r.operating_cash or 0)
-        by_day[key]["expenses"] += float(r.expenses or 0)
-        by_day[key]["office_expenses"] += float(r.office_expenses or 0)
+        by_day[key]["collections"] += (r.extra_collections or 0)
+        by_day[key]["operating_cash"] += (r.operating_cash or 0)
+        by_day[key]["expenses"] += (r.expenses or 0)
+        by_day[key]["office_expenses"] += (r.office_expenses or 0)
 
     merged = list(by_day.values())
     merged.sort(key=lambda x: x["day"])
@@ -387,10 +387,10 @@ def get_cash_summary(db: Session, agent_id: int | None, start: datetime | None, 
 
     return (
         merged,
-        float(total_collections),
-        float(total_expenses),
-        float(total_operating),
-        float(total_office_expenses),
+        total_collections,
+        total_expenses,
+        total_operating,
+        total_office_expenses,
     )
 
 
@@ -472,7 +472,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     )
     if start: col_q = col_q.where(Delivery.created_at >= start)
     if end:   col_q = col_q.where(Delivery.created_at < end)
-    col_map: dict[int, float] = {row.branch_id: float(row.total) for row in db.execute(col_q).all()}
+    col_map = {row.branch_id: row.total for row in db.execute(col_q).all()}
 
     # â”€â”€ Query 3: all cash kinds by branch in one shot â”€â”€
     cash_q = (
@@ -487,9 +487,9 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     )
     if start: cash_q = cash_q.where(CashEntry.created_at >= start)
     if end:   cash_q = cash_q.where(CashEntry.created_at < end)
-    cash_map: dict[int, dict[str, float]] = {}
+    cash_map: dict = {}
     for row in db.execute(cash_q).all():
-        cash_map.setdefault(row.branch_id, {})[row.kind] = float(row.total)
+        cash_map.setdefault(row.branch_id, {})[row.kind] = row.total
 
     # â”€â”€ Assemble rows â”€â”€
     rows = []
