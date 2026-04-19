@@ -87,7 +87,7 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
     auth     = keys.get("auth", "")
     if not endpoint or not p256dh or not auth:
         return JSONResponse({"error": "invalid subscription"}, status_code=400)
-    validate_push_endpoint(endpoint)  # [SEC] Reject non-HTTPS or bogus endpoints
+    await validate_push_endpoint(endpoint)  # [SEC] Reject non-HTTPS or bogus endpoints
     # Upsert: delete old entry for this endpoint, then insert fresh
     db.execute(text("DELETE FROM push_subscriptions WHERE endpoint=:ep"), {"ep": endpoint})
     db.execute(text(

@@ -548,10 +548,10 @@ def process_profile_image(content: bytes) -> tuple[bytes, str]:
 # [SEC-10] PUSH SUBSCRIPTION ENDPOINT VALIDATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def validate_push_endpoint(endpoint: str) -> None:
+async def validate_push_endpoint(endpoint: str) -> None:
     """Reject push subscription endpoints that aren't HTTPS push service URLs."""
     from urllib.parse import urlparse
-    import ipaddress, socket
+    import ipaddress, socket, asyncio
     parsed = urlparse(endpoint)
     if parsed.scheme != "https":
         raise HTTPException(status_code=400, detail="Push endpoint must use HTTPS.")
@@ -565,13 +565,19 @@ def validate_push_endpoint(endpoint: str) -> None:
         if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
             raise HTTPException(status_code=400, detail="Push endpoint must not target private networks.")
     except ValueError:
-        # hostname is a DNS name, resolve it
+        # hostname is a DNS name — resolve asynchronously with timeout to prevent DNS tarpit DoS
+        loop = asyncio.get_running_loop()
         try:
-            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            resolved = await asyncio.wait_for(
+                loop.getaddrinfo(hostname, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM),
+                timeout=5.0,
+            )
             for family, _, _, _, sockaddr in resolved:
                 addr = ipaddress.ip_address(sockaddr[0])
                 if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
                     raise HTTPException(status_code=400, detail="Push endpoint must not target private networks.")
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=400, detail="Push endpoint domain resolution timed out.")
         except socket.gaierror:
             raise HTTPException(status_code=400, detail="Push endpoint domain could not be resolved.")
 
