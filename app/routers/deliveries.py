@@ -344,6 +344,10 @@ async def delivery_create(
             raise HTTPException(status_code=422, detail="agent_id required for admin")
         target_agent_id = int(agent_id)
         branch_id = get_current_branch_id(request)
+        # [SEC] Verify target agent belongs to this admin's branch
+        target_agent = db.get(User, target_agent_id)
+        if not target_agent or target_agent.branch_id != branch_id:
+            raise HTTPException(status_code=403, detail="Agent not in your branch")
     else:
         target_agent_id = int(user.id)
         branch_id = get_current_branch_id(request)
