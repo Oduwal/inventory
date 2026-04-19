@@ -813,13 +813,7 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 # GROUP PARTICIPANTS (fetch members for @mention picker)
 # ─────────────────────────────────────────────────────────────────
 @router.get("/api/group-participants/{delivery_id}")
-async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
-    delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
-    if not delivery:
-        return JSONResponse({"error": "Delivery not found"}, status_code=404)
-
-    # [FIX-5B] Verify branch access — prevent cross-branch data leakage
-    require_delivery_access(request, user, delivery)
+async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user), delivery: Delivery = Depends(get_authorized_delivery)):
 
     # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
     try:

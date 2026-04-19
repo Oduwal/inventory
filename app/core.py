@@ -64,7 +64,7 @@ logging.getLogger("push").info(
 VAPID_PUBLIC_KEY  = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, Path
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -363,29 +363,69 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
-def require_item_access(request: Request, user: User | None, item: Item | None) -> None:
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    branch_id = get_selected_branch_id(request, user)
-    require_branch_access(user, item.branch_id)
-    if not is_supervisor(user) and item.branch_id != branch_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+# ── Declarative resource-level dependencies ─────────────────────
+# Use these in route signatures via Depends() to fetch + authorize
+# a resource in one step.  The handler receives a pre-authorized object.
 
-
-def require_delivery_access(request: Request, user: User | None, delivery: Delivery | None) -> None:
+def get_authorized_delivery(
+    request: Request,
+    delivery_id: int = Path(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
+) -> Delivery:
+    delivery = db.get(Delivery, delivery_id)
     if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found")
     branch_id = get_selected_branch_id(request, user)
     require_branch_access(user, delivery.branch_id)
     if not is_supervisor(user) and delivery.branch_id != branch_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    return delivery
 
 
-def require_agent_access(request: Request, user: User | None, agent: User | None) -> None:
+def get_authorized_item(
+    request: Request,
+    item_id: int = Path(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
+) -> Item:
+    item = db.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    branch_id = get_selected_branch_id(request, user)
+    require_branch_access(user, item.branch_id)
+    if not is_supervisor(user) and item.branch_id != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return item
+
+
+def get_authorized_item_with_stock(
+    request: Request,
+    item_id: int = Path(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_active_user),
+):
+    row = get_item_with_stock(db, item_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Item not found")
+    item = row[0]
+    require_branch_access(user, item.branch_id)
+    branch_id = get_selected_branch_id(request, user)
+    if not is_supervisor(user) and item.branch_id != branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return row
+
+
+def get_authorized_agent(
+    request: Request,
+    agent_id: int = Path(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
+) -> User:
+    agent = db.get(User, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     role = (agent.role or "").upper()
-    # Supervisor can view admins; admin can only view agents
     if is_supervisor(user):
         if role not in ("AGENT", "ADMIN"):
             raise HTTPException(status_code=404, detail="User not found")
@@ -396,6 +436,8 @@ def require_agent_access(request: Request, user: User | None, agent: User | None
     require_branch_access(user, agent.branch_id)
     if not is_supervisor(user) and agent.branch_id != branch_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    return agent
+
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
     if (password_hash or "").startswith("$2"):

@@ -230,9 +230,7 @@ async def agent_create(
 
 
 @router.get("/agents/{agent_id}", response_class=HTMLResponse)
-def agent_detail(request: Request, agent_id: int, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
-    agent = db.get(User, agent_id)
-    require_agent_access(request, user, agent)
+def agent_detail(request: Request, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")), agent: User = Depends(get_authorized_agent)):
 
     sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
 
@@ -543,9 +541,7 @@ def adjustment_count(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
-def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
-    d = db.get(Delivery, delivery_id)
-    require_delivery_access(request, user, d)
+def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user), d: Delivery = Depends(get_authorized_delivery)):
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     d_items_all = db.execute(
@@ -672,9 +668,8 @@ async def update_delivery_date(
     delivery_date: str = Form(...), csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
+    d: Delivery = Depends(get_authorized_delivery),
 ):
-    d = db.get(Delivery, delivery_id)
-    require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
@@ -868,10 +863,9 @@ async def delivery_collect(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
+    d: Delivery = Depends(get_authorized_delivery),
 ):
     """Mark delivery as DELIVERED with cash/transfer payment breakdown."""
-    d = db.get(Delivery, delivery_id)
-    require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
@@ -944,9 +938,8 @@ async def update_delivery_status(
     status: str = Form(...), csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
+    d: Delivery = Depends(get_authorized_delivery),
 ):
-    d = db.get(Delivery, delivery_id)
-    require_delivery_access(request, user, d)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)

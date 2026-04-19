@@ -202,12 +202,8 @@ async def items_import_upload(request: Request, db: Session = Depends(get_db), u
 
 
 @router.get("/items/{item_id}", response_class=HTMLResponse)
-def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
-    row = get_item_with_stock(db, item_id)
-    if not row:
-        return HTMLResponse("Item not found", status_code=404)
+def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user), row=Depends(get_authorized_item_with_stock)):
     item, stock = row
-    require_item_access(request, user, item)
     txs = db.scalars(
         select(Transaction).where(Transaction.item_id == item_id)
         .where(Transaction.branch_id == item.branch_id)
@@ -228,9 +224,7 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), u
 
 
 @router.get("/items/{item_id}/edit", response_class=HTMLResponse)
-def item_edit_form(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
-    item = db.get(Item, item_id)
-    require_item_access(request, user, item)
+def item_edit_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")), item: Item = Depends(get_authorized_item)):
     csrf_token = get_csrf_token(request)
     return tpl(request, "item_edit.html", {
         "request": request, "item": item, "user": user,
@@ -255,10 +249,9 @@ async def item_edit_save(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
+    item: Item = Depends(get_authorized_item),
 ):
     verify_csrf_token(request, csrf_token)
-    item = db.get(Item, item_id)
-    require_item_access(request, user, item)
     name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
         return redirect(f"/items/{item_id}/edit?error=Name+is+required")
