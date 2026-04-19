@@ -266,19 +266,20 @@ def verify_origin_for_json(request: Request) -> None:
     if request.url.path in _ORIGIN_CHECK_EXEMPT:
         return
     origin = request.headers.get("origin", "")
-    if not origin:
+    if not origin or origin == "null":
         # Modern browsers always send Origin with fetch().  Missing Origin
         # on a JSON POST is either a server-to-server call (no cookies, so
         # harmless) or a CSRF attempt.  Block it for JSON content types.
+        # "null" Origin comes from sandboxed iframes — also reject.
         raise HTTPException(
             status_code=403,
-            detail="Missing Origin header on JSON request.",
+            detail="Missing or invalid Origin header on JSON request.",
         )
     # Compare origin host with request host
     from urllib.parse import urlparse
     origin_host = urlparse(origin).netloc.split(":")[0]
     request_host = (request.headers.get("host") or "").split(":")[0]
-    if origin_host and request_host and origin_host != request_host:
+    if not origin_host or not request_host or origin_host != request_host:
         raise HTTPException(
             status_code=403,
             detail="Cross-origin request blocked.",
@@ -550,12 +551,29 @@ def process_profile_image(content: bytes) -> tuple[bytes, str]:
 def validate_push_endpoint(endpoint: str) -> None:
     """Reject push subscription endpoints that aren't HTTPS push service URLs."""
     from urllib.parse import urlparse
+    import ipaddress, socket
     parsed = urlparse(endpoint)
     if parsed.scheme != "https":
         raise HTTPException(status_code=400, detail="Push endpoint must use HTTPS.")
     # Push services use well-known domains; reject obviously bogus endpoints
     if not parsed.netloc or "." not in parsed.netloc:
         raise HTTPException(status_code=400, detail="Invalid push endpoint domain.")
+    # [SEC] Reject endpoints resolving to private/reserved IPs (SSRF protection)
+    hostname = parsed.hostname or ""
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+            raise HTTPException(status_code=400, detail="Push endpoint must not target private networks.")
+    except ValueError:
+        # hostname is a DNS name, resolve it
+        try:
+            resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            for family, _, _, _, sockaddr in resolved:
+                addr = ipaddress.ip_address(sockaddr[0])
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    raise HTTPException(status_code=400, detail="Push endpoint must not target private networks.")
+        except socket.gaierror:
+            raise HTTPException(status_code=400, detail="Push endpoint domain could not be resolved.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
