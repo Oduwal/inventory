@@ -212,7 +212,7 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), u
     # Faulty stock records for this item
     faulty_records = db.execute(text(
         "SELECT id, qty_faulty, reason, flagged_at, resolved, resolve_action, resolved_at, resolve_note "
-        "FROM faulty_stock WHERE item_id = :iid AND branch_id = :bid ORDER BY flagged_at DESC"
+        "FROM faulty_stock WHERE item_id = :iid AND branch_id = :bid ORDER BY flagged_at DESC LIMIT 200"
     ), {"iid": item_id, "bid": item.branch_id}).fetchall()
     faulty_qty_active = sum(r[1] for r in faulty_records if not r[4])  # unresolved only
     csrf_token = get_csrf_token(request)
@@ -269,8 +269,10 @@ async def item_edit_save(
         if at not in {"IN", "OUT"}:
             return redirect(f"/items/{item_id}/edit?error=Adjust+type+must+be+IN+or+OUT")
         if at == "OUT":
-            r = get_item_with_stock(db, item_id)
-            if (r[1] if r else 0) < aq:
+            # Lock item row to prevent concurrent stock modifications
+            db.execute(select(Item).where(Item.id == item_id).with_for_update())
+            stock = compute_stock(db, item_id, item.branch_id)
+            if stock < aq:
                 return redirect(f"/items/{item_id}/edit?error=Insufficient+stock+for+OUT+adjustment")
         db.add(Transaction(
             branch_id=item.branch_id, item_id=item_id, type=at, quantity=aq,
@@ -333,15 +335,17 @@ async def resolve_faulty_stock(
     if action not in ("remove", "return_merchant"):
         return JSONResponse({"error": "action must be remove or return_merchant"}, status_code=400)
 
-    # Get the faulty record
-    row = db.execute(text(
-        "SELECT id, item_id, branch_id, qty_faulty, reason FROM faulty_stock "
-        "WHERE id = :fid AND resolved = FALSE"
-    ), {"fid": faulty_id}).fetchone()
-    if not row:
+    # Lock the faulty record to prevent double resolution
+    fs = db.execute(
+        select(FaultyStock)
+        .where(FaultyStock.id == faulty_id)
+        .where(FaultyStock.resolved == False)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not fs:
         return JSONResponse({"error": "record not found or already resolved"}, status_code=404)
 
-    fs_id, item_id, branch_id, qty_faulty, reason = row
+    item_id, branch_id, qty_faulty, reason = fs.item_id, fs.branch_id, fs.qty_faulty, fs.reason
 
     if branch_id != user.branch_id:
         return JSONResponse({"error": "forbidden — different branch"}, status_code=403)
@@ -366,11 +370,12 @@ async def resolve_faulty_stock(
     db.add(tx)
     db.flush()
 
-    # Mark faulty record resolved
-    db.execute(text(
-        "UPDATE faulty_stock SET resolved=TRUE, resolve_action=:act, "
-        "resolved_at=:_now, resolved_by=:uid, resolve_note=:note WHERE id=:fid"
-    ), {"act": action, "uid": user.id, "note": resolve_note, "fid": faulty_id, "_now": _now()})
+    # Mark faulty record resolved (already locked above)
+    fs.resolved = True
+    fs.resolve_action = action
+    fs.resolved_at = _now()
+    fs.resolved_by = user.id
+    fs.resolve_note = resolve_note
 
     audit_log(db, user.id, "FAULTY_STOCK_RESOLVED",
               f"item={item.name} qty={qty_faulty} action={action}",
@@ -443,13 +448,17 @@ async def tx_create(
     qty = int(quantity)
     if qty <= 0:
         return redirect("/transactions/new?error=Quantity+must+be+greater+than+0")
-    if tx_type_clean == "OUT":
-        r = get_item_with_stock(db, item_id)
-        if not r:
-            return redirect("/transactions/new?error=Item+not+found")
-        if int(r[1]) < qty:
-            return redirect("/transactions/new?error=Insufficient+stock")
     branch_id = get_current_branch_id(request)
+    if tx_type_clean == "OUT":
+        # Lock item row to prevent concurrent stock modifications
+        locked_item = db.execute(
+            select(Item).where(Item.id == item_id).with_for_update()
+        ).scalar_one_or_none()
+        if not locked_item:
+            return redirect("/transactions/new?error=Item+not+found")
+        stock = compute_stock(db, item_id, branch_id or locked_item.branch_id)
+        if stock < qty:
+            return redirect("/transactions/new?error=Insufficient+stock")
     if not branch_id:
         return redirect("/transactions/new?error=No+branch+assigned")
     db.add(Transaction(

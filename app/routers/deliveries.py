@@ -244,7 +244,8 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db), user: Use
                 "JOIN items it ON it.id = asa.item_id "
                 "WHERE asa.branch_id = :bid AND asa.returned = FALSE "
                 "AND (asa.delivery_id IS NULL OR asa.delivery_id = 0) "
-                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0"
+                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0 "
+                "LIMIT 200"
             ), {"bid": branch_id}).fetchall()
         except Exception:
             # Fallback if delivery_id column doesn't exist yet
@@ -256,7 +257,8 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db), user: Use
                 "FROM agent_stock_assignments asa "
                 "JOIN items it ON it.id = asa.item_id "
                 "WHERE asa.branch_id = :bid AND asa.returned = FALSE "
-                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0"
+                "AND (asa.qty_assigned - COALESCE(asa.qty_returned, 0)) > 0 "
+                "LIMIT 200"
             ), {"bid": branch_id}).fetchall()
         for r in rows_a:
             pending_assignments.setdefault(r[1], []).append({
@@ -347,6 +349,27 @@ async def delivery_create(
         ), {"aid": aid}).fetchone()
         if asgn_row:
             assigned_item_ids.add(int(asgn_row[0]))
+    # Lock all item rows that need OUT transactions (sorted by ID to avoid deadlocks)
+    needs_out = not is_supervisor(user)
+    if needs_out:
+        out_item_ids = sorted({int(iid) for iid, qty in zip(item_id, quantity)
+                               if int(qty or 0) > 0 and int(iid) not in assigned_item_ids})
+        if out_item_ids:
+            db.execute(
+                select(Item).where(Item.id.in_(out_item_ids)).order_by(Item.id.asc()).with_for_update()
+            )
+            # Aggregate quantities per item to check stock
+            qty_per_item: dict[int, int] = {}
+            for iid_val, qty_val in zip(item_id, quantity):
+                q = int(qty_val) if qty_val is not None else 0
+                if q > 0 and int(iid_val) not in assigned_item_ids:
+                    qty_per_item[int(iid_val)] = qty_per_item.get(int(iid_val), 0) + q
+            for locked_iid, total_qty in qty_per_item.items():
+                stock = compute_stock(db, locked_iid, branch_id)
+                if stock < total_qty:
+                    item_obj = db.get(Item, locked_iid)
+                    item_name = item_obj.name if item_obj else f"#{locked_iid}"
+                    return redirect(f"/deliveries/new?error=Insufficient+stock+for+{item_name}+(available:+{stock},+requested:+{total_qty})")
     tx_item_ids = set()  # track items we've already created an OUT tx for
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0

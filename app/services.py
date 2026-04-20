@@ -29,12 +29,13 @@ def stock_subquery(branch_id: int | None = None):
     return stmt.group_by(Transaction.item_id).subquery()
 
 
-def get_items_with_stock(db: Session, branch_id: int | None = None):
+def get_items_with_stock(db: Session, branch_id: int | None = None, limit: int = 5000):
     sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .outerjoin(sq, sq.c.item_id == Item.id)
         .order_by(Item.name.asc())
+        .limit(limit)
     )
     if branch_id is not None:
         stmt = stmt.where(Item.branch_id == branch_id)
@@ -51,13 +52,14 @@ def get_item_with_stock(db: Session, item_id: int, branch_id: int | None = None)
     return db.execute(stmt).first()
 
 
-def get_low_stock(db: Session, branch_id: int | None = None):
+def get_low_stock(db: Session, branch_id: int | None = None, limit: int = 1000):
     sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
         .outerjoin(sq, sq.c.item_id == Item.id)
         .where(func.coalesce(sq.c.stock, 0) <= Item.reorder_level)
         .order_by((func.coalesce(sq.c.stock, 0) - Item.reorder_level).asc(), Item.name.asc())
+        .limit(limit)
     )
     if branch_id is not None:
         stmt = stmt.where(Item.branch_id == branch_id)

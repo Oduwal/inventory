@@ -310,7 +310,7 @@ def audit_log_viewer(request: Request, db: Session = Depends(get_db), page: int 
         select(AuditLog).order_by(desc(AuditLog.created_at)).offset(offset).limit(per_page)
     ).scalars().all()
     total = db.scalar(select(func.count(AuditLog.id))) or 0
-    user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User)).scalars().all()}
+    user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User).limit(1000)).scalars().all()}
     return tpl(request, "audit_log.html", {
         "request": request, "user": user, "active": "audit",
         "logs": logs, "user_map": user_map,
@@ -354,7 +354,7 @@ async def test_stock_topup(request: Request, csrf_token: str = Form(""), db: Ses
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     # Add IN transactions of 100 for every item in this branch tagged as TEST-STOCK
-    items = db.execute(select(Item).where(Item.branch_id == branch_id)).scalars().all()
+    items = db.execute(select(Item).where(Item.branch_id == branch_id).limit(1000)).scalars().all()
     for item in items:
         db.add(Transaction(
             branch_id=branch_id,

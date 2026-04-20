@@ -154,13 +154,13 @@ def agents_list(request: Request, db: Session = Depends(get_db), user: User = De
         # Supervisor sees all admins across all branches (including deactivated)
         agents = db.execute(
             select(User).where(User.role == "ADMIN")
-            .order_by(User.is_active.desc(), User.username.asc())
+            .order_by(User.is_active.desc(), User.username.asc()).limit(500)
         ).scalars().all()
     else:
         # Admin sees all agents in their branch (including deactivated)
         agents = db.execute(
             select(User).where(User.role == "AGENT").where(User.branch_id == branch_id)
-            .order_by(User.is_active.desc(), User.username.asc())
+            .order_by(User.is_active.desc(), User.username.asc()).limit(500)
         ).scalars().all()
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return tpl(request, "agents_list.html", {
@@ -287,9 +287,11 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     items_summary: dict[int, str] = {}
     if delivery_ids:
         # Exclude phantom delivery_items that exist only for vetting (have a stock_return_vettings record)
-        _phantom_ids = set(r[0] for r in db.execute(text(
-            "SELECT DISTINCT delivery_item_id FROM stock_return_vettings"
-        )).fetchall())
+        _phantom_ids = set(db.scalars(
+            select(StockReturnVetting.delivery_item_id)
+            .where(StockReturnVetting.delivery_id.in_(delivery_ids))
+            .distinct()
+        ).all())
         lines = db.execute(
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.id)
             .join(Item, Item.id == DeliveryItem.item_id)
@@ -313,7 +315,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     username_history = db.execute(text(
         "SELECT uh.old_username, uh.new_username, uh.changed_at, u.username as changed_by_name "
         "FROM username_history uh LEFT JOIN users u ON u.id = uh.changed_by "
-        "WHERE uh.user_id = :uid ORDER BY uh.changed_at DESC"
+        "WHERE uh.user_id = :uid ORDER BY uh.changed_at DESC LIMIT 50"
     ), {"uid": agent_id}).fetchall()
     return tpl(request, "agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,

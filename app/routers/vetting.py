@@ -28,12 +28,20 @@ async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db),
         return JSONResponse({"error": "agent, item and qty required"}, status_code=400)
 
     branch_id = get_selected_branch_id(request, user)
-    item  = db.get(Item, item_id)
+    # Lock item row to prevent concurrent stock modifications
+    item = db.execute(
+        select(Item).where(Item.id == item_id).with_for_update()
+    ).scalar_one_or_none()
     agent = db.get(User, agent_id)
     if not item or item.branch_id != branch_id:
         return JSONResponse({"error": "item not found in this branch"}, status_code=404)
     if not agent or agent.branch_id != branch_id or agent.role != "AGENT":
         return JSONResponse({"error": "agent not found in this branch"}, status_code=404)
+
+    # Verify sufficient stock under lock
+    stock = compute_stock(db, item_id, branch_id)
+    if stock < qty:
+        return JSONResponse({"error": f"Insufficient stock (available: {stock})"}, status_code=400)
 
     # Create OUT transaction immediately
     tx = Transaction(
@@ -249,7 +257,14 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
     if not delivery_item_id or qty_returned < 0:
         return JSONResponse({"error": "invalid params"}, status_code=400)
 
-    # Prevent double-vetting on unresolved records
+    # Lock the delivery item row to serialize concurrent vetting attempts
+    di_locked = db.execute(
+        select(DeliveryItem).where(DeliveryItem.id == delivery_item_id).with_for_update()
+    ).scalar_one_or_none()
+    if not di_locked:
+        return JSONResponse({"error": "item not found"}, status_code=404)
+
+    # Re-check for existing vetting AFTER acquiring lock
     existing = db.execute(text(
         "SELECT id FROM stock_return_vettings "
         "WHERE delivery_item_id = :diid AND (resolved IS NULL OR resolved = FALSE) "
@@ -531,7 +546,8 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
         "SELECT DISTINCT srv.delivery_id FROM stock_return_vettings srv "
         "JOIN deliveries d ON d.id = srv.delivery_id "
         "WHERE (srv.resolved IS NULL OR srv.resolved = FALSE) "
-        "AND d.branch_id = :bid AND d.status NOT IN ('FAILED','RETURNED','ADJUSTMENT_PENDING')"
+        "AND d.branch_id = :bid AND d.status NOT IN ('FAILED','RETURNED','ADJUSTMENT_PENDING') "
+        "LIMIT 200"
     ), {"bid": branch_id}).fetchall()
     extra_delivery_ids = [r[0] for r in unresolved_delivery_ids if r[0] not in existing_ids]
     if extra_delivery_ids:
@@ -563,7 +579,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
             "SELECT delivery_item_id, qty_returned, resolved, resolve_action "
             "FROM stock_return_vettings "
             "WHERE delivery_id = :did "
-            "ORDER BY created_at DESC"
+            "ORDER BY created_at DESC LIMIT 500"
         ), {"did": d.id}).fetchall()
 
         # Keep only the latest vetting per delivery_item_id

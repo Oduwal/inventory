@@ -798,7 +798,10 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
 async def transfer_receive(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     is_recv_agent = is_agent(user)
     verify_csrf_token(request, csrf_token)
-    transfer = db.get(StockTransfer, transfer_id)
+    # Lock transfer row to prevent concurrent receive operations
+    transfer = db.execute(
+        select(StockTransfer).where(StockTransfer.id == transfer_id).with_for_update()
+    ).scalar_one_or_none()
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
     if is_recv_agent:
@@ -843,7 +846,10 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
 async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     """Agent marks transfer as packed/ready to send."""
     verify_csrf_token(request, csrf_token)
-    transfer = db.get(StockTransfer, transfer_id)
+    # Lock transfer row to prevent concurrent pack operations
+    transfer = db.execute(
+        select(StockTransfer).where(StockTransfer.id == transfer_id).with_for_update()
+    ).scalar_one_or_none()
     if not transfer:
         raise HTTPException(status_code=404)
     # Only the delegated agent or admin can pack

@@ -363,6 +363,23 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+# ── Stock helpers ────────────────────────────────────────────────
+
+def compute_stock(db: Session, item_id: int, branch_id: int) -> int:
+    """Compute current stock for an item in a branch from transactions.
+    Call AFTER acquiring a with_for_update() lock on the Item row."""
+    signed_qty = case(
+        (Transaction.type == "IN", Transaction.quantity),
+        (Transaction.type == "OUT", -Transaction.quantity),
+        else_=0,
+    )
+    return int(db.scalar(
+        select(func.coalesce(func.sum(signed_qty), 0))
+        .where(Transaction.item_id == item_id)
+        .where(Transaction.branch_id == branch_id)
+    ) or 0)
+
+
 # ── Declarative resource-level dependencies ─────────────────────
 # Use these in route signatures via Depends() to fetch + authorize
 # a resource in one step.  The handler receives a pre-authorized object.
