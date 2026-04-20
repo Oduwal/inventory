@@ -380,6 +380,78 @@ def compute_stock(db: Session, item_id: int, branch_id: int) -> int:
     ) or 0)
 
 
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    if (password_hash or "").startswith("$2"):
+        try:
+            return bcrypt_lib.checkpw(
+                plain_password.encode("utf-8"),
+                password_hash.encode("utf-8"),
+            )
+        except Exception:
+            return False
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
+def hash_password(plain_password: str) -> str:
+    return pwd_context.hash(plain_password)
+
+
+def get_current_user(db: Session, request: Request) -> User | None:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return None
+    try:
+        user = db.get(User, int(user_id))
+        if user and not user.is_active:
+            request.session.clear()  # force logout deactivated user
+            return None
+        return user
+    except Exception:
+        return None
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DECLARATIVE AUTHORIZATION DEPENDENCIES
+#   Use these with FastAPI's Depends() to enforce auth in route signatures
+#   instead of manual checks inside handler bodies.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _LoginRequired(Exception):
+    """Raised by get_active_user when an HTML page is requested without a session."""
+    pass
+
+@app.exception_handler(_LoginRequired)
+async def _login_redirect_handler(request: Request, exc: _LoginRequired):
+    return RedirectResponse("/login", status_code=303)
+
+def get_active_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Dependency: returns the logged-in, active User or raises.
+    For HTML requests → redirects to /login.
+    For API requests → returns 401 JSON."""
+    user = get_current_user(db, request)
+    if not user:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
+            raise _LoginRequired()
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+class RequireRole:
+    """Dependency factory: enforces that the user has one of the allowed roles.
+    Usage: user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))"""
+    def __init__(self, *roles: str):
+        self.roles = {r.upper() for r in roles}
+
+    def __call__(self, user: User = Depends(get_active_user)) -> User:
+        if user.role.upper() not in self.roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return user
+
+
 # ── Declarative resource-level dependencies ─────────────────────
 # Use these in route signatures via Depends() to fetch + authorize
 # a resource in one step.  The handler receives a pre-authorized object.
@@ -454,78 +526,6 @@ def get_authorized_agent(
     if not is_supervisor(user) and agent.branch_id != branch_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     return agent
-
-
-def verify_password(plain_password: str, password_hash: str) -> bool:
-    if (password_hash or "").startswith("$2"):
-        try:
-            return bcrypt_lib.checkpw(
-                plain_password.encode("utf-8"),
-                password_hash.encode("utf-8"),
-            )
-        except Exception:
-            return False
-    try:
-        return pwd_context.verify(plain_password, password_hash)
-    except Exception:
-        return False
-
-
-def hash_password(plain_password: str) -> str:
-    return pwd_context.hash(plain_password)
-
-
-def get_current_user(db: Session, request: Request) -> User | None:
-    user_id = request.session.get("user_id")
-    if not user_id:
-        return None
-    try:
-        user = db.get(User, int(user_id))
-        if user and not user.is_active:
-            request.session.clear()  # force logout deactivated user
-            return None
-        return user
-    except Exception:
-        return None
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DECLARATIVE AUTHORIZATION DEPENDENCIES
-#   Use these with FastAPI's Depends() to enforce auth in route signatures
-#   instead of manual checks inside handler bodies.
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _LoginRequired(Exception):
-    """Raised by get_active_user when an HTML page is requested without a session."""
-    pass
-
-@app.exception_handler(_LoginRequired)
-async def _login_redirect_handler(request: Request, exc: _LoginRequired):
-    return RedirectResponse("/login", status_code=303)
-
-def get_active_user(request: Request, db: Session = Depends(get_db)) -> User:
-    """Dependency: returns the logged-in, active User or raises.
-    For HTML requests → redirects to /login.
-    For API requests → returns 401 JSON."""
-    user = get_current_user(db, request)
-    if not user:
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept:
-            raise _LoginRequired()
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return user
-
-class RequireRole:
-    """Dependency factory: enforces that the user has one of the allowed roles.
-    Usage: user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))"""
-    def __init__(self, *roles: str):
-        self.roles = {r.upper() for r in roles}
-
-    def __call__(self, user: User = Depends(get_active_user)) -> User:
-        if user.role.upper() not in self.roles:
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return user
 
 
 _ddl_logger = logging.getLogger("inventory_keeper.ddl")
