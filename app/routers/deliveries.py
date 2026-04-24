@@ -5,6 +5,7 @@ from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
+from urllib.parse import quote_plus
 from app.core import *
 from app.models import *
 from app.security import *
@@ -369,7 +370,7 @@ async def delivery_create(
                 if stock < total_qty:
                     item_obj = db.get(Item, locked_iid)
                     item_name = item_obj.name if item_obj else f"#{locked_iid}"
-                    return redirect(f"/deliveries/new?error=Insufficient+stock+for+{item_name}+(available:+{stock},+requested:+{total_qty})")
+                    return redirect(f"/deliveries/new?error={quote_plus(f'Insufficient stock for {item_name} (available: {stock}, requested: {total_qty})')}")
     tx_item_ids = set()  # track items we've already created an OUT tx for
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0

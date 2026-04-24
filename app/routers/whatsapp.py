@@ -869,6 +869,8 @@ async def agent_voice_feedback(
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and delivery.branch_id != user.branch_id:
+        return JSONResponse({"status": "error", "message": "Forbidden"}, status_code=403)
 
     from app.feature_toggles import is_feature_on
     if not is_feature_on(db, "whatsapp_seller_enabled"):
@@ -967,6 +969,8 @@ async def send_agent_feedback(
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and delivery.branch_id != user.branch_id:
+        return JSONResponse({"status": "error", "message": "Forbidden"}, status_code=403)
 
     from app.feature_toggles import is_feature_on
     if not is_feature_on(db, "whatsapp_seller_enabled"):

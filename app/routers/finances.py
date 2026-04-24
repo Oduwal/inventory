@@ -5,6 +5,7 @@ from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
+from urllib.parse import quote_plus
 from app.core import *
 from app.models import *
 from app.security import *
@@ -600,10 +601,16 @@ async def merchant_return_create(
     note_text = sanitize_text(note, 400, "Note") or ""
     ref = f"MERCHANT RETURN: {merchant_name}"
     full_note = note_text if note_text else f"Goods returned to merchant: {merchant_name}"
+    # Lock all item rows to prevent concurrent stock modifications
+    locked_item_ids = sorted({iid for iid in item_ids})
+    db.execute(select(Item).where(Item.id.in_(locked_item_ids)).order_by(Item.id.asc()).with_for_update())
     for item_id, qty in zip(item_ids, quantities):
         item = db.get(Item, item_id)
         if not item or item.branch_id != branch_id:
             return redirect("/merchant-return/new?error=Invalid+item+selected")
+        stock = compute_stock(db, item_id, branch_id)
+        if stock < qty:
+            return redirect(f"/merchant-return/new?error={quote_plus(f'Insufficient stock for {item.name} (available: {stock})')}")
         db.add(Transaction(
             branch_id=branch_id, item_id=item_id,
             type="OUT", quantity=qty,

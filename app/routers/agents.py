@@ -90,6 +90,8 @@ async def remove_agent_picture(
     ).scalar()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    if not is_supervisor(user) and target.branch_id != user.branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     target.profile_picture = None
     target.profile_picture_mime = None
     db.commit()
@@ -269,8 +271,8 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     else:
         is_admin_profile = False
         branch_agents = []
-        rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent_id, start=start_dt, end=end_dt)
-        _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
+        rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent.id, start=start_dt, end=end_dt)
+        _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent.id)
         if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
         if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
         total_return_op_cash = db.scalar(_ret_stmt) or 0
@@ -278,7 +280,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
         remittance = total_collections - total_office_expenses
         net_position = remittance + operating_balance
         _eff = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
-        d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(_eff)).limit(300)
+        d_stmt = select(Delivery).where(Delivery.agent_id == agent.id).order_by(desc(_eff)).limit(300)
         if start_dt: d_stmt = d_stmt.where(_eff >= start_dt)
         if end_dt: d_stmt = d_stmt.where(_eff < end_dt)
         deliveries = db.execute(d_stmt).scalars().all()
@@ -307,7 +309,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     cash_stmt = select(CashEntry).where(CashEntry.branch_id == agent.branch_id).order_by(desc(CashEntry.created_at))
     if start_dt: cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt: cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
-    cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
+    cash_stmt = cash_stmt.where((CashEntry.agent_id == agent.id) | (CashEntry.kind == "OFFICE_EXPENSE"))
     cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
     csrf_token = get_csrf_token(request)
@@ -316,7 +318,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
         "SELECT uh.old_username, uh.new_username, uh.changed_at, u.username as changed_by_name "
         "FROM username_history uh LEFT JOIN users u ON u.id = uh.changed_by "
         "WHERE uh.user_id = :uid ORDER BY uh.changed_at DESC LIMIT 50"
-    ), {"uid": agent_id}).fetchall()
+    ), {"uid": agent.id}).fetchall()
     return tpl(request, "agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
         "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
@@ -694,10 +696,9 @@ async def request_adjustment(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
+    d: Delivery = Depends(get_authorized_delivery),
 ):
     verify_csrf_token(request, csrf_token)
-    d = db.get(Delivery, delivery_id)
-    if not d: raise HTTPException(status_code=404)
     if d.agent_id != user.id and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
     if d.status not in ("OUT_FOR_DELIVERY", "PENDING"):
