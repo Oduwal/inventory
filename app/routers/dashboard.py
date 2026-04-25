@@ -171,12 +171,12 @@ def home(request: Request, db: Session = Depends(get_db), user: User = Depends(g
 
 
 
-@router.get("/admin/backfill-collections", response_class=HTMLResponse)
-def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
-    """One-time: create COLLECTION entries for DELIVERED orders that have none."""
+@router.post("/admin/backfill-collections", response_class=HTMLResponse)
+def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """One-time: create COLLECTION entries for DELIVERED orders that have none. Scoped to caller's branch."""
 
     delivered = db.execute(
-        select(Delivery).where(Delivery.status == "DELIVERED")
+        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == user.branch_id)
     ).scalars().all()
 
     created, skipped = 0, 0
@@ -245,10 +245,7 @@ async def confirm_cash_entry(request: Request, db: Session = Depends(get_db), us
         "WHERE id=:eid AND branch_id=:bid AND confirmed_by_admin=FALSE RETURNING id"
     ), {"eid": entry_id, "bid": user.branch_id, "_now": _now()}).fetchone()
     if not row:
-        # Try without branch filter (already confirmed or different branch)
-        db.execute(text(
-            "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=:_now WHERE id=:eid"
-        ), {"eid": entry_id, "_now": _now()})
+        return JSONResponse({"error": "Entry not found or already confirmed"}, status_code=404)
     db.commit()
     return JSONResponse({"ok": True})
 

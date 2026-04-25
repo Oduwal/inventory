@@ -27,6 +27,12 @@ def _get_bot_url(group_jid: str = "") -> str:
     return os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000")
 
 
+def _bot_headers() -> dict:
+    """Return auth headers for bot API calls. Reads BOT_API_KEY from env."""
+    key = os.getenv("BOT_API_KEY", "")
+    return {"x-api-key": key} if key else {}
+
+
 # ─────────────────────────────────────────────────────────────────
 # CALL WEBHOOK  (Vapi end-of-call report)
 # ─────────────────────────────────────────────────────────────────
@@ -325,6 +331,8 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     d = db.get(Delivery, int(delivery_id))
     if not d:
         return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and d.branch_id != user.branch_id:
+        return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number on this delivery"}, status_code=400)
 
@@ -407,6 +415,8 @@ async def agent_voice_reply(
     d = db.get(Delivery, int(delivery_id))
     if not d:
         return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and d.branch_id != user.branch_id:
+        return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number"}, status_code=400)
 
@@ -683,10 +693,13 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
     Server-Sent Events endpoint.  The delivery detail page connects here
     and receives new wa_comments HTML fragments in real time.
     """
-    # [SEC] Require authentication — prevent unauthenticated data leaks
+    # [SEC] Require authentication and branch ownership
     user = get_current_user(db, request)
     if not user:
         return PlainTextResponse("Unauthorized", status_code=401)
+    d = db.get(Delivery, delivery_id)
+    if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+        return PlainTextResponse("Forbidden", status_code=403)
     q = sse_bridge.register_queue(delivery_id)
 
     async def generator():
@@ -717,13 +730,16 @@ async def serve_wa_media(comment_id: int, request: Request, db: Session = Depend
     if not user:
         return PlainTextResponse("Unauthorized", status_code=401)
     row = db.execute(
-        text("SELECT media_data, media_mime FROM wa_comments WHERE id = :cid"),
+        text("SELECT media_data, media_mime, delivery_id FROM wa_comments WHERE id = :cid"),
         {"cid": comment_id}
     ).first()
     if not row or not row.media_data:
         return PlainTextResponse("Not found", status_code=404)
+    d = db.get(Delivery, row.delivery_id)
+    if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+        return PlainTextResponse("Forbidden", status_code=403)
     return Response(content=row.media_data, media_type=row.media_mime or "audio/ogg",
-                    headers={"Cache-Control": "public, max-age=3600"})
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/api/voice-note/{note_id}")
@@ -746,14 +762,19 @@ async def serve_voice_note(note_id: int, request: Request, db: Session = Depends
         else:
             return PlainTextResponse("Unauthorized", status_code=401)
     row = db.execute(
-        text("SELECT audio_data, audio_mime FROM voice_notes WHERE id = :nid"),
+        text("SELECT audio_data, audio_mime, delivery_id FROM voice_notes WHERE id = :nid"),
         {"nid": note_id}
     ).first()
     if not row or not row.audio_data:
         return PlainTextResponse("Not found", status_code=404)
+    # For session-authenticated requests, enforce branch ownership
+    if user:
+        d = db.get(Delivery, row.delivery_id)
+        if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+            return PlainTextResponse("Forbidden", status_code=403)
     mime = "audio/ogg"  # Always serve as audio/ogg — stored data is already converted
     return Response(content=row.audio_data, media_type=mime,
-                    headers={"Cache-Control": "public, max-age=3600",
+                    headers={"Cache-Control": "private, max-age=3600",
                              "Content-Length": str(len(row.audio_data)),
                              "Content-Disposition": f"inline; filename=voice_{note_id}.ogg"})
 
@@ -849,7 +870,7 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
     try:
         bot_url = _get_bot_url(group_jid)
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, timeout=15)
+            resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, headers=_bot_headers(), timeout=15)
             return JSONResponse(resp.json())
     except Exception as e:
         return JSONResponse({"error": str(e), "participants": []})
@@ -916,6 +937,7 @@ async def agent_voice_feedback(
                     "audioBase64": base64.b64encode(audio_bytes).decode(),
                     "targetGroupJid": target_group,
                 },
+                headers=_bot_headers(),
                 timeout=30,
             )
             resp.raise_for_status()
@@ -1082,6 +1104,7 @@ async def send_agent_feedback(
                     "targetGroupJid":     target_group,
                     "mentions":           mention_jids,
                 },
+                headers=_bot_headers(),
                 timeout=60,
             )
             data = resp.json()

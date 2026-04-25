@@ -479,8 +479,26 @@ async function connectToWhatsApp() {
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-// QR code page — auto-refreshes every 30s
-app.get('/qr', async (_req, res) => {
+// Middleware: require x-api-key header on operational routes
+const BOT_API_KEY = process.env.BOT_API_KEY || '';
+function requireApiKey(req, res, next) {
+    if (!BOT_API_KEY) {
+        console.warn('⚠️  BOT_API_KEY not set — operational routes are unprotected!');
+        return next();
+    }
+    if (req.headers['x-api-key'] !== BOT_API_KEY) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+}
+
+// QR code page — requires ?token=<QR_TOKEN> to prevent public access
+app.get('/qr', async (req, res) => {
+    const expected = process.env.QR_TOKEN || '';
+    if (!expected || req.query.token !== expected) {
+        res.set('WWW-Authenticate', 'Bearer realm="qr"');
+        return res.status(401).send('<h2 style="font-family:sans-serif;color:red">401 Unauthorized — missing or invalid token.</h2>');
+    }
     if (clientReady) {
         return res.send('<h2 style="font-family:sans-serif;color:green">✅ Already authenticated — no QR needed.</h2>');
     }
@@ -488,7 +506,7 @@ app.get('/qr', async (_req, res) => {
         return res.send('<h2 style="font-family:sans-serif;color:orange">⏳ QR not ready yet — refresh in a few seconds.</h2>');
     }
     res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Clawbot QR</title><meta http-equiv="refresh" content="30">
+<title>Clawbot QR</title><meta http-equiv="refresh" content="30;url=/qr?token=${encodeURIComponent(expected)}">
 <style>body{font-family:sans-serif;text-align:center;padding:40px;background:#111;color:#eee;}
 img{border:12px solid #fff;border-radius:12px;}</style></head>
 <body><h2>📱 Scan with WhatsApp</h2>
@@ -505,7 +523,7 @@ app.get('/health', (_req, res) => {
  * GET /group-participants?jid=120363...@g.us
  * Returns list of group members with name and JID.
  */
-app.get('/group-participants', async (req, res) => {
+app.get('/group-participants', requireApiKey, async (req, res) => {
     const jid = req.query.jid;
     if (!jid) return res.status(400).json({ error: 'jid query param required' });
     if (!clientReady || !sock) return res.status(503).json({ error: 'Bot not connected' });
@@ -563,7 +581,7 @@ app.get('/group-participants', async (req, res) => {
  * Response: { success, message_id }
  * Python stores the returned message_id → orderId in whatsapp_outbound_map (source='bot').
  */
-app.post('/send-group-feedback', async (req, res) => {
+app.post('/send-group-feedback', requireApiKey, async (req, res) => {
     const { orderId, message, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe, targetGroupJid, mentions } = req.body;
 
     if (!orderId || !message) {
@@ -614,7 +632,7 @@ app.post('/send-group-feedback', async (req, res) => {
  *
  * Response: { success, message_id }
  */
-app.post('/send-group-voice', async (req, res) => {
+app.post('/send-group-voice', requireApiKey, async (req, res) => {
     const { orderId, audioBase64, targetGroupJid, quoteMessageId, quoteMessageBody, quoteMessageSender, quoteMessageFromMe } = req.body;
 
     if (!orderId || !audioBase64) {
