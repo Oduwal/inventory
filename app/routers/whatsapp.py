@@ -1151,9 +1151,11 @@ async def send_agent_feedback(
     try:
         async with httpx.AsyncClient() as client:
             for target_group in target_groups:
+                bot_url = _get_bot_url(target_group)
+                _log.info("Sending feedback → bot_url=%s group=%s delivery=%s", bot_url, target_group, delivery.id)
                 try:
                     resp = await client.post(
-                        _get_bot_url(target_group) + "/send-group-feedback",
+                        bot_url + "/send-group-feedback",
                         json={
                             "orderId":            str(delivery.id),
                             "message":            message,
