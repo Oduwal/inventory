@@ -89,7 +89,8 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
                 remoteJid:   jid,
                 fromMe:      quoteFromMe || !quoteSender,
                 id:          quotedKey,
-                participant: participantId,
+                // Only set participant if it looks like a valid JID — empty string crashes jidDecode
+                ...(participantId && participantId.includes('@') ? { participant: participantId } : {}),
             },
             message: { conversation: quotedBody },
         };

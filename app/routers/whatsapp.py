@@ -299,6 +299,41 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     db.commit()
 
+    # Save customer message and AI reply to wa_comments for live chat UI
+    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+    customer_display = html.escape(d.customer_name or sender)
+    customer_body_escaped = html.escape(body)
+    ai_reply_escaped = html.escape(ai_reply)
+
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'inbound', :sender, :body, :_now)"
+    ), {"did": d.id, "sender": d.customer_name or sender, "body": body, "_now": _now()})
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
+    ), {"did": d.id, "body": ai_reply, "_now": _now()})
+    db.commit()
+
+    # SSE broadcast customer message
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
+        f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{customer_display}</span>'
+        f'<div style="white-space:pre-wrap;">{customer_body_escaped}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
+    # SSE broadcast AI reply
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
+        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">AI Agent</span>'
+        f'<div style="white-space:pre-wrap;">{ai_reply_escaped}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
+
     # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
     _send_twilio_reply(sender, ai_reply)
 
@@ -348,7 +383,24 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     existing_note = d.note or ""
     agent_name = user.full_name or user.username
     d.note = (existing_note + f"\n[Agent {agent_name}]: {message}").strip()
+
+    # Save to wa_comments for live chat UI
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'outbound', :sender, :body, :_now)"
+    ), {"did": d.id, "sender": f"Agent {agent_name}", "body": message, "_now": _now()})
     db.commit()
+
+    # SSE broadcast so open tabs update immediately
+    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;'
+        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">Agent {html.escape(agent_name)} → Customer</span>'
+        f'<div style="white-space:pre-wrap;">{html.escape(message)}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
 
     _log.info("Agent %s replied to delivery %s: %s", agent_name, delivery_id, message[:100])
     return JSONResponse({"ok": True})
@@ -907,23 +959,15 @@ async def agent_voice_feedback(
     raw_mime = audio.content_type or "audio/ogg"
     audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
-    # Resolve target group (same logic as send_agent_feedback)
-    try:
-        cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
-    except (ValueError, TypeError):
-        cgm = {}
-    cat = db.execute(
-        select(Item.category).join(DeliveryItem, DeliveryItem.item_id == Item.id)
-        .where(DeliveryItem.delivery_id == delivery.id).limit(1)
-    ).scalar()
-    target_group = cgm.get(cat, "") if cat else ""
-    if not target_group:
-        known_groups = set(cgm.values())
-        if known_groups:
-            target_group = list(known_groups)[0]
+    # Resolve target group from the original seller message (same as text feedback)
+    orig_map = db.execute(text(
+        "SELECT group_jid FROM whatsapp_outbound_map "
+        "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
+    ), {"oid": delivery.id}).first()
+    target_group = orig_map[0] if orig_map else ""
 
     if not target_group:
-        return JSONResponse({"status": "error", "message": "No WhatsApp group configured"}, status_code=400)
+        return JSONResponse({"status": "error", "message": "No seller group linked to this delivery yet."}, status_code=400)
 
     # Send to bot
     import base64
@@ -1064,9 +1108,10 @@ async def send_agent_feedback(
     if mention_tags:
         message += "\n\n" + " ".join(mention_tags)
 
-    # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
-    # Configurable via CATEGORY_GROUP_MAP env var as JSON, e.g.:
-    # {"DAGGO":"120363418850903362@g.us","NEXTILE":"120363304493232977@g.us"}
+    # 2. STRICT CATEGORY ROUTING — supports single JID or list of JIDs per category.
+    # CATEGORY_GROUP_MAP examples:
+    #   Single:  {"daggo":"111@g.us","broo":"222@g.us"}
+    #   Multi:   {"daggo":["111@g.us","333@g.us"],"broo":"222@g.us"}
     try:
         CATEGORY_GROUP_MAP = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
     except (ValueError, TypeError):
@@ -1079,59 +1124,78 @@ async def send_agent_feedback(
         .limit(1)
     ).scalar()
 
-    # Priority: category map from env (always current) → DB fallback → empty
-    # The DB group_jid can become stale when WhatsApp is reconnected with a new number,
-    # so prefer the env var which the user keeps up-to-date.
-    known_groups = set(CATEGORY_GROUP_MAP.values())
+    # Resolve target_groups as a list — always work with lists internally
+    known_groups = set()
+    for v in CATEGORY_GROUP_MAP.values():
+        if isinstance(v, list):
+            known_groups.update(v)
+        else:
+            known_groups.add(v)
+
     if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
-        target_group = CATEGORY_GROUP_MAP[delivery_category]
-    elif fallback_grp and (not known_groups or fallback_grp in known_groups):
-        target_group = fallback_grp
+        val = CATEGORY_GROUP_MAP[delivery_category]
+        target_groups = val if isinstance(val, list) else [val]
+    elif fallback_grp:
+        target_groups = [fallback_grp]
+    elif known_groups:
+        target_groups = [next(iter(known_groups))]
     else:
-        target_group = list(known_groups)[0] if known_groups else ""
+        target_groups = []
+
+    if not target_groups:
+        return JSONResponse({"status": "error", "message": "No seller group configured for this delivery."})
+
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    errors = []
 
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                _get_bot_url(target_group) + "/send-group-feedback",
-                json={
-                    "orderId":            str(delivery.id),
-                    "message":            message,
-                    "quoteMessageId":     quote_id,
-                    "quoteMessageBody":   quote_body,
-                    "quoteMessageSender": quote_sender,
-                    "quoteMessageFromMe": False,
-                    "targetGroupJid":     target_group,
-                    "mentions":           mention_jids,
-                },
-                headers=_bot_headers(),
-                timeout=60,
-            )
-            data = resp.json()
+            for target_group in target_groups:
+                try:
+                    resp = await client.post(
+                        _get_bot_url(target_group) + "/send-group-feedback",
+                        json={
+                            "orderId":            str(delivery.id),
+                            "message":            message,
+                            "quoteMessageId":     quote_id,
+                            "quoteMessageBody":   quote_body,
+                            "quoteMessageSender": quote_sender,
+                            "quoteMessageFromMe": False,
+                            "targetGroupJid":     target_group,
+                            "mentions":           mention_jids,
+                        },
+                        headers=_bot_headers(),
+                        timeout=60,
+                    )
+                    data = resp.json()
+                    if not data.get("success"):
+                        errors.append(f"{target_group}: {data.get('error', 'Bot error')}")
+                        continue
 
-        if not data.get("success"):
-            return JSONResponse({"status": "error", "message": data.get("error", "Bot error")})
+                    # Persist the new Baileys message_id for quoting and inbound routing
+                    new_msg_id = data.get("message_id", "")
+                    if new_msg_id:
+                        if is_sqlite:
+                            upsert_sql = (
+                                "INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                                "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now)"
+                            )
+                        else:
+                            upsert_sql = (
+                                "INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                                "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now) "
+                                "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
+                            )
+                        db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group, "_now": _now()})
+                        db.commit()
 
-        # Persist the new Baileys message_id so future sends can quote it,
-        # and inbound replies can be routed back to this order in O(1).
-        new_msg_id = data.get("message_id", "")
-        is_sqlite = DATABASE_URL.startswith("sqlite")
-        if new_msg_id:
-            if is_sqlite:
-                upsert_sql = (
-                    "INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now)"
-                )
-            else:
-                upsert_sql = (
-                    "INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now) "
-                    "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
-                )
-            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group, "_now": _now()})
-            db.commit()
+                except Exception as group_err:
+                    errors.append(f"{target_group}: {str(group_err)}")
 
-        # Save outbound comment for the chat thread UI
+        if errors and len(errors) == len(target_groups):
+            return JSONResponse({"status": "error", "message": f"Clawbot is offline: {errors[0]}"})
+
+        # Save outbound comment for the chat thread UI (once regardless of group count)
         db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
             "VALUES (:did, 'outbound', 'Agent', :body, :_now)"
@@ -1151,7 +1215,9 @@ async def send_agent_feedback(
         )
         _sse_broadcast(delivery.id, fragment)
 
-        return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
+        if errors:
+            return JSONResponse({"status": "success", "message": f"Sent to {len(target_groups) - len(errors)}/{len(target_groups)} groups. Failed: {'; '.join(errors)}"})
+        return JSONResponse({"status": "success", "message": f"Feedback sent to {len(target_groups)} group(s)!"})
 
     except Exception as e:
         return JSONResponse({"status": "error", "message": f"Clawbot is offline: {str(e)}"})
