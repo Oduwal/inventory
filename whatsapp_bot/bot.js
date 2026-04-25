@@ -160,6 +160,7 @@ function extractQuoted(msg) {
     if (!m) return { id: null, body: null };
     const ctx =
         m.extendedTextMessage?.contextInfo ||
+        m.audioMessage?.contextInfo ||
         m.imageMessage?.contextInfo ||
         m.videoMessage?.contextInfo ||
         m.documentMessage?.contextInfo ||
