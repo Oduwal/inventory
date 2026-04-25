@@ -102,8 +102,25 @@ async function humanizedSend(jid, text, quotedKey, quotedBody, quoteSender, quot
         msgPayload.mentions = mentions;
     }
 
-    const result = await sock.sendMessage(jid, msgPayload, opts);
-    return result.key.id;
+    // Retry up to 3 times — Baileys rc9 can throw "All connection attempts failed"
+    // even when clientReady=true due to a WebSocket race condition.
+    let lastErr;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const result = await sock.sendMessage(jid, msgPayload, opts);
+            return result.key.id;
+        } catch (err) {
+            lastErr = err;
+            const isConnErr = err.message?.includes('connection') || err.message?.includes('Connection');
+            if (isConnErr && attempt < 3) {
+                console.log(`⚠️ Send attempt ${attempt} failed (${err.message}) — retrying in 3s...`);
+                await new Promise(r => setTimeout(r, 3000));
+            } else {
+                throw err;
+            }
+        }
+    }
+    throw lastErr;
 }
 
 /** Extract plain text body from any Baileys message object */
