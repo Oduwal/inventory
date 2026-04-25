@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTe
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-import json, os, logging, re, asyncio, httpx, subprocess, tempfile
+import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html
 from app.core import *
 from app.models import *
 from app.security import *
