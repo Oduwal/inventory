@@ -874,8 +874,8 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
         )
         text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         # Strip markdown fences if Gemini wraps anyway
-        if text_out.startswith("```"):
-            text_out = text_out.strip("`").lstrip("json").strip()
+        if "```" in text_out:
+            text_out = re.sub(r"```[a-z]*\n?", "", text_out).replace("```", "").strip()
         return json.loads(text_out)
     except Exception as e:
         logging.getLogger("gemini").warning("Gemini classify failed: %s", e)
