@@ -417,11 +417,14 @@ def set_rls_context(db: Session, user: "User | None") -> None:
 
 
 if not DATABASE_URL.startswith("sqlite"):
-    @event.listens_for(engine, "after_begin")
-    def _rls_after_begin(conn, transaction, scalar_obj):
+    @event.listens_for(Session, "after_transaction_create")
+    def _rls_after_transaction_create(session, transaction):
         """Re-apply RLS session variables after every new transaction begins.
         SET LOCAL resets on commit/rollback, so without this the context would
         be lost after any mid-request db.commit() call."""
+        if transaction.nested:
+            return  # skip savepoints — only re-apply on real transactions
+        conn = session.connection()
         _apply_rls_vars(conn)
 
 
