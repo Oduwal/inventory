@@ -381,27 +381,22 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
 
 def set_rls_context(db: Session, user: "User | None") -> None:
     """Inject current user identity into the PostgreSQL session as transaction-local
-    variables.  RLS policies read these via current_setting().
-
-    Writes to a thread-local store so the after_begin event listener can
-    re-apply the variables after every db.commit() within the same request.
+    variables.  RLS policies read these via current_setting().  Uses SET LOCAL so
+    variables reset on commit/rollback — safe with connection pooling.
     No-op on SQLite (dev environment)."""
     if DATABASE_URL.startswith("sqlite"):
         return
     if user is None:
-        _rls_local.uid  = ""
-        _rls_local.role = ""
-        _rls_local.bid  = ""
+        uid, role, bid = "", "", ""
     else:
-        _rls_local.uid  = str(user.id)
-        _rls_local.role = (user.role or "").upper()
-        _rls_local.bid  = str(user.branch_id) if user.branch_id is not None else ""
-    # Apply immediately to the current transaction
+        uid  = str(user.id)
+        role = (user.role or "").upper()
+        bid  = str(user.branch_id) if user.branch_id is not None else ""
     db.execute(text(
         "SET LOCAL app.current_user_id = :uid;"
         " SET LOCAL app.current_user_role = :role;"
         " SET LOCAL app.current_branch_id = :bid;"
-    ), {"uid": _rls_local.uid, "role": _rls_local.role, "bid": _rls_local.bid})
+    ), {"uid": uid, "role": role, "bid": bid})
 
 
 
