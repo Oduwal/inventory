@@ -77,7 +77,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, func, and_, desc, case, event
+from sqlalchemy import select, text, func, and_, desc, case
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, DATABASE_URL
@@ -211,17 +211,24 @@ def _send_web_push(user_id: int, title: str, body: str, link: str):
         db.close()
 
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
-    """Create a persistent notification and fire web push in a background thread."""
-    try:
-        db.execute(text(
-            "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
-            "VALUES (:uid, :title, :body, :link, :kind, :now)"
-        ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
-        db.commit()
-        submit_task(_send_web_push, user_id, title, body, link)
-    except Exception as e:
-        db.rollback()
-        logging.getLogger("notifications").warning(f"Notify failed: {e}")
+    """Create a persistent notification and fire web push in a background thread.
+    Uses its own session so it never commits the caller's request transaction."""
+    def _do():
+        from .database import SessionLocal
+        _db = SessionLocal()
+        try:
+            _db.execute(text(
+                "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
+                "VALUES (:uid, :title, :body, :link, :kind, :now)"
+            ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
+            _db.commit()
+            submit_task(_send_web_push, user_id, title, body, link)
+        except Exception as e:
+            _db.rollback()
+            logging.getLogger("notifications").warning(f"Notify failed: {e}")
+        finally:
+            _db.close()
+    submit_task(_do)
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Notify all admins of a branch.
@@ -370,25 +377,6 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
-# Thread-local store for RLS context — keyed per-thread so worker threads
-# never share state.  Background tasks leave this empty, triggering the
-# '' bypass clause in every RLS policy.
-_rls_local = threading.local()
-
-
-def _apply_rls_vars(connection) -> None:
-    """Execute SET LOCAL for the current thread's RLS context on a raw connection.
-    Called by the after_begin event so context is re-applied after every commit."""
-    if DATABASE_URL.startswith("sqlite"):
-        return
-    uid  = getattr(_rls_local, "uid",  "")
-    role = getattr(_rls_local, "role", "")
-    bid  = getattr(_rls_local, "bid",  "")
-    connection.execute(text(
-        "SET LOCAL app.current_user_id = :uid;"
-        " SET LOCAL app.current_user_role = :role;"
-        " SET LOCAL app.current_branch_id = :bid;"
-    ), {"uid": uid, "role": role, "bid": bid})
 
 
 def set_rls_context(db: Session, user: "User | None") -> None:
@@ -415,17 +403,6 @@ def set_rls_context(db: Session, user: "User | None") -> None:
         " SET LOCAL app.current_branch_id = :bid;"
     ), {"uid": _rls_local.uid, "role": _rls_local.role, "bid": _rls_local.bid})
 
-
-if not DATABASE_URL.startswith("sqlite"):
-    @event.listens_for(Session, "after_transaction_create")
-    def _rls_after_transaction_create(session, transaction):
-        """Re-apply RLS session variables after every new transaction begins.
-        SET LOCAL resets on commit/rollback, so without this the context would
-        be lost after any mid-request db.commit() call."""
-        if transaction.nested:
-            return  # skip savepoints — only re-apply on real transactions
-        conn = session.connection()
-        _apply_rls_vars(conn)
 
 
 # ── Stock helpers ────────────────────────────────────────────────
