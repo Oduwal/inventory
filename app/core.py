@@ -77,7 +77,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from passlib.context import CryptContext
 import bcrypt as bcrypt_lib
 
-from sqlalchemy import select, text, func, and_, desc, case
+from sqlalchemy import select, text, func, and_, desc, case, event
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db, DATABASE_URL
@@ -370,29 +370,59 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+# Thread-local store for RLS context — keyed per-thread so worker threads
+# never share state.  Background tasks leave this empty, triggering the
+# '' bypass clause in every RLS policy.
+_rls_local = threading.local()
+
+
+def _apply_rls_vars(connection) -> None:
+    """Execute SET LOCAL for the current thread's RLS context on a raw connection.
+    Called by the after_begin event so context is re-applied after every commit."""
+    if DATABASE_URL.startswith("sqlite"):
+        return
+    uid  = getattr(_rls_local, "uid",  "")
+    role = getattr(_rls_local, "role", "")
+    bid  = getattr(_rls_local, "bid",  "")
+    connection.execute(text(
+        "SET LOCAL app.current_user_id = :uid;"
+        " SET LOCAL app.current_user_role = :role;"
+        " SET LOCAL app.current_branch_id = :bid;"
+    ), {"uid": uid, "role": role, "bid": bid})
+
+
 def set_rls_context(db: Session, user: "User | None") -> None:
     """Inject current user identity into the PostgreSQL session as transaction-local
-    variables.  RLS policies read these via current_setting().  Uses SET LOCAL so
-    variables reset on commit/rollback — safe with connection pooling.
+    variables.  RLS policies read these via current_setting().
+
+    Writes to a thread-local store so the after_begin event listener can
+    re-apply the variables after every db.commit() within the same request.
     No-op on SQLite (dev environment)."""
     if DATABASE_URL.startswith("sqlite"):
         return
     if user is None:
-        db.execute(text(
-            "SET LOCAL app.current_user_id = '';"
-            " SET LOCAL app.current_user_role = '';"
-            " SET LOCAL app.current_branch_id = '';"
-        ))
+        _rls_local.uid  = ""
+        _rls_local.role = ""
+        _rls_local.bid  = ""
     else:
-        db.execute(text(
-            "SET LOCAL app.current_user_id = :uid;"
-            " SET LOCAL app.current_user_role = :role;"
-            " SET LOCAL app.current_branch_id = :bid;"
-        ), {
-            "uid": str(user.id),
-            "role": (user.role or "").upper(),
-            "bid": str(user.branch_id) if user.branch_id is not None else "",
-        })
+        _rls_local.uid  = str(user.id)
+        _rls_local.role = (user.role or "").upper()
+        _rls_local.bid  = str(user.branch_id) if user.branch_id is not None else ""
+    # Apply immediately to the current transaction
+    db.execute(text(
+        "SET LOCAL app.current_user_id = :uid;"
+        " SET LOCAL app.current_user_role = :role;"
+        " SET LOCAL app.current_branch_id = :bid;"
+    ), {"uid": _rls_local.uid, "role": _rls_local.role, "bid": _rls_local.bid})
+
+
+if not DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "after_begin")
+    def _rls_after_begin(conn, transaction, scalar_obj):
+        """Re-apply RLS session variables after every new transaction begins.
+        SET LOCAL resets on commit/rollback, so without this the context would
+        be lost after any mid-request db.commit() call."""
+        _apply_rls_vars(conn)
 
 
 # ── Stock helpers ────────────────────────────────────────────────

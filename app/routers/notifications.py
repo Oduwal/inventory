@@ -23,6 +23,7 @@ def notifications_poll(request: Request, after: int = 0, db: Session = Depends(g
         return JSONResponse({"notifications": []})
     user = get_current_user(db, request)
     if not user: return JSONResponse({"notifications": []})
+    set_rls_context(db, user)
     rows = db.execute(text(
         "SELECT id, title, body, link, kind, created_at FROM notifications "
         "WHERE user_id = :uid AND read_at IS NULL AND id > :after "
@@ -41,6 +42,7 @@ async def notifications_dismiss(request: Request, db: Session = Depends(get_db))
     """Mark one or all notifications as read."""
     user = get_current_user(db, request)
     if not user: return JSONResponse({"ok": False})
+    set_rls_context(db, user)
     body = await request.json()
     notif_id = body.get("id")  # None = dismiss all
     if notif_id:
@@ -57,6 +59,7 @@ async def notifications_dismiss(request: Request, db: Session = Depends(get_db))
 def notifications_unread_count(request: Request, db: Session = Depends(get_db)):
     user = get_current_user(db, request)
     if not user: return JSONResponse({"count": 0})
+    set_rls_context(db, user)
     count = db.execute(text(
         "SELECT COUNT(*) FROM notifications WHERE user_id=:uid AND read_at IS NULL"
     ), {"uid": user.id}).scalar() or 0

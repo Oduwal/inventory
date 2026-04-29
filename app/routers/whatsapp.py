@@ -736,8 +736,10 @@ def _send_twilio_reply(to_number: str, message: str):
 from app import sse_bridge
 
 def _sse_broadcast(delivery_id: int, html_fragment: str):
-    """Push an SSE event to all open browser tabs across all workers."""
-    sse_bridge.broadcast(delivery_id, html_fragment)
+    """Push an SSE event to all open browser tabs across all workers.
+    Newlines are replaced with &#10; so multi-line content doesn't break
+    the SSE data: field (SSE spec forbids bare newlines in a single frame)."""
+    sse_bridge.broadcast(delivery_id, html_fragment.replace("\n", "&#10;"))
 
 @router.get("/api/stream/{delivery_id}")
 async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(get_db)):
@@ -960,12 +962,37 @@ async def agent_voice_feedback(
     raw_mime = audio.content_type or "audio/ogg"
     audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
-    # Resolve target group from the original seller message (same as text feedback)
+    # Resolve target group — same fallback chain as text feedback
     orig_map = db.execute(text(
         "SELECT group_jid FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
     target_group = orig_map[0] if orig_map else ""
+
+    if not target_group:
+        # Fallback 1: category map
+        try:
+            _cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
+        except (ValueError, TypeError):
+            _cgm = {}
+        _cat = db.execute(
+            select(Item.category)
+            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .limit(1)
+        ).scalar()
+        if _cat and _cat in _cgm:
+            _val = _cgm[_cat]
+            target_group = (_val[0] if isinstance(_val, list) else _val) or ""
+        # Fallback 2: first known group from category map
+        if not target_group and _cgm:
+            _known = []
+            for _v in _cgm.values():
+                if isinstance(_v, list):
+                    _known.extend(_v)
+                else:
+                    _known.append(_v)
+            target_group = _known[0] if _known else ""
 
     if not target_group:
         return JSONResponse({"status": "error", "message": "No seller group linked to this delivery yet."}, status_code=400)

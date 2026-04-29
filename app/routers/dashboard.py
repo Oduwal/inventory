@@ -173,11 +173,13 @@ def home(request: Request, db: Session = Depends(get_db), user: User = Depends(g
 
 
 @router.post("/admin/backfill-collections", response_class=HTMLResponse)
-def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+def backfill_collections(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """One-time: create COLLECTION entries for DELIVERED orders that have none. Scoped to caller's branch."""
+    verify_csrf_token(request, csrf_token)
     set_rls_context(db, user)
+    branch_id = get_selected_branch_id(request, user)
     delivered = db.execute(
-        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == user.branch_id)
+        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == branch_id)
     ).scalars().all()
 
     created, skipped = 0, 0

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, BackgroundTasks, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, bindparam
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
@@ -143,7 +143,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         ).scalars().all()
         if all_other_ids:
             other_ids_tuple = tuple(all_other_ids)
-            wa_rows = db.execute(text(f"""
+            wa_rows = db.execute(text("""
                 SELECT wc.delivery_id
                 FROM wa_comments wc
                 WHERE wc.delivery_id IN :other_ids
@@ -151,7 +151,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
                     SELECT MAX(created_at) FROM wa_comments wc2 WHERE wc2.delivery_id = wc.delivery_id
                   )
                   AND wc.direction = 'inbound'
-            """), {"other_ids": other_ids_tuple}).fetchall()
+            """).bindparams(bindparam("other_ids", expanding=True)),
+            {"other_ids": list(other_ids_tuple)}).fetchall()
             hidden_wa_count = len(wa_rows)
             hidden_adj_count = db.scalar(
                 select(func.count(Delivery.id)).where(
