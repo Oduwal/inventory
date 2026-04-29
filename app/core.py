@@ -954,44 +954,51 @@ def ensure_schema() -> None:
         # Empty context (startup / background tasks) triggers the '' bypass clause.
         # FORCE ROW LEVEL SECURITY is required because the Railway DB user is the
         # table owner and would otherwise bypass RLS silently.
+        #
+        # Advisory lock (key 8675309) serialises this block across all uvicorn
+        # workers so they don't deadlock on concurrent DROP/CREATE POLICY.
         if not is_sqlite:
-            _rls_branch_tables = [
-                "users", "items", "deliveries", "transactions", "cash_entries",
-            ]
-            for _tbl in _rls_branch_tables:
-                _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
-                _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
-                _ddl(conn, f"DROP POLICY IF EXISTS branch_isolation ON {_tbl}")
-                _ddl(conn, f"""CREATE POLICY branch_isolation ON {_tbl}
+            conn.execute(text("SELECT pg_advisory_lock(8675309)"))
+            try:
+                _rls_branch_tables = [
+                    "users", "items", "deliveries", "transactions", "cash_entries",
+                ]
+                for _tbl in _rls_branch_tables:
+                    _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
+                    _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
+                    _ddl(conn, f"DROP POLICY IF EXISTS branch_isolation ON {_tbl}")
+                    _ddl(conn, f"""CREATE POLICY branch_isolation ON {_tbl}
+                        USING (
+                            current_setting('app.current_branch_id', true) = ''
+                            OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
+                            OR branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                        )""")
+
+                # stock_transfers: visible if user's branch is either side of the transfer
+                _ddl(conn, "ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY")
+                _ddl(conn, "ALTER TABLE stock_transfers FORCE ROW LEVEL SECURITY")
+                _ddl(conn, "DROP POLICY IF EXISTS branch_isolation ON stock_transfers")
+                _ddl(conn, """CREATE POLICY branch_isolation ON stock_transfers
                     USING (
                         current_setting('app.current_branch_id', true) = ''
                         OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
-                        OR branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                        OR from_branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                        OR to_branch_id   = NULLIF(current_setting('app.current_branch_id', true), '')::int
                     )""")
 
-            # stock_transfers: visible if user's branch is either side of the transfer
-            _ddl(conn, "ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY")
-            _ddl(conn, "ALTER TABLE stock_transfers FORCE ROW LEVEL SECURITY")
-            _ddl(conn, "DROP POLICY IF EXISTS branch_isolation ON stock_transfers")
-            _ddl(conn, """CREATE POLICY branch_isolation ON stock_transfers
-                USING (
-                    current_setting('app.current_branch_id', true) = ''
-                    OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
-                    OR from_branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
-                    OR to_branch_id   = NULLIF(current_setting('app.current_branch_id', true), '')::int
-                )""")
-
-            # Personal tables: keyed by user_id not branch_id
-            for _tbl in ("notifications", "push_subscriptions"):
-                _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
-                _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
-                _ddl(conn, f"DROP POLICY IF EXISTS user_isolation ON {_tbl}")
-                _ddl(conn, f"""CREATE POLICY user_isolation ON {_tbl}
-                    USING (
-                        current_setting('app.current_user_id', true) = ''
-                        OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
-                        OR user_id = NULLIF(current_setting('app.current_user_id', true), '')::int
-                    )""")
+                # Personal tables: keyed by user_id not branch_id
+                for _tbl in ("notifications", "push_subscriptions"):
+                    _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
+                    _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
+                    _ddl(conn, f"DROP POLICY IF EXISTS user_isolation ON {_tbl}")
+                    _ddl(conn, f"""CREATE POLICY user_isolation ON {_tbl}
+                        USING (
+                            current_setting('app.current_user_id', true) = ''
+                            OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
+                            OR user_id = NULLIF(current_setting('app.current_user_id', true), '')::int
+                        )""")
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(8675309)"))
 
         conn.commit()
 
