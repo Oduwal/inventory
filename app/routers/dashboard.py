@@ -17,6 +17,7 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
 
     if is_supervisor(user) and not branch_id:
@@ -171,12 +172,12 @@ def home(request: Request, db: Session = Depends(get_db), user: User = Depends(g
 
 
 
-@router.get("/admin/backfill-collections", response_class=HTMLResponse)
-def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
-    """One-time: create COLLECTION entries for DELIVERED orders that have none."""
-
+@router.post("/admin/backfill-collections", response_class=HTMLResponse)
+def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """One-time: create COLLECTION entries for DELIVERED orders that have none. Scoped to caller's branch."""
+    set_rls_context(db, user)
     delivered = db.execute(
-        select(Delivery).where(Delivery.status == "DELIVERED")
+        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == user.branch_id)
     ).scalars().all()
 
     created, skipped = 0, 0
@@ -210,6 +211,7 @@ def backfill_collections(request: Request, db: Session = Depends(get_db), user: 
 @router.post("/admin/confirm-cash", response_class=JSONResponse)
 async def confirm_cash(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """Admin confirms that an agent has physically handed over their cash."""
+    set_rls_context(db, user)
     body = await request.json()
     agent_id = body.get("agent_id")
     date_str = body.get("date")  # YYYY-MM-DD
@@ -236,6 +238,7 @@ async def confirm_cash(request: Request, db: Session = Depends(get_db), user: Us
 @router.post("/admin/confirm-cash-entry", response_class=JSONResponse)
 async def confirm_cash_entry(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """Confirm a single cash entry by ID (used for RETURN_OPERATING_CASH vetting)."""
+    set_rls_context(db, user)
     body     = await request.json()
     entry_id = body.get("entry_id")
     if not entry_id:
@@ -245,16 +248,14 @@ async def confirm_cash_entry(request: Request, db: Session = Depends(get_db), us
         "WHERE id=:eid AND branch_id=:bid AND confirmed_by_admin=FALSE RETURNING id"
     ), {"eid": entry_id, "bid": user.branch_id, "_now": _now()}).fetchone()
     if not row:
-        # Try without branch filter (already confirmed or different branch)
-        db.execute(text(
-            "UPDATE cash_entries SET confirmed_by_admin=TRUE, confirmed_at=:_now WHERE id=:eid"
-        ), {"eid": entry_id, "_now": _now()})
+        return JSONResponse({"error": "Entry not found or already confirmed"}, status_code=404)
     db.commit()
     return JSONResponse({"ok": True})
 
 
 @router.get("/call-logs", response_class=HTMLResponse)
 def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 1, delivery_id: int | None = None, user: User = Depends(RequireRole("ADMIN"))):
+    set_rls_context(db, user)
     per_page = 50
     offset = (page - 1) * per_page
     branch_id = get_selected_branch_id(request, user)
@@ -304,13 +305,15 @@ def call_logs_page(request: Request, db: Session = Depends(get_db), page: int = 
 
 @router.get("/admin/audit-log", response_class=HTMLResponse)
 def audit_log_viewer(request: Request, db: Session = Depends(get_db), page: int = 1, user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     per_page = 50
     offset = (page - 1) * per_page
     logs = db.execute(
         select(AuditLog).order_by(desc(AuditLog.created_at)).offset(offset).limit(per_page)
     ).scalars().all()
     total = db.scalar(select(func.count(AuditLog.id))) or 0
-    user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User).limit(1000)).scalars().all()}
+    referenced_ids = {lg.user_id for lg in logs if lg.user_id}
+    user_map = {u.id: (u.full_name or u.username) for u in db.execute(select(User).where(User.id.in_(referenced_ids))).scalars().all()} if referenced_ids else {}
     return tpl(request, "audit_log.html", {
         "request": request, "user": user, "active": "audit",
         "logs": logs, "user_map": user_map,
@@ -321,6 +324,7 @@ def audit_log_viewer(request: Request, db: Session = Depends(get_db), page: int 
 
 @router.get("/admin/reset-data", response_class=HTMLResponse)
 def reset_data_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     csrf_token = get_csrf_token(request)
     return HTMLResponse(f"""
     <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
@@ -351,6 +355,7 @@ def reset_data_form(request: Request, db: Session = Depends(get_db), user: User 
 @router.post("/admin/test-stock-topup")
 async def test_stock_topup(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """TEMPORARY — sets every item to 100 units for testing. Remove when done."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     # Add IN transactions of 100 for every item in this branch tagged as TEST-STOCK
@@ -371,6 +376,7 @@ async def test_stock_topup(request: Request, csrf_token: str = Form(""), db: Ses
 @router.post("/admin/test-stock-remove")
 async def test_stock_remove(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """TEMPORARY — removes all TEST-STOCK transactions."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     db.execute(text("DELETE FROM transactions WHERE reference='TEST-STOCK' AND branch_id=:bid"), {"bid": branch_id})
@@ -386,6 +392,7 @@ async def reset_data_execute(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     if confirm.strip() != "RESET":
         return RedirectResponse("/supervisor?error=You+must+type+RESET+to+confirm.", status_code=303)
@@ -439,6 +446,7 @@ async def reset_data_execute(
 
 @router.get("/supervisor", response_class=HTMLResponse)
 def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = "", user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     preset = preset.strip() or None
     start_date = start_date.strip() or None
     end_date = end_date.strip() or None
@@ -585,11 +593,13 @@ _ALLOWED_TOGGLES = {
 
 @router.get("/api/feature-toggles")
 async def get_feature_toggles(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     return JSONResponse(get_all_toggles(db))
 
 
 @router.post("/api/feature-toggles")
 async def update_feature_toggle(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     body = await request.json()
     key = str(body.get("key", ""))
     if key not in _ALLOWED_TOGGLES:
@@ -612,6 +622,7 @@ async def update_feature_toggle(request: Request, db: Session = Depends(get_db),
 
 @router.get("/stale-stock", response_class=HTMLResponse)
 def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # Supervisor sees all branches; admin sees their own branch only
@@ -643,6 +654,7 @@ def stale_stock(request: Request, days: int = 7, db: Session = Depends(get_db), 
 
 @router.get("/low-stock", response_class=HTMLResponse)
 def low_stock(request: Request, branch_filter: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     filter_bid = int(branch_filter) if branch_filter and branch_filter.isdigit() else None

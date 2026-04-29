@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTe
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-import json, os, logging, re, asyncio, httpx, subprocess, tempfile
+import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html
 from app.core import *
 from app.models import *
 from app.security import *
@@ -25,6 +25,12 @@ def _get_bot_url(group_jid: str = "") -> str:
     if group_jid and group_jid in group_bot_map:
         return group_bot_map[group_jid]
     return os.getenv("WHATSAPP_BOT_URL", "http://adventurous-flow.railway.internal:3000")
+
+
+def _bot_headers() -> dict:
+    """Return auth headers for bot API calls. Reads BOT_API_KEY from env."""
+    key = os.getenv("BOT_API_KEY", "")
+    return {"x-api-key": key} if key else {}
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -293,6 +299,41 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     db.commit()
 
+    # Save customer message and AI reply to wa_comments for live chat UI
+    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+    customer_display = html.escape(d.customer_name or sender)
+    customer_body_escaped = html.escape(body)
+    ai_reply_escaped = html.escape(ai_reply)
+
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'inbound', :sender, :body, :_now)"
+    ), {"did": d.id, "sender": d.customer_name or sender, "body": body, "_now": _now()})
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
+    ), {"did": d.id, "body": ai_reply, "_now": _now()})
+    db.commit()
+
+    # SSE broadcast customer message
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
+        f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{customer_display}</span>'
+        f'<div style="white-space:pre-wrap;">{customer_body_escaped}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
+    # SSE broadcast AI reply
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
+        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">AI Agent</span>'
+        f'<div style="white-space:pre-wrap;">{ai_reply_escaped}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
+
     # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
     _send_twilio_reply(sender, ai_reply)
 
@@ -325,6 +366,8 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     d = db.get(Delivery, int(delivery_id))
     if not d:
         return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and d.branch_id != user.branch_id:
+        return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number on this delivery"}, status_code=400)
 
@@ -340,7 +383,24 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     existing_note = d.note or ""
     agent_name = user.full_name or user.username
     d.note = (existing_note + f"\n[Agent {agent_name}]: {message}").strip()
+
+    # Save to wa_comments for live chat UI
+    db.execute(text(
+        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+        "VALUES (:did, 'outbound', :sender, :body, :_now)"
+    ), {"did": d.id, "sender": f"Agent {agent_name}", "body": message, "_now": _now()})
     db.commit()
+
+    # SSE broadcast so open tabs update immediately
+    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
+    _sse_broadcast(d.id, (
+        f'<div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;'
+        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
+        f'<span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">Agent {html.escape(agent_name)} → Customer</span>'
+        f'<div style="white-space:pre-wrap;">{html.escape(message)}</div>'
+        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
+        f'</div>'
+    ))
 
     _log.info("Agent %s replied to delivery %s: %s", agent_name, delivery_id, message[:100])
     return JSONResponse({"ok": True})
@@ -407,6 +467,8 @@ async def agent_voice_reply(
     d = db.get(Delivery, int(delivery_id))
     if not d:
         return JSONResponse({"ok": False, "error": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and d.branch_id != user.branch_id:
+        return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number"}, status_code=400)
 
@@ -683,10 +745,13 @@ async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(g
     Server-Sent Events endpoint.  The delivery detail page connects here
     and receives new wa_comments HTML fragments in real time.
     """
-    # [SEC] Require authentication — prevent unauthenticated data leaks
+    # [SEC] Require authentication and branch ownership
     user = get_current_user(db, request)
     if not user:
         return PlainTextResponse("Unauthorized", status_code=401)
+    d = db.get(Delivery, delivery_id)
+    if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+        return PlainTextResponse("Forbidden", status_code=403)
     q = sse_bridge.register_queue(delivery_id)
 
     async def generator():
@@ -717,13 +782,16 @@ async def serve_wa_media(comment_id: int, request: Request, db: Session = Depend
     if not user:
         return PlainTextResponse("Unauthorized", status_code=401)
     row = db.execute(
-        text("SELECT media_data, media_mime FROM wa_comments WHERE id = :cid"),
+        text("SELECT media_data, media_mime, delivery_id FROM wa_comments WHERE id = :cid"),
         {"cid": comment_id}
     ).first()
     if not row or not row.media_data:
         return PlainTextResponse("Not found", status_code=404)
+    d = db.get(Delivery, row.delivery_id)
+    if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+        return PlainTextResponse("Forbidden", status_code=403)
     return Response(content=row.media_data, media_type=row.media_mime or "audio/ogg",
-                    headers={"Cache-Control": "public, max-age=3600"})
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/api/voice-note/{note_id}")
@@ -746,14 +814,19 @@ async def serve_voice_note(note_id: int, request: Request, db: Session = Depends
         else:
             return PlainTextResponse("Unauthorized", status_code=401)
     row = db.execute(
-        text("SELECT audio_data, audio_mime FROM voice_notes WHERE id = :nid"),
+        text("SELECT audio_data, audio_mime, delivery_id FROM voice_notes WHERE id = :nid"),
         {"nid": note_id}
     ).first()
     if not row or not row.audio_data:
         return PlainTextResponse("Not found", status_code=404)
+    # For session-authenticated requests, enforce branch ownership
+    if user:
+        d = db.get(Delivery, row.delivery_id)
+        if not d or (not is_supervisor(user) and d.branch_id != user.branch_id):
+            return PlainTextResponse("Forbidden", status_code=403)
     mime = "audio/ogg"  # Always serve as audio/ogg — stored data is already converted
     return Response(content=row.audio_data, media_type=mime,
-                    headers={"Cache-Control": "public, max-age=3600",
+                    headers={"Cache-Control": "private, max-age=3600",
                              "Content-Length": str(len(row.audio_data)),
                              "Content-Disposition": f"inline; filename=voice_{note_id}.ogg"})
 
@@ -801,8 +874,8 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
         )
         text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         # Strip markdown fences if Gemini wraps anyway
-        if text_out.startswith("```"):
-            text_out = text_out.strip("`").lstrip("json").strip()
+        if "```" in text_out:
+            text_out = re.sub(r"```[a-z]*\n?", "", text_out).replace("```", "").strip()
         return json.loads(text_out)
     except Exception as e:
         logging.getLogger("gemini").warning("Gemini classify failed: %s", e)
@@ -814,7 +887,7 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 @router.get("/api/group-participants/{delivery_id}")
 async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user), delivery: Delivery = Depends(get_authorized_delivery)):
-
+    set_rls_context(db, user)
     # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
     try:
         cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
@@ -849,7 +922,7 @@ async def get_group_participants(delivery_id: int, request: Request, db: Session
     try:
         bot_url = _get_bot_url(group_jid)
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, timeout=15)
+            resp = await client.get(f"{bot_url}/group-participants", params={"jid": group_jid}, headers=_bot_headers(), timeout=15)
             return JSONResponse(resp.json())
     except Exception as e:
         return JSONResponse({"error": str(e), "participants": []})
@@ -866,9 +939,12 @@ async def agent_voice_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and delivery.branch_id != user.branch_id:
+        return JSONResponse({"status": "error", "message": "Forbidden"}, status_code=403)
 
     from app.feature_toggles import is_feature_on
     if not is_feature_on(db, "whatsapp_seller_enabled"):
@@ -884,23 +960,15 @@ async def agent_voice_feedback(
     raw_mime = audio.content_type or "audio/ogg"
     audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
-    # Resolve target group (same logic as send_agent_feedback)
-    try:
-        cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
-    except (ValueError, TypeError):
-        cgm = {}
-    cat = db.execute(
-        select(Item.category).join(DeliveryItem, DeliveryItem.item_id == Item.id)
-        .where(DeliveryItem.delivery_id == delivery.id).limit(1)
-    ).scalar()
-    target_group = cgm.get(cat, "") if cat else ""
-    if not target_group:
-        known_groups = set(cgm.values())
-        if known_groups:
-            target_group = list(known_groups)[0]
+    # Resolve target group from the original seller message (same as text feedback)
+    orig_map = db.execute(text(
+        "SELECT group_jid FROM whatsapp_outbound_map "
+        "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
+    ), {"oid": delivery.id}).first()
+    target_group = orig_map[0] if orig_map else ""
 
     if not target_group:
-        return JSONResponse({"status": "error", "message": "No WhatsApp group configured"}, status_code=400)
+        return JSONResponse({"status": "error", "message": "No seller group linked to this delivery yet."}, status_code=400)
 
     # Send to bot
     import base64
@@ -914,6 +982,7 @@ async def agent_voice_feedback(
                     "audioBase64": base64.b64encode(audio_bytes).decode(),
                     "targetGroupJid": target_group,
                 },
+                headers=_bot_headers(),
                 timeout=30,
             )
             resp.raise_for_status()
@@ -964,9 +1033,12 @@ async def send_agent_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
+    if not is_supervisor(user) and delivery.branch_id != user.branch_id:
+        return JSONResponse({"status": "error", "message": "Forbidden"}, status_code=403)
 
     from app.feature_toggles import is_feature_on
     if not is_feature_on(db, "whatsapp_seller_enabled"):
@@ -1038,9 +1110,10 @@ async def send_agent_feedback(
     if mention_tags:
         message += "\n\n" + " ".join(mention_tags)
 
-    # 2. STRICT CATEGORY ROUTING FOR MULTIPLE GROUPS
-    # Configurable via CATEGORY_GROUP_MAP env var as JSON, e.g.:
-    # {"DAGGO":"120363418850903362@g.us","NEXTILE":"120363304493232977@g.us"}
+    # 2. STRICT CATEGORY ROUTING — supports single JID or list of JIDs per category.
+    # CATEGORY_GROUP_MAP examples:
+    #   Single:  {"daggo":"111@g.us","broo":"222@g.us"}
+    #   Multi:   {"daggo":["111@g.us","333@g.us"],"broo":"222@g.us"}
     try:
         CATEGORY_GROUP_MAP = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
     except (ValueError, TypeError):
@@ -1053,58 +1126,80 @@ async def send_agent_feedback(
         .limit(1)
     ).scalar()
 
-    # Priority: category map from env (always current) → DB fallback → empty
-    # The DB group_jid can become stale when WhatsApp is reconnected with a new number,
-    # so prefer the env var which the user keeps up-to-date.
-    known_groups = set(CATEGORY_GROUP_MAP.values())
+    # Resolve target_groups as a list — always work with lists internally
+    known_groups = set()
+    for v in CATEGORY_GROUP_MAP.values():
+        if isinstance(v, list):
+            known_groups.update(v)
+        else:
+            known_groups.add(v)
+
     if delivery_category and delivery_category in CATEGORY_GROUP_MAP:
-        target_group = CATEGORY_GROUP_MAP[delivery_category]
-    elif fallback_grp and (not known_groups or fallback_grp in known_groups):
-        target_group = fallback_grp
+        val = CATEGORY_GROUP_MAP[delivery_category]
+        target_groups = val if isinstance(val, list) else [val]
+    elif fallback_grp:
+        target_groups = [fallback_grp]
+    elif known_groups:
+        target_groups = [next(iter(known_groups))]
     else:
-        target_group = list(known_groups)[0] if known_groups else ""
+        target_groups = []
+
+    if not target_groups:
+        return JSONResponse({"status": "error", "message": "No seller group configured for this delivery."})
+
+    is_sqlite = DATABASE_URL.startswith("sqlite")
+    errors = []
 
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                _get_bot_url(target_group) + "/send-group-feedback",
-                json={
-                    "orderId":            str(delivery.id),
-                    "message":            message,
-                    "quoteMessageId":     quote_id,
-                    "quoteMessageBody":   quote_body,
-                    "quoteMessageSender": quote_sender,
-                    "quoteMessageFromMe": False,
-                    "targetGroupJid":     target_group,
-                    "mentions":           mention_jids,
-                },
-                timeout=60,
-            )
-            data = resp.json()
+            for target_group in target_groups:
+                bot_url = _get_bot_url(target_group)
+                _log.info("Sending feedback → bot_url=%s group=%s delivery=%s", bot_url, target_group, delivery.id)
+                try:
+                    resp = await client.post(
+                        bot_url + "/send-group-feedback",
+                        json={
+                            "orderId":            str(delivery.id),
+                            "message":            message,
+                            "quoteMessageId":     quote_id,
+                            "quoteMessageBody":   quote_body,
+                            "quoteMessageSender": quote_sender,
+                            "quoteMessageFromMe": False,
+                            "targetGroupJid":     target_group,
+                            "mentions":           mention_jids,
+                        },
+                        headers=_bot_headers(),
+                        timeout=60,
+                    )
+                    data = resp.json()
+                    if not data.get("success"):
+                        errors.append(f"{target_group}: {data.get('error', 'Bot error')}")
+                        continue
 
-        if not data.get("success"):
-            return JSONResponse({"status": "error", "message": data.get("error", "Bot error")})
+                    # Persist the new Baileys message_id for quoting and inbound routing
+                    new_msg_id = data.get("message_id", "")
+                    if new_msg_id:
+                        if is_sqlite:
+                            upsert_sql = (
+                                "INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                                "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now)"
+                            )
+                        else:
+                            upsert_sql = (
+                                "INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
+                                "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now) "
+                                "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
+                            )
+                        db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group, "_now": _now()})
+                        db.commit()
 
-        # Persist the new Baileys message_id so future sends can quote it,
-        # and inbound replies can be routed back to this order in O(1).
-        new_msg_id = data.get("message_id", "")
-        is_sqlite = DATABASE_URL.startswith("sqlite")
-        if new_msg_id:
-            if is_sqlite:
-                upsert_sql = (
-                    "INSERT OR REPLACE INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now)"
-                )
-            else:
-                upsert_sql = (
-                    "INSERT INTO whatsapp_outbound_map (message_id, order_id, body, source, sender, group_jid, created_at) "
-                    "VALUES (:mid, :oid, :body, 'bot', '', :gjid, :_now) "
-                    "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id, body=EXCLUDED.body, source=EXCLUDED.source, sender=EXCLUDED.sender, group_jid=EXCLUDED.group_jid"
-                )
-            db.execute(text(upsert_sql), {"mid": new_msg_id, "oid": delivery.id, "body": message, "gjid": target_group, "_now": _now()})
-            db.commit()
+                except Exception as group_err:
+                    errors.append(f"{target_group}: {str(group_err)}")
 
-        # Save outbound comment for the chat thread UI
+        if errors and len(errors) == len(target_groups):
+            return JSONResponse({"status": "error", "message": f"Clawbot is offline: {errors[0]}"})
+
+        # Save outbound comment for the chat thread UI (once regardless of group count)
         db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
             "VALUES (:did, 'outbound', 'Agent', :body, :_now)"
@@ -1124,7 +1219,9 @@ async def send_agent_feedback(
         )
         _sse_broadcast(delivery.id, fragment)
 
-        return JSONResponse({"status": "success", "message": "Feedback sent to group!"})
+        if errors:
+            return JSONResponse({"status": "success", "message": f"Sent to {len(target_groups) - len(errors)}/{len(target_groups)} groups. Failed: {'; '.join(errors)}"})
+        return JSONResponse({"status": "success", "message": f"Feedback sent to {len(target_groups)} group(s)!"})
 
     except Exception as e:
         return JSONResponse({"status": "error", "message": f"Clawbot is offline: {str(e)}"})

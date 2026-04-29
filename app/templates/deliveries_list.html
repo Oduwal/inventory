@@ -129,6 +129,22 @@
     </form>
 </div>
 
+{% if hidden_wa_count or hidden_adj_count %}
+<div style="margin-top:14px;padding:10px 16px;border-radius:8px;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.35);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span style="font-size:18px;">⚠️</span>
+  <span style="font-size:13px;color:#fbbf24;">
+    Items needing attention on other pages —
+    {% if hidden_wa_count %}
+      <strong>{{ hidden_wa_count }} unread WhatsApp {% if hidden_wa_count == 1 %}reply{% else %}replies{% endif %}</strong>
+    {% endif %}
+    {% if hidden_wa_count and hidden_adj_count %} and {% endif %}
+    {% if hidden_adj_count %}
+      <strong>{{ hidden_adj_count }} adjustment {% if hidden_adj_count == 1 %}request{% else %}requests{% endif %}</strong>
+    {% endif %}
+  </span>
+</div>
+{% endif %}
+
 <div class="card" style="margin-top:14px;">
     <div class="badge b-purple">DELIVERIES</div>
 
@@ -225,6 +241,22 @@
             </tbody>
         </table>
     </div>
+
+    {% if total_pages > 1 %}
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:10px;">
+      <span class="muted small">Showing page {{ page }} of {{ total_pages }} ({{ total }} total)</span>
+      <div style="display:flex;gap:8px;">
+        {% if page > 1 %}
+        <a class="btnGhost" style="font-size:13px;padding:6px 14px;"
+           href="?page={{ page - 1 }}&status={{ status }}&agent_id={{ agent_id }}&branch_id={{ branch_id }}&start_date={{ start_date }}&end_date={{ end_date }}">← Previous</a>
+        {% endif %}
+        {% if page < total_pages %}
+        <a class="btnPrimary" style="font-size:13px;padding:6px 14px;"
+           href="?page={{ page + 1 }}&status={{ status }}&agent_id={{ agent_id }}&branch_id={{ branch_id }}&start_date={{ start_date }}&end_date={{ end_date }}">Next →</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 </div>
 
 {% if user.role == "ADMIN" and agents %}

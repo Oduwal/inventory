@@ -224,16 +224,23 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
         logging.getLogger("notifications").warning(f"Notify failed: {e}")
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
-    """Notify all admins of a branch."""
-    try:
-        admins = db.execute(
-            select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id)
-            .where(User.is_active == True)
-        ).scalars().all()
-        for admin in admins:
-            notify(db, admin.id, title, body, link, kind)
-    except Exception as e:
-        import logging; logging.getLogger("notifications").warning(f"Notify branch failed: {e}")
+    """Notify all admins of a branch.
+    Runs in a background task with its own session (no RLS context) so it can
+    read users from any branch regardless of the calling request's RLS context."""
+    def _do():
+        _db = SessionLocal()
+        try:
+            admins = _db.execute(
+                select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id)
+                .where(User.is_active == True)
+            ).scalars().all()
+            for admin in admins:
+                notify(_db, admin.id, title, body, link, kind)
+        except Exception as e:
+            logging.getLogger("notifications").warning(f"Notify branch failed: {e}")
+        finally:
+            _db.close()
+    submit_task(_do)
 
 # [FIX-6] Trust the X-Forwarded-For header from Railway's proxy.
 # Default to localhost only — set TRUSTED_PROXY_HOSTS explicitly in production
@@ -361,6 +368,31 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         return
     if not branch_id or getattr(user, "branch_id", None) != branch_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def set_rls_context(db: Session, user: "User | None") -> None:
+    """Inject current user identity into the PostgreSQL session as transaction-local
+    variables.  RLS policies read these via current_setting().  Uses SET LOCAL so
+    variables reset on commit/rollback — safe with connection pooling.
+    No-op on SQLite (dev environment)."""
+    if DATABASE_URL.startswith("sqlite"):
+        return
+    if user is None:
+        db.execute(text(
+            "SET LOCAL app.current_user_id = '';"
+            " SET LOCAL app.current_user_role = '';"
+            " SET LOCAL app.current_branch_id = '';"
+        ))
+    else:
+        db.execute(text(
+            "SET LOCAL app.current_user_id = :uid;"
+            " SET LOCAL app.current_user_role = :role;"
+            " SET LOCAL app.current_branch_id = :bid;"
+        ), {
+            "uid": str(user.id),
+            "role": (user.role or "").upper(),
+            "bid": str(user.branch_id) if user.branch_id is not None else "",
+        })
 
 
 # ── Stock helpers ────────────────────────────────────────────────
@@ -916,6 +948,58 @@ def ensure_schema() -> None:
                 conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, :v)"), {"k": _hk, "v": _hv})
             else:
                 conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING"), {"k": _hk, "v": _hv})
+
+        # ── PostgreSQL Row Level Security ───────────────────────────────────
+        # Policies use SET LOCAL session variables injected by set_rls_context().
+        # Empty context (startup / background tasks) triggers the '' bypass clause.
+        # FORCE ROW LEVEL SECURITY is required because the Railway DB user is the
+        # table owner and would otherwise bypass RLS silently.
+        #
+        # Advisory lock (key 8675309) serialises this block across all uvicorn
+        # workers so they don't deadlock on concurrent DROP/CREATE POLICY.
+        if not is_sqlite:
+            conn.execute(text("SELECT pg_advisory_lock(8675309)"))
+            try:
+                _rls_branch_tables = [
+                    "users", "items", "deliveries", "transactions", "cash_entries",
+                ]
+                for _tbl in _rls_branch_tables:
+                    _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
+                    _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
+                    _ddl(conn, f"DROP POLICY IF EXISTS branch_isolation ON {_tbl}")
+                    _ddl(conn, f"""CREATE POLICY branch_isolation ON {_tbl}
+                        USING (
+                            current_setting('app.current_branch_id', true) = ''
+                            OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
+                            OR branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                        )""")
+
+                # stock_transfers: visible if user's branch is either side of the transfer
+                _ddl(conn, "ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY")
+                _ddl(conn, "ALTER TABLE stock_transfers FORCE ROW LEVEL SECURITY")
+                _ddl(conn, "DROP POLICY IF EXISTS branch_isolation ON stock_transfers")
+                _ddl(conn, """CREATE POLICY branch_isolation ON stock_transfers
+                    USING (
+                        current_setting('app.current_branch_id', true) = ''
+                        OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
+                        OR from_branch_id = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                        OR to_branch_id   = NULLIF(current_setting('app.current_branch_id', true), '')::int
+                    )""")
+
+                # Personal tables: keyed by user_id not branch_id
+                for _tbl in ("notifications", "push_subscriptions"):
+                    _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")
+                    _ddl(conn, f"ALTER TABLE {_tbl} FORCE ROW LEVEL SECURITY")
+                    _ddl(conn, f"DROP POLICY IF EXISTS user_isolation ON {_tbl}")
+                    _ddl(conn, f"""CREATE POLICY user_isolation ON {_tbl}
+                        USING (
+                            current_setting('app.current_user_id', true) = ''
+                            OR current_setting('app.current_user_role', true) = 'SUPERVISOR'
+                            OR user_id = NULLIF(current_setting('app.current_user_id', true), '')::int
+                        )""")
+            finally:
+                conn.execute(text("SELECT pg_advisory_unlock(8675309)"))
+
         conn.commit()
 
 

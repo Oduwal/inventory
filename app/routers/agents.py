@@ -24,8 +24,9 @@ _DEFAULT_AVATAR_SVG = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4
 
 
 @router.get("/users/{user_id}/avatar")
-def user_avatar(user_id: int, db: Session = Depends(get_db)):
+def user_avatar(user_id: int, db: Session = Depends(get_db), _auth: User = Depends(get_active_user)):
     """Serve a user's profile picture, or a default SVG placeholder."""
+    set_rls_context(db, _auth)
     from sqlalchemy.orm import undefer
     u = db.execute(
         select(User).where(User.id == user_id).options(undefer(User.profile_picture))
@@ -34,12 +35,12 @@ def user_avatar(user_id: int, db: Session = Depends(get_db)):
         return Response(
             content=u.profile_picture,
             media_type=u.profile_picture_mime or "image/jpeg",
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "private, max-age=3600"},
         )
     return Response(
         content=_DEFAULT_AVATAR_SVG,
         media_type="image/svg+xml",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "private, max-age=86400"},
     )
 
 
@@ -52,6 +53,7 @@ async def upload_profile_picture(
     user: User = Depends(get_active_user),
 ):
     """Upload and auto-resize a profile picture for the currently logged-in user."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
 
     file_bytes = await file.read()
@@ -82,6 +84,7 @@ async def remove_agent_picture(
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     """Admin/supervisor removes a user's profile picture."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
 
     from sqlalchemy.orm import undefer
@@ -90,6 +93,8 @@ async def remove_agent_picture(
     ).scalar()
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
+    if not is_supervisor(user) and target.branch_id != user.branch_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
     target.profile_picture = None
     target.profile_picture_mime = None
     db.commit()
@@ -108,6 +113,7 @@ async def edit_agent_profile(
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
     """Admin/supervisor edits an agent/admin's name and phone."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
 
     target = db.get(User, agent_id)
@@ -149,6 +155,7 @@ async def edit_agent_profile(
 
 @router.get("/agents", response_class=HTMLResponse)
 def agents_list(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     if is_supervisor(user):
         # Supervisor sees all admins across all branches (including deactivated)
@@ -171,6 +178,7 @@ def agents_list(request: Request, db: Session = Depends(get_db), user: User = De
 
 @router.get("/agents/new", response_class=HTMLResponse)
 def agent_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     csrf_token = get_csrf_token(request)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     return tpl(request, "agent_new.html", {
@@ -192,6 +200,7 @@ async def agent_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     uname = sanitize_username(username)
     if not uname:
@@ -231,7 +240,7 @@ async def agent_create(
 
 @router.get("/agents/{agent_id}", response_class=HTMLResponse)
 def agent_detail(request: Request, preset: str = "", start_date: str = "", end_date: str = "", db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")), agent: User = Depends(get_authorized_agent)):
-
+    set_rls_context(db, user)
     sd, ed, preset_norm, start_dt, end_dt = _dt_range_from_dates(preset, start_date, end_date)
 
     is_admin_profile = (agent.role or "").upper() == "ADMIN"
@@ -269,8 +278,8 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     else:
         is_admin_profile = False
         branch_agents = []
-        rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent_id, start=start_dt, end=end_dt)
-        _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent_id)
+        rows, total_collections, total_expenses, total_operating, total_office_expenses = get_cash_summary(db=db, agent_id=agent.id, start=start_dt, end=end_dt)
+        _ret_stmt = select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "RETURN_OPERATING_CASH").where(CashEntry.agent_id == agent.id)
         if start_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at >= start_dt)
         if end_dt: _ret_stmt = _ret_stmt.where(CashEntry.created_at < end_dt)
         total_return_op_cash = db.scalar(_ret_stmt) or 0
@@ -278,7 +287,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
         remittance = total_collections - total_office_expenses
         net_position = remittance + operating_balance
         _eff = func.coalesce(Delivery.delivered_at, Delivery.delivery_date, Delivery.created_at)
-        d_stmt = select(Delivery).where(Delivery.agent_id == agent_id).order_by(desc(_eff)).limit(300)
+        d_stmt = select(Delivery).where(Delivery.agent_id == agent.id).order_by(desc(_eff)).limit(300)
         if start_dt: d_stmt = d_stmt.where(_eff >= start_dt)
         if end_dt: d_stmt = d_stmt.where(_eff < end_dt)
         deliveries = db.execute(d_stmt).scalars().all()
@@ -307,7 +316,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
     cash_stmt = select(CashEntry).where(CashEntry.branch_id == agent.branch_id).order_by(desc(CashEntry.created_at))
     if start_dt: cash_stmt = cash_stmt.where(CashEntry.created_at >= start_dt)
     if end_dt: cash_stmt = cash_stmt.where(CashEntry.created_at < end_dt)
-    cash_stmt = cash_stmt.where((CashEntry.agent_id == agent_id) | (CashEntry.kind == "OFFICE_EXPENSE"))
+    cash_stmt = cash_stmt.where((CashEntry.agent_id == agent.id) | (CashEntry.kind == "OFFICE_EXPENSE"))
     cash_entries = db.execute(cash_stmt.limit(300)).scalars().all()
 
     csrf_token = get_csrf_token(request)
@@ -316,7 +325,7 @@ def agent_detail(request: Request, preset: str = "", start_date: str = "", end_d
         "SELECT uh.old_username, uh.new_username, uh.changed_at, u.username as changed_by_name "
         "FROM username_history uh LEFT JOIN users u ON u.id = uh.changed_by "
         "WHERE uh.user_id = :uid ORDER BY uh.changed_at DESC LIMIT 50"
-    ), {"uid": agent_id}).fetchall()
+    ), {"uid": agent.id}).fetchall()
     return tpl(request, "agent_detail.html", {
         "request": request, "user": user, "agent": agent, "rows": rows,
         "is_admin_profile": is_admin_profile, "branch_agents": branch_agents,
@@ -348,6 +357,7 @@ async def agent_reset_password(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     target = db.get(User, agent_id)
     if not target:
@@ -379,6 +389,7 @@ def toggle_agent_active(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     target = db.get(User, agent_id)
     if not target:
@@ -406,6 +417,7 @@ def toggle_agent_active(
 
 @router.get("/agent-overview", response_class=HTMLResponse)
 def agent_overview(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     if is_admin(user) or is_supervisor(user):
         return redirect("/")
     branch_id = get_selected_branch_id(request, user)
@@ -481,6 +493,7 @@ def agent_overview(request: Request, db: Session = Depends(get_db), user: User =
 
 @router.get("/my-deliveries", response_class=HTMLResponse)
 def my_deliveries(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     rows = db.execute(
         select(Delivery).where(Delivery.agent_id == user.id).where(Delivery.branch_id == branch_id)
@@ -544,6 +557,7 @@ def adjustment_count(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/deliveries/{delivery_id}", response_class=HTMLResponse)
 def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user), d: Delivery = Depends(get_authorized_delivery)):
+    set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     d_items_all = db.execute(
@@ -599,6 +613,7 @@ async def deliveries_bulk_assign(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     agent = db.get(User, agent_id)
@@ -642,6 +657,7 @@ async def delivery_assign_agent(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404, detail="Delivery not found")
@@ -672,6 +688,7 @@ async def update_delivery_date(
     user: User = Depends(get_active_user),
     d: Delivery = Depends(get_authorized_delivery),
 ):
+    set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
@@ -694,10 +711,10 @@ async def request_adjustment(
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
+    d: Delivery = Depends(get_authorized_delivery),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
-    d = db.get(Delivery, delivery_id)
-    if not d: raise HTTPException(status_code=404)
     if d.agent_id != user.id and not is_admin(user):
         return HTMLResponse("Forbidden", status_code=403)
     if d.status not in ("OUT_FOR_DELIVERY", "PENDING"):
@@ -765,6 +782,7 @@ async def review_adjustment(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     d = db.get(Delivery, delivery_id)
     if not d: raise HTTPException(status_code=404)
@@ -868,6 +886,7 @@ async def delivery_collect(
     d: Delivery = Depends(get_authorized_delivery),
 ):
     """Mark delivery as DELIVERED with cash/transfer payment breakdown."""
+    set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)
@@ -942,6 +961,7 @@ async def update_delivery_status(
     user: User = Depends(get_active_user),
     d: Delivery = Depends(get_authorized_delivery),
 ):
+    set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user) and d.agent_id != user.id:
         return HTMLResponse("Forbidden", status_code=403)
     verify_csrf_token(request, csrf_token)

@@ -16,6 +16,7 @@ router = APIRouter()
 
 @router.get("/branches", response_class=HTMLResponse)
 def branches_list(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     rows = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
     return tpl(request, "branches_list.html", {
         "request": request, "user": user, "rows": rows,
@@ -25,6 +26,7 @@ def branches_list(request: Request, db: Session = Depends(get_db), user: User = 
 
 @router.get("/branches/new", response_class=HTMLResponse)
 def branch_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
     csrf_token = get_csrf_token(request)
     return tpl(request, "branch_new.html", {
@@ -44,6 +46,7 @@ async def branch_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     name_clean = sanitize_text(name, 120, "Branch name")
     code_clean = sanitize_text(code, 20, "Branch code") if (code or "").strip() else None
@@ -61,7 +64,9 @@ async def branch_create(
 
 @router.get("/api/low-stock-count")
 def api_low_stock_count(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
-    return {"count": len(get_low_stock(db))}
+    set_rls_context(db, user)
+    branch_id = None if is_supervisor(user) else user.branch_id
+    return {"count": len(get_low_stock(db, branch_id=branch_id))}
 
 
 # ────────────────────────────────────────────────

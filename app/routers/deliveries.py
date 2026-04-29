@@ -5,6 +5,7 @@ from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
+from urllib.parse import quote_plus
 from app.core import *
 from app.models import *
 from app.security import *
@@ -17,32 +18,43 @@ router = APIRouter()
 
 @router.get("/deliveries", response_class=HTMLResponse)
 def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
+    per_page = 50
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page = 1
+    offset = (page - 1) * per_page
 
+    # Build filter conditions as a reusable list
+    # kpi_filters = same but without the status filter (so KPI cards always show all statuses)
+    filters = []
+    kpi_filters = []
     if is_supervisor(user):
-        # Supervisor filters by branch, status, date range
         filter_branch = request.query_params.get("branch_id", "").strip()
         start_date = request.query_params.get("start_date", "").strip()
         end_date = request.query_params.get("end_date", "").strip()
-        stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(500)
         if filter_branch and filter_branch.isdigit():
-            stmt = stmt.where(Delivery.branch_id == int(filter_branch))
+            filters.append(Delivery.branch_id == int(filter_branch))
+            kpi_filters.append(Delivery.branch_id == int(filter_branch))
         if status:
-            stmt = stmt.where(Delivery.status == status)
+            filters.append(Delivery.status == status)
         if start_date:
             try:
-                stmt = stmt.where(Delivery.created_at >= datetime.fromisoformat(start_date))
+                filters.append(Delivery.created_at >= datetime.fromisoformat(start_date))
+                kpi_filters.append(Delivery.created_at >= datetime.fromisoformat(start_date))
             except ValueError:
                 pass
         if end_date:
             try:
-                stmt = stmt.where(Delivery.created_at <= datetime.fromisoformat(end_date + " 23:59:59"))
+                filters.append(Delivery.created_at <= datetime.fromisoformat(end_date + " 23:59:59"))
+                kpi_filters.append(Delivery.created_at <= datetime.fromisoformat(end_date + " 23:59:59"))
             except ValueError:
                 pass
-        rows = db.execute(stmt).scalars().all()
         branch_id = int(filter_branch) if filter_branch and filter_branch.isdigit() else None
         agents = []
     else:
@@ -50,13 +62,17 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         filter_branch = ""
         start_date = ""
         end_date = ""
-        stmt = select(Delivery).order_by(desc(Delivery.created_at)).limit(300)
-        stmt = stmt.where(Delivery.branch_id == branch_id)
-        if status: stmt = stmt.where(Delivery.status == status)
-        if agent_id.isdigit(): stmt = stmt.where(Delivery.agent_id == int(agent_id))
-        rows = db.execute(stmt).scalars().all()
+        filters.append(Delivery.branch_id == branch_id)
+        if status:
+            filters.append(Delivery.status == status)
+        if agent_id.isdigit():
+            filters.append(Delivery.agent_id == int(agent_id))
         agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())
         agents = db.execute(agents_stmt).scalars().all()
+
+    total = db.scalar(select(func.count(Delivery.id)).where(*filters) if filters else select(func.count(Delivery.id))) or 0
+    rows = db.execute((select(Delivery).where(*filters) if filters else select(Delivery)).order_by(desc(Delivery.created_at)).offset(offset).limit(per_page)).scalars().all()
+    total_pages = max(1, (total + per_page - 1) // per_page)
 
     delivery_ids = [d.id for d in rows]
     items_summary: dict[int, str] = {}
@@ -76,12 +92,14 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     sup_kpis = None
     if is_supervisor(user):
+        def _kpi_count(st):
+            return db.scalar(select(func.count(Delivery.id)).where(*kpi_filters, Delivery.status == st)) or 0
         sup_kpis = {
-            "total": len(rows),
-            "delivered": sum(1 for d in rows if d.status == "DELIVERED"),
-            "pending": sum(1 for d in rows if d.status == "PENDING"),
-            "in_transit": sum(1 for d in rows if d.status == "OUT_FOR_DELIVERY"),
-            "failed": sum(1 for d in rows if d.status in ("FAILED", "RETURNED")),
+            "total": db.scalar(select(func.count(Delivery.id)).where(*kpi_filters)) or 0,
+            "delivered": _kpi_count("DELIVERED"),
+            "pending": _kpi_count("PENDING"),
+            "in_transit": _kpi_count("OUT_FOR_DELIVERY"),
+            "failed": db.scalar(select(func.count(Delivery.id)).where(*kpi_filters, Delivery.status.in_(["FAILED", "RETURNED"]))) or 0,
         }
     # Agent name lookup for display in table
     all_agent_ids = {d.agent_id for d in rows if d.agent_id}
@@ -90,7 +108,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all():
             agent_names[u.id] = u.full_name or u.username
 
-    # Attention flags: deliveries needing action
+    # Attention flags: deliveries needing action (current page only, for dot display)
     # — last WhatsApp message is inbound (customer or seller reply waiting)
     # — adjustment pending approval
     attention_ids: set[int] = set()
@@ -113,6 +131,35 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
     adj_ids = {d.id for d in rows if d.status == "ADJUSTMENT_PENDING"}
     attention_ids |= adj_ids
 
+    # Cross-page attention counts — so user knows if other pages have items needing action
+    hidden_wa_count = 0
+    hidden_adj_count = 0
+    if total_pages > 1:
+        current_ids_tuple = tuple(delivery_ids) if delivery_ids else (0,)
+        # All filtered delivery IDs not on the current page
+        other_filters = filters + [Delivery.id.not_in(current_ids_tuple)]
+        all_other_ids = db.execute(
+            select(Delivery.id).where(*other_filters)
+        ).scalars().all()
+        if all_other_ids:
+            other_ids_tuple = tuple(all_other_ids)
+            wa_rows = db.execute(text(f"""
+                SELECT wc.delivery_id
+                FROM wa_comments wc
+                WHERE wc.delivery_id IN :other_ids
+                  AND wc.created_at = (
+                    SELECT MAX(created_at) FROM wa_comments wc2 WHERE wc2.delivery_id = wc.delivery_id
+                  )
+                  AND wc.direction = 'inbound'
+            """), {"other_ids": other_ids_tuple}).fetchall()
+            hidden_wa_count = len(wa_rows)
+            hidden_adj_count = db.scalar(
+                select(func.count(Delivery.id)).where(
+                    Delivery.id.in_(other_ids_tuple),
+                    Delivery.status == "ADJUSTMENT_PENDING"
+                )
+            ) or 0
+
     return tpl(request, "deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
@@ -122,12 +169,15 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         "agent_names": agent_names,
         "attention_ids": attention_ids,
         "wa_attention_ids": wa_attention_ids,
+        "page": page, "total_pages": total_pages, "total": total,
+        "hidden_wa_count": hidden_wa_count, "hidden_adj_count": hidden_adj_count,
     })
 
 
 @router.get("/admin/fix-cash-constraint", response_class=JSONResponse)
 def fix_cash_constraint(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """One-time: update cash_entries kind constraint to include TRANSFER_PAYMENT."""
+    set_rls_context(db, user)
     try:
         with db.bind.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             conn.execute(text("ALTER TABLE cash_entries DROP CONSTRAINT IF EXISTS ck_cash_kind"))
@@ -140,6 +190,7 @@ def fix_cash_constraint(request: Request, db: Session = Depends(get_db), user: U
 @router.get("/admin/check-env", response_class=JSONResponse)
 def check_env(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """Supervisor-only: verify environment variables are loaded."""
+    set_rls_context(db, user)
     groq = os.getenv("GROQ_API_KEY", "")
     return JSONResponse({
         "GROQ_API_KEY": f"set ({len(groq)} chars)" if groq else "NOT SET",
@@ -150,6 +201,7 @@ def check_env(request: Request, db: Session = Depends(get_db), user: User = Depe
 @router.post("/parse-order/api", response_class=JSONResponse)
 async def parse_order_api(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
     """Backend proxy — calls Groq API server-side to avoid CORS."""
+    set_rls_context(db, user)
     limiter.check(request, max_requests=60, window_seconds=60)
 
     import httpx
@@ -201,6 +253,7 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db), user:
 
 @router.get("/parse-order", response_class=HTMLResponse)
 def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     # Supervisor must pick a branch first
     if is_supervisor(user):
@@ -226,6 +279,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
 
 @router.get("/deliveries/new", response_class=HTMLResponse)
 def delivery_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all()
     # Get items with current stock levels for out-of-stock labelling
@@ -295,6 +349,7 @@ async def delivery_create(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     # [SEC] Idempotency — reject duplicate form submissions
     if not consume_form_token(request, form_token):
@@ -369,7 +424,7 @@ async def delivery_create(
                 if stock < total_qty:
                     item_obj = db.get(Item, locked_iid)
                     item_name = item_obj.name if item_obj else f"#{locked_iid}"
-                    return redirect(f"/deliveries/new?error=Insufficient+stock+for+{item_name}+(available:+{stock},+requested:+{total_qty})")
+                    return redirect(f"/deliveries/new?error={quote_plus(f'Insufficient stock for {item_name} (available: {stock}, requested: {total_qty})')}")
     tx_item_ids = set()  # track items we've already created an OUT tx for
     for iid, qty, amt in zip(item_id, quantity, amounts):
         q = int(qty) if qty is not None else 0
