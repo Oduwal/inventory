@@ -887,7 +887,7 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 @router.get("/api/group-participants/{delivery_id}")
 async def get_group_participants(delivery_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user), delivery: Delivery = Depends(get_authorized_delivery)):
-
+    set_rls_context(db, user)
     # Find group JID: prefer CATEGORY_GROUP_MAP (always current) over stale DB data
     try:
         cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
@@ -939,6 +939,7 @@ async def agent_voice_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)
@@ -1032,6 +1033,7 @@ async def send_agent_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     delivery = db.execute(select(Delivery).where(Delivery.id == delivery_id)).scalar_one_or_none()
     if not delivery:
         return JSONResponse({"status": "error", "message": "Delivery not found"}, status_code=404)

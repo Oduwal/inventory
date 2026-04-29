@@ -74,6 +74,7 @@ def push_vapid_public_key():
 
 @router.post("/push/subscribe", response_class=JSONResponse)
 async def push_subscribe(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     body     = await request.json()
     endpoint = body.get("endpoint", "")
     keys     = body.get("keys", {})
@@ -95,6 +96,7 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db), user: 
 @router.get("/push/test", response_class=JSONResponse)
 def push_test(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     """Send a test push to the logged-in user."""
+    set_rls_context(db, user)
     if not VAPID_PUBLIC_KEY or not VAPID_PRIVATE_KEY:
         return JSONResponse({"error": "VAPID keys not configured on server"})
     has_sub = db.execute(text("SELECT 1 FROM push_subscriptions WHERE user_id=:uid LIMIT 1"), {"uid": user.id}).first()
@@ -106,6 +108,7 @@ def push_test(request: Request, db: Session = Depends(get_db), user: User = Depe
 
 @router.post("/push/unsubscribe", response_class=JSONResponse)
 async def push_unsubscribe(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     body     = await request.json()
     endpoint = body.get("endpoint", "")
     if endpoint:

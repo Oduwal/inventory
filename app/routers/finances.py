@@ -17,6 +17,7 @@ router = APIRouter()
 
 @router.get("/cash", response_class=HTMLResponse)
 def cash_dashboard(request: Request, preset: str = "", start_date: str = "", end_date: str = "", agent_id: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     sd, ed, preset_norm = _range_dates_from_inputs(preset, start_date, end_date)
     start_dt = None
@@ -153,6 +154,7 @@ async def cash_new(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     # [SEC] Idempotency — reject duplicate cash entry submissions
     if not consume_form_token(request, form_token):
@@ -220,6 +222,7 @@ async def cash_new(
 
 @router.get("/reports", response_class=HTMLResponse)
 def reports_page(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())).scalars().all() if (is_admin(user) or is_supervisor(user)) else []
     today = date.today().isoformat()
@@ -231,6 +234,7 @@ def reports_page(request: Request, db: Session = Depends(get_db), user: User = D
 
 @router.get("/reports/preview")
 def reports_preview(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
     if d1 and not d2: d2 = d1
@@ -394,6 +398,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
 
 @router.get("/reports/txt", response_class=PlainTextResponse)
 def reports_txt(request: Request, start_date: str | None = None, end_date: str | None = None, agent_id: str | None = None, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     d1 = _parse_iso_date(start_date); d2 = _parse_iso_date(end_date)
     if not d1 and not d2: d1 = d2 = date.today()
     if d1 and not d2: d2 = d1
@@ -426,9 +431,9 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
     _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
     agent_exp_map = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
     agent_coll_exp_txt = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
-    op_cash_map = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).group_by(CashEntry.agent_id)).all()}
-    office_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)) or 0
-    waybill_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0
+    op_cash_map = {int(aid): t for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
+    office_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br)) or 0
+    waybill_total = db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0
     other_office_total = office_total - waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname: dict[int, str] = {}
@@ -483,6 +488,7 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
 
 @router.get("/merchant-receipt/new", response_class=HTMLResponse)
 def merchant_receipt_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     items = get_items_with_stock(db, branch_id=branch_id)
     csrf_token = get_csrf_token(request)
@@ -512,6 +518,7 @@ async def merchant_receipt_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
@@ -556,6 +563,7 @@ async def merchant_receipt_create(
 @router.get("/merchant-return/new", response_class=HTMLResponse)
 def merchant_return_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """Return goods back to a merchant — creates OUT transactions."""
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     items = get_items_with_stock(db, branch_id=branch_id)
     # Get distinct merchant names from item categories for this branch
@@ -588,6 +596,7 @@ async def merchant_return_create(
     user: User = Depends(RequireRole("ADMIN")),
 ):
     """Record goods returned to merchant — OUT transaction per item."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     branch_id = get_selected_branch_id(request, user)
     merchant_name = sanitize_text(merchant_name, 200, "Merchant name")
@@ -637,6 +646,7 @@ async def merchant_return_create(
 
 @router.get("/transfers", response_class=HTMLResponse)
 def transfers_list(request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     if is_agent(user):
         # Agents see transfers delegated to them (send or receive side) — hide cancelled from receiver
         transfers = db.execute(
@@ -705,6 +715,7 @@ def transfers_list(request: Request, db: Session = Depends(get_db), user: User =
 
 @router.get("/transfers/new", response_class=HTMLResponse)
 def transfer_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
+    set_rls_context(db, user)
     branches = db.execute(select(Branch).where(Branch.id != user.branch_id).order_by(Branch.name)).scalars().all()
     items = get_items_with_stock(db, branch_id=user.branch_id)
     agents = db.execute(select(User).where(User.role == "AGENT").where(User.branch_id == user.branch_id).where(User.is_active == True).order_by(User.username)).scalars().all()
@@ -728,6 +739,7 @@ async def transfer_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     if to_branch_id == user.branch_id:
         return redirect("/transfers/new?error=Cannot+transfer+to+your+own+branch")
@@ -768,6 +780,7 @@ async def transfer_create(
 
 @router.get("/transfers/{transfer_id}", response_class=HTMLResponse)
 def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
@@ -803,6 +816,7 @@ def transfer_detail(transfer_id: int, request: Request, db: Session = Depends(ge
 
 @router.post("/transfers/{transfer_id}/receive")
 async def transfer_receive(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     is_recv_agent = is_agent(user)
     verify_csrf_token(request, csrf_token)
     # Lock transfer row to prevent concurrent receive operations
@@ -852,6 +866,7 @@ async def transfer_receive(transfer_id: int, request: Request, csrf_token: str =
 @router.post("/transfers/{transfer_id}/pack")
 async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
     """Agent marks transfer as packed/ready to send."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     # Lock transfer row to prevent concurrent pack operations
     transfer = db.execute(
@@ -861,6 +876,8 @@ async def transfer_pack(transfer_id: int, request: Request, csrf_token: str = Fo
         raise HTTPException(status_code=404)
     # Only the delegated agent or admin can pack
     if not is_admin(user) and transfer.delegated_agent_id != user.id:
+        return HTMLResponse("Forbidden", status_code=403)
+    if is_admin(user) and user.branch_id != transfer.from_branch_id:
         return HTMLResponse("Forbidden", status_code=403)
     if transfer.status != "PENDING":
         return redirect(f"/transfers/{transfer_id}?error=Transfer+is+not+pending")
@@ -907,6 +924,7 @@ async def transfer_expense(
     user: User = Depends(get_active_user),
 ):
     """Record expense against a transfer — agent or admin."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     if not consume_form_token(request, form_token):
         return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
@@ -920,6 +938,8 @@ async def transfer_expense(
     if is_admin(user):
         if expense_kind not in allowed_admin:
             return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
+        if user.branch_id != transfer.from_branch_id:
+            return HTMLResponse("Forbidden — you are not the sending branch", status_code=403)
     else:
         if expense_kind not in allowed_agent:
             return redirect(f"/transfers/{transfer_id}?error=Invalid+expense+type")
@@ -967,6 +987,7 @@ async def transfer_delegate_receiver(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer: raise HTTPException(status_code=404)
@@ -993,6 +1014,7 @@ async def transfer_receive_expense(
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     if not consume_form_token(request, form_token):
         return redirect(f"/transfers/{transfer_id}?error=Duplicate+submission")
@@ -1043,6 +1065,7 @@ async def transfer_receive_expense(
 
 @router.post("/transfers/{transfer_id}/cancel")
 async def transfer_cancel(transfer_id: int, request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     transfer = db.get(StockTransfer, transfer_id)
     if not transfer:
@@ -1124,6 +1147,7 @@ def _merchant_remittance_query(db, sd, ed, bid):
 
 @router.get("/merchant-remittance", response_class=HTMLResponse)
 def merchant_remittance_page(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
     today = date.today().isoformat()
     return tpl(request, "merchant_remittance.html", {
@@ -1141,6 +1165,7 @@ def merchant_remittance_data(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     sd = _parse_iso_date(start_date)
     ed = _parse_iso_date(end_date)
     if not sd or not ed:
@@ -1207,6 +1232,7 @@ def merchant_remittance_csv(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     from fastapi.responses import Response as _Resp
     import csv, io
 

@@ -21,6 +21,7 @@ async def wipe_all_data(request: Request, db: Session = Depends(get_db), user: U
     items, notifications, audit logs, assignments, faulty stock, vettings.
     Keeps: users, branches.
     """
+    set_rls_context(db, user)
     limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
     verify_origin_for_json(request)  # [SEC] CSRF defense for JSON endpoint
     body = await request.json()
@@ -53,6 +54,7 @@ async def wipe_all_data(request: Request, db: Session = Depends(get_db), user: U
 
 @router.get("/admin/reset-system", response_class=HTMLResponse)
 def reset_system_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     csrf_token = get_csrf_token(request)
     return HTMLResponse(f"""<!doctype html><html><head><title>Reset System</title>
 <style>body{{font-family:sans-serif;max-width:500px;margin:80px auto;padding:20px}}
@@ -78,6 +80,7 @@ async def reset_system_execute(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     limiter.check(request, max_requests=5, window_seconds=60)  # [SEC] Rate limit destructive ops
     verify_csrf_token(request, csrf_token)
     if confirm.strip() != "RESET":

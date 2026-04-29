@@ -24,6 +24,7 @@ def forgot_password_page(request: Request):
 
 @router.get("/items", response_class=HTMLResponse)
 def items_list(request: Request, q: str = "", view: str = "combined", branch_filter: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     all_rows = list(get_items_with_stock(db))
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all() if is_supervisor(user) else []
@@ -91,6 +92,7 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
 
 @router.get("/items/new", response_class=HTMLResponse)
 def item_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     csrf_token = get_csrf_token(request)
     return tpl(request, "item_new.html", {
         "request": request, "user": user,
@@ -112,6 +114,7 @@ async def item_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
@@ -133,6 +136,7 @@ async def item_create(
 
 @router.get("/items/import", response_class=HTMLResponse)
 def items_import_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branches = db.execute(select(Branch).order_by(Branch.name)).scalars().all()
     csrf_token = get_csrf_token(request)
     return tpl(request, "items_import.html", {
@@ -146,6 +150,7 @@ def items_import_form(request: Request, db: Session = Depends(get_db), user: Use
 
 @router.post("/items/import")
 async def items_import_upload(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     import csv, io
     form = await request.form()
     verify_csrf_token(request, str(form.get("csrf_token", "")))
@@ -203,6 +208,7 @@ async def items_import_upload(request: Request, db: Session = Depends(get_db), u
 
 @router.get("/items/{item_id}", response_class=HTMLResponse)
 def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), user: User = Depends(get_active_user), row=Depends(get_authorized_item_with_stock)):
+    set_rls_context(db, user)
     item, stock = row
     txs = db.scalars(
         select(Transaction).where(Transaction.item_id == item_id)
@@ -225,6 +231,7 @@ def item_detail(request: Request, item_id: int, db: Session = Depends(get_db), u
 
 @router.get("/items/{item_id}/edit", response_class=HTMLResponse)
 def item_edit_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")), item: Item = Depends(get_authorized_item)):
+    set_rls_context(db, user)
     csrf_token = get_csrf_token(request)
     return tpl(request, "item_edit.html", {
         "request": request, "item": item, "user": user,
@@ -251,6 +258,7 @@ async def item_edit_save(
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
     item: Item = Depends(get_authorized_item),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     name_clean = sanitize_text(name, 200, "Name")
     if not name_clean:
@@ -295,6 +303,7 @@ async def flag_faulty_stock(
     user: User = Depends(RequireRole("ADMIN")),
 ):
     """Admin flags a quantity of an item as faulty/bad. Stock count unchanged."""
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
 
     item = db.get(Item, item_id)
@@ -327,7 +336,7 @@ async def resolve_faulty_stock(
     action='remove'           → OUT transaction, stock reduced
     action='return_merchant'  → OUT transaction labelled as merchant return
     """
-
+    set_rls_context(db, user)
     body         = await request.json()
     action       = body.get("action", "")    # "remove" | "return_merchant"
     resolve_note = (body.get("resolve_note", "") or "").strip()[:400]
@@ -395,6 +404,7 @@ async def resolve_faulty_stock(
 
 @router.get("/transactions", response_class=HTMLResponse)
 def transactions_list(request: Request, branch_filter: str = "", db: Session = Depends(get_db), user: User = Depends(get_active_user)):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
     filter_bid = int(branch_filter) if branch_filter and branch_filter.isdigit() else None
@@ -418,6 +428,7 @@ def transactions_list(request: Request, branch_filter: str = "", db: Session = D
 
 @router.get("/transactions/new", response_class=HTMLResponse)
 def tx_new_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
     items = [i for (i, _s) in get_items_with_stock(db) if i.branch_id == branch_id]
     branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all() if is_supervisor(user) else []
@@ -441,6 +452,7 @@ async def tx_create(
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
 ):
+    set_rls_context(db, user)
     verify_csrf_token(request, csrf_token)
     tx_type_clean = (tx_type or "").strip().upper()
     if tx_type_clean not in {"IN", "OUT"}:

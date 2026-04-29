@@ -19,6 +19,7 @@ async def assign_stock_to_agent(request: Request, db: Session = Depends(get_db),
     """Admin assigns extra stock to an agent for urgent deliveries.
     Creates an OUT transaction immediately — stock leaves branch.
     """
+    set_rls_context(db, user)
     body     = await request.json()
     agent_id = body.get("agent_id")
     item_id  = body.get("item_id")
@@ -78,6 +79,7 @@ async def return_assigned_stock(request: Request, db: Session = Depends(get_db),
     Full return → creates IN tx, marks returned=TRUE
     Partial return → creates IN tx for what came back, updates qty_returned but keeps returned=FALSE for shortfall resolution
     """
+    set_rls_context(db, user)
     body          = await request.json()
     assignment_id = body.get("assignment_id")
     qty_returned  = int(body.get("qty_returned", 0))
@@ -143,6 +145,7 @@ async def resolve_assign_shortfall(request: Request, db: Session = Depends(get_d
     action='returned'    → agent brought back more; creates IN tx
     action='written_off' → accept loss; no IN tx; mark complete
     """
+    set_rls_context(db, user)
     body          = await request.json()
     assignment_id = body.get("assignment_id")
     action        = body.get("action", "")
@@ -250,6 +253,7 @@ async def vetting_confirm_return(request: Request, db: Session = Depends(get_db)
     - Partial/zero return → stock credited for what came back,
       shortfall stays visible with ⚠ Missing badge until admin resolves it
     """
+    set_rls_context(db, user)
     body             = await request.json()
     delivery_item_id = body.get("delivery_item_id")
     qty_returned     = int(body.get("qty_returned", 0))
@@ -341,6 +345,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
     action='written_off'→ marks missing qty as lost; no IN tx; marks fully resolved
     Can be called multiple times for partial resolutions.
     """
+    set_rls_context(db, user)
     body             = await request.json()
     delivery_item_id = body.get("delivery_item_id")
     action           = body.get("action", "")   # "returned" | "written_off"
@@ -463,6 +468,7 @@ async def vetting_resolve_shortfall(request: Request, db: Session = Depends(get_
 
 @router.get("/vetting", response_class=HTMLResponse)
 def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
+    set_rls_context(db, user)
     branch_id = get_selected_branch_id(request, user)
 
     # Date filter
@@ -759,6 +765,7 @@ def vetting_page(request: Request, date_filter: str = "", agent_id: str = "", db
 @router.post("/vetting/confirm", response_class=JSONResponse)
 async def vetting_confirm(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN"))):
     """Confirm all cash entries for an agent on a given date."""
+    set_rls_context(db, user)
     body = await request.json()
     agent_id  = body.get("agent_id")
     date_str  = body.get("date")
