@@ -169,7 +169,9 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         logger.error(f"Failed to save log: {e}")
 
 def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "", whatsapp_number: str | None = None) -> None:
-    if not phone or not phone.strip(): return
+    if not phone or not phone.strip():
+        logger.warning("trigger_call: no phone for delivery #%s — skipping", delivery_id)
+        return
 
     # Check supervisor toggles before placing any call
     try:
@@ -178,28 +180,25 @@ def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name
         _db = SessionLocal()
         try:
             if not is_feature_on(_db, "call_enabled"):
-                logger.info("Calls disabled by supervisor toggle. Skipping delivery #%s", delivery_id)
+                logger.warning("trigger_call: call_enabled=OFF — skipping delivery #%s", delivery_id)
                 return
             if not is_feature_on(_db, f"call_status_{status}"):
-                logger.info("Calls for status %s disabled by supervisor toggle. Skipping delivery #%s", status, delivery_id)
+                logger.warning("trigger_call: call_status_%s=OFF — skipping delivery #%s", status, delivery_id)
                 return
         finally:
             _db.close()
     except Exception as _e:
-        logger.warning("Could not check feature toggles: %s — proceeding with call", _e)
+        logger.warning("trigger_call: could not check feature toggles: %s — proceeding with call", _e)
 
     # Safely split numbers separated by comma, slash, or space
     raw_numbers = [p.strip() for p in phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
-    if not raw_numbers: return
-
-    # Append WhatsApp number as a final backup if it's not already in the list
-    if whatsapp_number and whatsapp_number.strip():
-        wa = whatsapp_number.strip()
-        if wa not in raw_numbers:
-            raw_numbers.append(wa)
+    if not raw_numbers:
+        logger.warning("trigger_call: phone string '%s' produced no numbers — skipping delivery #%s", phone, delivery_id)
+        return
 
     primary = raw_numbers[0]
     backups = raw_numbers[1:]
 
+    logger.warning("trigger_call: FIRING call for delivery #%s status=%s primary=%s backups=%s", delivery_id, status, primary, backups)
     from app.core import submit_task
     submit_task(_do_call, delivery_id, primary, backups, status, customer_name, items, address)
