@@ -387,10 +387,17 @@ async def delivery_create(
         d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.now(timezone.utc)
     except ValueError:
         d_date = datetime.now(timezone.utc)
+    _clean_phone = sanitize_phone(customer_phone) or ""
+    _clean_wa = sanitize_phone(customer_whatsapp) or ""
+    # Append WhatsApp number to call list if not already present
+    if _clean_wa and _clean_wa not in _clean_phone:
+        _call_numbers = (_clean_phone + ", " + _clean_wa).strip(", ")
+    else:
+        _call_numbers = _clean_phone or None
     d = Delivery(
         branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
-        customer_phone=sanitize_phone(customer_phone) or None,
-        customer_whatsapp=sanitize_phone(customer_whatsapp) or None,
+        customer_phone=_call_numbers or None,
+        customer_whatsapp=_clean_wa or None,
         address=sanitize_text(address, 300, "Address") or None,
         note=sanitize_text(note, 400, "Note") or None,
         status="PENDING", delivery_date=d_date,
