@@ -28,15 +28,24 @@
     <div style="font-size:20px;font-weight:800;margin-bottom:10px;">{{ d.customer_name }}</div>
     <div style="display:flex;flex-direction:column;gap:6px;">
       <div style="display:flex;gap:8px;align-items:center;">
-        <span style="color:var(--muted);font-size:12px;min-width:60px;">Phone</span>
+        <span style="color:var(--muted);font-size:12px;min-width:60px;">Call</span>
         <span style="font-size:13px;">
           {% if d.customer_phone %}
-            <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff; text-decoration:underline;">{{ d.customer_phone }}</a>
-          {% else %}
-            —
-          {% endif %}
+            <a href="tel:{{ d.customer_phone.split(',')[0].strip() }}" style="color:#7fa8ff;text-decoration:underline;">{{ d.customer_phone }}</a>
+          {% else %}—{% endif %}
         </span>
       </div>
+      {% set _wa_num = d.customer_whatsapp or d.customer_phone %}
+      {% if _wa_num %}
+        {% set _wa_raw = _wa_num.split(',')[0].strip().replace(' ','').replace('-','').replace('(','').replace(')','') %}
+        {% set _wa_e164 = '234' + _wa_raw[1:] if _wa_raw.startswith('0') else _wa_raw.lstrip('+') %}
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:var(--muted);font-size:12px;min-width:60px;">WhatsApp</span>
+          <span style="font-size:13px;">
+            <a href="https://wa.me/{{ _wa_e164 }}" target="_blank" style="color:#25D366;text-decoration:underline;">{{ _wa_num.split(',')[0].strip() }}</a>
+          </span>
+        </div>
+      {% endif %}
       <div style="display:flex;gap:8px;align-items:center;">
         <span style="color:var(--muted);font-size:12px;min-width:60px;">Address</span>
         <span style="font-size:13px;">{{ d.address or "—" }}</span>

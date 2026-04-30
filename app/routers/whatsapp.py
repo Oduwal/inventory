@@ -116,11 +116,15 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                 delivery_id, ended_reason, call_status, duration
             )
 
-            # Trigger fallback logic if call failed
-            if ended_reason in [
-                "voicemail", "customer-hung-up", "customer-ended-call",
-                "customer-did-not-answer", "failed", "assistant-error", "customer-busy"
-            ]:
+            # Trigger fallback logic if call was not successfully completed
+            # Whitelist the two reasons that mean the customer actually answered — everything else retries
+            _SUCCESS_REASONS = {"customer-ended-call", "assistant-ended-call"}
+            logging.getLogger("webhook").info(
+                "Call ended with reason='%s' for delivery %s — %s",
+                ended_reason, delivery_id,
+                "success (no retry)" if ended_reason in _SUCCESS_REASONS else "retrying backup"
+            )
+            if ended_reason not in _SUCCESS_REASONS:
                 backup_numbers = metadata.get("backup_numbers", [])
 
                 # Check if we have more numbers to try first
