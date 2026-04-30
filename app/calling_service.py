@@ -145,11 +145,14 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         call_id = data.get("id") or ""
         call_status = "initiated" if resp.status_code in (200, 201) else "failed"
         error_msg = "" if resp.status_code in (200, 201) else str(data.get("message", data))[:300]
-        
+        if call_status == "failed":
+            logger.warning("_do_call: Vapi rejected number %s for delivery #%s — status=%s error=%s", formatted_phone, delivery_id, resp.status_code, error_msg)
+
     except Exception as e:
         call_id = ""
         call_status = "failed"
         error_msg = str(e)[:300]
+        logger.warning("_do_call: exception calling Vapi for delivery #%s: %s", delivery_id, error_msg)
 
     try:
         from .database import SessionLocal
@@ -167,6 +170,14 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
             db.close()
     except Exception as e:
         logger.error(f"Failed to save log: {e}")
+
+    # If Vapi rejected this number immediately (no webhook will fire), try next backup now
+    if call_status == "failed" and backup_numbers:
+        next_number = backup_numbers[0]
+        remaining = backup_numbers[1:]
+        logger.warning("_do_call: trying next backup %s for delivery #%s", next_number, delivery_id)
+        from app.core import submit_task
+        submit_task(_do_call, delivery_id, next_number, remaining, status, customer_name, items, address)
 
 def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "", whatsapp_number: str | None = None) -> None:
     if not phone or not phone.strip():
