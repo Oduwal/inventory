@@ -196,6 +196,13 @@ def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name
         logger.warning("trigger_call: phone string '%s' produced no numbers — skipping delivery #%s", phone, delivery_id)
         return
 
+    # Always append WhatsApp number as final backup if not already present
+    # (handles existing deliveries where customer_phone was saved before this feature)
+    if whatsapp_number and whatsapp_number.strip():
+        wa = whatsapp_number.strip()
+        if not any(wa in n or n in wa for n in raw_numbers):
+            raw_numbers.append(wa)
+
     primary = raw_numbers[0]
     backups = raw_numbers[1:]
 
