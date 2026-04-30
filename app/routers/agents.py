@@ -589,10 +589,20 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             text("SELECT id, request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
             {"rid": pending_adj.id}
         ).fetchall()
-    wa_comments = db.execute(
+    _all_wa = db.execute(
         text("SELECT id, direction, sender, body, media_mime, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
         {"did": d.id}
     ).fetchall()
+    # Seller Group Chat shows only group-thread rows. Customer-direct rows
+    # (AI Agent auto-replies, agent typed replies, customer inbound) are
+    # rendered separately from d.note, so they must be excluded here to
+    # avoid bleeding "Reply to customer" messages into the group view.
+    def _is_group_row(r):
+        s = (r[2] or "").strip()
+        if r[1] == "outbound":
+            return s == "Agent"  # group sends use sender="Agent"
+        return "@" in s  # group inbound senders are JIDs like 234...@s.whatsapp.net or @lid
+    wa_comments = [r for r in _all_wa if _is_group_row(r)]
     return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": col, "expense_total": exp,

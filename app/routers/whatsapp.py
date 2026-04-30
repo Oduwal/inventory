@@ -305,12 +305,10 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # Save customer message and AI reply to wa_comments for live chat UI
-    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    customer_display = html.escape(d.customer_name or sender)
-    customer_body_escaped = html.escape(body)
-    ai_reply_escaped = html.escape(ai_reply)
-
+    # Save customer message and AI reply to wa_comments (kept for audit/log).
+    # NOTE: not broadcast to SSE — the SSE stream feeds the Seller Group Chat
+    # box, and customer-direct messages belong in the customer chat (rendered
+    # from d.note) not the seller group thread.
     db.execute(text(
         "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
         "VALUES (:did, 'inbound', :sender, :body, :_now)"
@@ -320,25 +318,6 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
         "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
     ), {"did": d.id, "body": ai_reply, "_now": _now()})
     db.commit()
-
-    # SSE broadcast customer message
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
-        f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{customer_display}</span>'
-        f'<div style="white-space:pre-wrap;">{customer_body_escaped}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
-    # SSE broadcast AI reply
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
-        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">AI Agent</span>'
-        f'<div style="white-space:pre-wrap;">{ai_reply_escaped}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
 
     # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
     _send_twilio_reply(sender, ai_reply)
@@ -397,17 +376,10 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     ), {"did": d.id, "sender": f"Agent {agent_name}", "body": message, "_now": _now()})
     db.commit()
 
-    # SSE broadcast so open tabs update immediately
-    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;'
-        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">Agent {html.escape(agent_name)} → Customer</span>'
-        f'<div style="white-space:pre-wrap;">{html.escape(message)}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
-
+    # NOTE: do NOT call _sse_broadcast here. The Seller Group Chat is the
+    # only consumer of the SSE stream, and broadcasting customer-direct
+    # replies into it bleeds the message into the wrong thread. The customer
+    # chat is rendered from d.note and refreshed via location.reload() on send.
     _log.info("Agent %s replied to delivery %s: %s", agent_name, delivery_id, message[:100])
     return JSONResponse({"ok": True})
 
