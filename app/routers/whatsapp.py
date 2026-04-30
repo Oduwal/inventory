@@ -220,7 +220,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
             body = f"[Media: {media_type}]"
 
     if not body:
-        return PlainTextResponse("OK", status_code=200)
+        return Response(status_code=204)
 
     # Find the most recent active delivery for this phone number
     # Twilio sends E.164 (+234...), DB may store as 080... or +234...
@@ -245,7 +245,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     if not d:
         _log.info("WhatsApp reply from %s — no matching delivery found", sender)
-        return PlainTextResponse("OK", status_code=200)
+        return Response(status_code=204)
 
     # Fetch items for context
     items_query = db.execute(
@@ -260,16 +260,25 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
     business_phone = os.getenv("BUSINESS_PHONE", "")
 
-    # Use AI to understand and respond
-    loop = asyncio.get_event_loop()
-    ai_result = await loop.run_in_executor(
-        None, _handle_customer_reply, body, d.customer_name, items_str,
-        d.address or "", d.status, existing_note, business_name, business_phone
-    )
+    # If a human agent has already replied on this delivery, the AI must
+    # stay silent — the human is handling the conversation from now on.
+    # We still log/classify the message so the agent can see it, but no
+    # AI text reply is generated and nothing is sent to the customer.
+    human_has_replied = bool(re.search(r"^\[Agent ", existing_note, flags=re.MULTILINE))
 
-    ai_reply = ai_result.get("reply", "")
-    classification = ai_result.get("classification", "OTHER")
-    summary = ai_result.get("summary", body[:100])
+    if human_has_replied:
+        ai_reply = ""
+        classification = "OTHER"
+        summary = body[:100]
+    else:
+        loop = asyncio.get_event_loop()
+        ai_result = await loop.run_in_executor(
+            None, _handle_customer_reply, body, d.customer_name, items_str,
+            d.address or "", d.status, existing_note, business_name, business_phone
+        )
+        ai_reply = ai_result.get("reply", "")
+        classification = ai_result.get("classification", "OTHER")
+        summary = ai_result.get("summary", body[:100])
 
     # Store voice note audio in voice_notes table if present
     if _voice_audio_bytes:
@@ -289,8 +298,12 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
         body = body.replace("[Voice Note]:", f"[Voice Note audio_id={vn_id}]:", 1)
         _log.info("Stored customer voice note id=%s for delivery %s", vn_id, d.id)
 
-    # Log the conversation on delivery notes
-    d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
+    # Log the conversation on delivery notes. When the AI is suppressed
+    # (human has taken over) we only log the customer message — no AI line.
+    if ai_reply:
+        d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
+    else:
+        d.note = (existing_note + f"\n[Customer WhatsApp]: {body}").strip()
 
     # Handle specific classifications
     notify_msg = f"{d.customer_name} via WhatsApp: {summary}"
@@ -313,14 +326,15 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
         "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
         "VALUES (:did, 'inbound', :sender, :body, :_now)"
     ), {"did": d.id, "sender": d.customer_name or sender, "body": body, "_now": _now()})
-    db.execute(text(
-        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-        "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
-    ), {"did": d.id, "body": ai_reply, "_now": _now()})
+    if ai_reply:
+        db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+            "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
+        ), {"did": d.id, "body": ai_reply, "_now": _now()})
     db.commit()
 
-    # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
-    _send_twilio_reply(sender, ai_reply)
+    if ai_reply:
+        _send_twilio_reply(sender, ai_reply)
 
     # Notify the assigned agent or branch admins
     if d.agent_id:
@@ -328,7 +342,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     else:
         notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
-    return PlainTextResponse("OK", status_code=200)
+    return Response(status_code=204)
 
 
 # ─────────────────────────────────────────────────────────────────
