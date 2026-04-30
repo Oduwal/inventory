@@ -1019,7 +1019,7 @@ async def update_delivery_status(
                     ))
 
             db.commit()
-            trigger_call(d.id, d.customer_phone, "DELIVERED", d.customer_name, _items_summary(), d.address)
+            trigger_call(d.id, d.customer_phone, "DELIVERED", d.customer_name, _items_summary(), d.address, whatsapp_number=d.customer_whatsapp)
         except ValueError as e:
             d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
             csrf_token2 = get_csrf_token(request)
@@ -1057,7 +1057,7 @@ async def update_delivery_status(
                 f"Delivery #{delivery_id} {status_clean.lower()} — {item_name} assigned stock must be vetted.",
                 f"/vetting", "warning")
     db.commit()
-    trigger_call(d.id, d.customer_phone, status_clean, d.customer_name, _items_summary(), d.address)
+    trigger_call(d.id, d.customer_phone, status_clean, d.customer_name, _items_summary(), d.address, whatsapp_number=d.customer_whatsapp)
     return redirect(f"/deliveries/{delivery_id}")
 
 

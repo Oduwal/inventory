@@ -338,6 +338,7 @@ async def delivery_create(
     branch_id: int | None = Form(None),
     customer_name: str = Form(...),
     customer_phone: str = Form(""),
+    customer_whatsapp: str = Form(""),
     address: str = Form(""),
     note: str = Form(""),
     delivery_date: str = Form(""),
@@ -389,6 +390,7 @@ async def delivery_create(
     d = Delivery(
         branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
         customer_phone=sanitize_phone(customer_phone) or None,
+        customer_whatsapp=sanitize_phone(customer_whatsapp) or None,
         address=sanitize_text(address, 300, "Address") or None,
         note=sanitize_text(note, 400, "Note") or None,
         status="PENDING", delivery_date=d_date,
@@ -502,7 +504,7 @@ async def delivery_create(
     # ── Check wa_pending_cache for WhatsApp messages that arrived before this order ──
     try:
         db_name_lower = (d.customer_name or "").lower()
-        db_phone_clean = (d.customer_phone or "").replace(" ", "").replace("-", "")
+        db_phone_clean = (d.customer_phone or "").replace(" ", "").replace("-", "").split(",")[0].strip()
         db_phone_digits = db_phone_clean[-10:] if db_phone_clean else ""
 
         pending_rows = db.execute(text(
@@ -570,12 +572,15 @@ async def delivery_create(
             if it:
                 call_items.append(f"{it.name} x{qty}")
     items_summary = ", ".join(call_items) if call_items else "your order"
-    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "")
+    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "", whatsapp_number=d.customer_whatsapp)
 
     # Auto-send WhatsApp template to customer when delivery is created
-    if d.customer_phone:
+    if d.customer_phone or d.customer_whatsapp:
         try:
-            submit_task(send_whatsapp_fallback, d.id, d.customer_phone, d.customer_name or "Customer", items_summary)
+            from app.utils import get_whatsapp_phone
+            wa_phone = get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or "")
+            if wa_phone:
+                submit_task(send_whatsapp_fallback, d.id, wa_phone, d.customer_name or "Customer", items_summary)
         except Exception as e:
             logging.getLogger("whatsapp").warning("Failed to queue WA template for delivery #%s: %s", d.id, e)
 

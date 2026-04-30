@@ -168,7 +168,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
     except Exception as e:
         logger.error(f"Failed to save log: {e}")
 
-def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "") -> None:
+def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "", whatsapp_number: str | None = None) -> None:
     if not phone or not phone.strip(): return
 
     # Check supervisor toggles before placing any call
@@ -191,6 +191,12 @@ def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name
     # Safely split numbers separated by comma, slash, or space
     raw_numbers = [p.strip() for p in phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
     if not raw_numbers: return
+
+    # Append WhatsApp number as a final backup if it's not already in the list
+    if whatsapp_number and whatsapp_number.strip():
+        wa = whatsapp_number.strip()
+        if wa not in raw_numbers:
+            raw_numbers.append(wa)
 
     primary = raw_numbers[0]
     backups = raw_numbers[1:]

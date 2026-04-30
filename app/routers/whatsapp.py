@@ -152,7 +152,9 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                         ).all()
                         items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
 
-                        send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
+                        from app.utils import get_whatsapp_phone
+                        wa_phone = get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or "")
+                        send_whatsapp_fallback(d.id, wa_phone, d.customer_name, items_str)
                         d.note += "\n[System]: All numbers failed. WhatsApp Fallback message triggered."
                         logging.getLogger("webhook").info(f"Fallback WhatsApp message triggered for delivery {d.id} to {d.customer_phone}")
                     except Exception as wa_err:
@@ -371,8 +373,8 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number on this delivery"}, status_code=400)
 
-    from app.utils import format_nigerian_phone
-    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    from app.utils import format_nigerian_phone, get_whatsapp_phone
+    phone = format_nigerian_phone(get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or ""))
     if not phone:
         return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
 
@@ -515,8 +517,8 @@ async def agent_voice_reply(
     media_url = f"{base_url}/api/voice-note/{vn_id}?sig={sig}&exp={exp}"
 
     # Send via Twilio with media
-    from app.utils import format_nigerian_phone
-    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    from app.utils import format_nigerian_phone, get_whatsapp_phone
+    phone = format_nigerian_phone(get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or ""))
     if not phone:
         return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
 

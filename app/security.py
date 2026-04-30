@@ -310,9 +310,9 @@ def sanitize_username(value: str) -> str:
 
 def sanitize_phone(value: str) -> str:
     cleaned = (value or "").strip()
-    if cleaned and not re.match(r"^[\d\s\+\-\(\)]{1,40}$", cleaned):
+    if cleaned and not re.match(r"^[\d\s\+\-\(\)\,]{1,80}$", cleaned):
         raise HTTPException(status_code=400, detail="Invalid phone number format.")
-    return cleaned[:40]
+    return cleaned[:80]
 
 def sanitize_amount(value, field_name: str = "amount"):
     """Validate and return a positive monetary amount as Decimal.

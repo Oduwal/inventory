@@ -1005,6 +1005,21 @@ def ensure_schema() -> None:
             finally:
                 conn.execute(text("SELECT pg_advisory_unlock(8675309)"))
 
+        # Widen customer_phone and add customer_whatsapp column if missing
+        if not is_sqlite:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE deliveries ALTER COLUMN customer_phone TYPE VARCHAR(80)"
+                ))
+            except Exception:
+                pass
+            try:
+                conn.execute(text(
+                    "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS customer_whatsapp VARCHAR(40)"
+                ))
+            except Exception:
+                pass
+
         conn.commit()
 
 
