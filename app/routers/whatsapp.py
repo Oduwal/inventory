@@ -43,8 +43,10 @@ def _seller_group_branch_map() -> dict:
         return {}
 
 
-async def _bot_quote_reply(group_jid, quote_msg_id, quote_body, quote_sender, message):
-    """Quote-reply into a group via the bot's /send-group-feedback endpoint."""
+async def _bot_quote_reply(group_jid, quote_msg_id, quote_body, quote_sender, message, order_id=""):
+    """Quote-reply into a group via the bot's /send-group-feedback endpoint.
+    The bot rejects requests with empty orderId, so always pass a non-empty
+    string — the real order_id on success, or a placeholder for failures."""
     if not group_jid:
         return
     bot_url = _get_bot_url(group_jid)
@@ -53,7 +55,7 @@ async def _bot_quote_reply(group_jid, quote_msg_id, quote_body, quote_sender, me
             await client.post(
                 bot_url + "/send-group-feedback",
                 json={
-                    "orderId": "",
+                    "orderId": str(order_id) if order_id else "auto",
                     "message": message,
                     "quoteMessageId": quote_msg_id or "",
                     "quoteMessageBody": (quote_body or "")[:500],
@@ -1461,14 +1463,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if _new_id and _new_id > 0:
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
-                    sender_name or sender, f"✅ Order #{_new_id} created"
+                    sender_name or sender, f"✅ Order #{_new_id} created",
+                    order_id=_new_id,
                 )
                 return {"status": "ok", "order_id": _new_id, "auto_created": True}
             elif _new_id == 0:
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
                     sender_name or sender,
-                    "Couldn't read this as an order, please use the form"
+                    "Couldn't read this as an order, please use the form",
+                    order_id="auto-fail",
                 )
                 return {"status": "ok", "auto_created": False}
             # _new_id is None → fall through to existing reply-matching logic
