@@ -29,6 +29,7 @@ async def login(
     username: str = Form(...),
     password: str = Form(...),
     csrf_token: str = Form(""),
+    remember: str = Form(""),
     db: Session = Depends(get_db),
 ):
     # [FIX-3] Rate limiting — 30 attempts per minute per IP (generous enough for shared networks)
@@ -92,7 +93,14 @@ async def login(
     request.session["user_id"] = u.id
     if u.branch_id is not None:
         request.session["branch_id"] = u.branch_id
-    return redirect("/")
+    # "Keep me signed in" — when unticked, mark the session so the response
+    # rewrites the session cookie as a browser-session cookie (no Max-Age).
+    # When ticked, the cookie inherits the middleware's 30-day Max-Age.
+    keep_signed_in = remember in ("1", "on", "true", "yes")
+    if not keep_signed_in:
+        request.session["_no_persist"] = True
+    resp = redirect("/")
+    return resp
 
 
 @router.post("/logout")

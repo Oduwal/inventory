@@ -69,6 +69,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Plai
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # [FIX-6] ProxyHeadersMiddleware — makes request.client.host the real client IP
 # when running behind Railway's reverse proxy
@@ -301,8 +302,43 @@ app.add_middleware(
     secret_key=SESSION_SECRET,
     https_only=HTTPS_ONLY,
     same_site="lax",
-    max_age=43200,  # [SEC] 12-hour session expiry
+    max_age=2592000,  # [SEC] 30 days — actual lifetime is controlled per-login
+                      # via the "Keep me signed in" checkbox. When unticked the
+                      # login route rewrites the cookie as a browser-session
+                      # cookie (no Max-Age) so it dies on browser close.
 )
+
+
+# Strip Max-Age / Expires from the session cookie when the user did NOT
+# tick "Keep me signed in" (session.get("_no_persist") is True). This
+# turns the persistent cookie SessionMiddleware writes into a browser-
+# session cookie that dies on browser close.
+class _SessionPersistencePolicy(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        try:
+            no_persist = request.session.get("_no_persist") is True
+        except Exception:
+            no_persist = False
+        if not no_persist:
+            return response
+        new_cookies = []
+        for key, value in list(response.raw_headers):
+            if key != b"set-cookie":
+                new_cookies.append((key, value))
+                continue
+            cookie_str = value.decode("latin-1")
+            if not cookie_str.lstrip().lower().startswith("session="):
+                new_cookies.append((key, value))
+                continue
+            parts = [p.strip() for p in cookie_str.split(";")]
+            kept = [p for p in parts if not p.lower().startswith("max-age=") and not p.lower().startswith("expires=")]
+            new_cookies.append((key, "; ".join(kept).encode("latin-1")))
+        response.raw_headers = new_cookies
+        return response
+
+
+app.add_middleware(_SessionPersistencePolicy)
 app.add_middleware(SecurityHeadersMiddleware)  # [SEC-8] Security headers
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
