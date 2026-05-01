@@ -591,6 +591,7 @@ _ALLOWED_TOGGLES = {
     "call_status_FAILED", "call_status_RETURNED",
     "whatsapp_customer_enabled", "whatsapp_seller_enabled",
     "contact_start_hour", "contact_end_hour",
+    "seller_group_auto_order_enabled",
 }
 
 @router.get("/api/feature-toggles")

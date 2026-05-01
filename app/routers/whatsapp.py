@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTe
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timezone
-import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html
+import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html, functools
 from app.core import *
 from app.models import *
 from app.security import *
@@ -31,6 +31,165 @@ def _bot_headers() -> dict:
     """Return auth headers for bot API calls. Reads BOT_API_KEY from env."""
     key = os.getenv("BOT_API_KEY", "")
     return {"x-api-key": key} if key else {}
+
+
+@functools.lru_cache(maxsize=1)
+def _seller_group_branch_map() -> dict:
+    """Map of group_jid -> branch_id for auto-creating orders from group messages.
+    Cached for the process lifetime — restart Railway to pick up env changes."""
+    try:
+        return json.loads(os.getenv("SELLER_GROUP_BRANCH_MAP", "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+async def _bot_quote_reply(group_jid, quote_msg_id, quote_body, quote_sender, message):
+    """Quote-reply into a group via the bot's /send-group-feedback endpoint."""
+    if not group_jid:
+        return
+    bot_url = _get_bot_url(group_jid)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(
+                bot_url + "/send-group-feedback",
+                json={
+                    "orderId": "",
+                    "message": message,
+                    "quoteMessageId": quote_msg_id or "",
+                    "quoteMessageBody": (quote_body or "")[:500],
+                    "quoteMessageSender": quote_sender or "",
+                    "quoteMessageFromMe": False,
+                    "targetGroupJid": group_jid,
+                    "mentions": [],
+                },
+                headers=_bot_headers(),
+            )
+    except Exception as e:
+        _log.warning("auto-order bot reply failed: %s", e)
+
+
+async def _try_auto_create_order_from_group(
+    db, reply_text, group_jid, sender, sender_name, message_id
+):
+    """Attempt to parse a fresh group message as an order and create the delivery.
+
+    Returns:
+        int > 0  → order_id created; caller should post the success quote-reply
+        0        → tried but the message did not parse cleanly; caller should
+                   post the "couldn't read" quote-reply
+        None     → skip silently (toggle off, group not mapped, dedup hit,
+                   greeting/short message, missing API key, etc.)
+    """
+    from app.feature_toggles import is_feature_on
+    from app.order_parser import parse_order_text
+
+    if not is_feature_on(db, "seller_group_auto_order_enabled"):
+        return None
+
+    mapping = _seller_group_branch_map()
+    if not group_jid or group_jid not in mapping:
+        return None
+    try:
+        branch_id = int(mapping[group_jid])
+    except (TypeError, ValueError):
+        return None
+
+    branch = db.execute(select(Branch).where(Branch.id == branch_id)).scalar()
+    if not branch:
+        _log.warning("SELLER_GROUP_BRANCH_MAP → missing branch_id=%s", branch_id)
+        return None
+
+    bot_phone = os.getenv("BOT_PHONE", "").lstrip("+")
+    if bot_phone and (sender or "").lstrip("+").startswith(bot_phone):
+        return None
+
+    txt = (reply_text or "").strip()
+    if len(txt) < 20:
+        return None
+    skip_prefixes = (
+        "ok", "yes", "no", "thanks", "thank you", "received",
+        "noted", "good morning", "good afternoon", "good evening",
+        "hi ", "hello", "✅", "👍",
+    )
+    if txt.lower().startswith(skip_prefixes):
+        return None
+
+    if message_id:
+        existed = db.execute(text(
+            "SELECT order_id FROM whatsapp_outbound_map "
+            "WHERE message_id = :mid AND source = 'auto_in'"
+        ), {"mid": message_id}).first()
+        if existed:
+            return None
+
+    parsed = await parse_order_text(txt, db, branch_id)
+    if not parsed:
+        return 0
+
+    if parsed.get("confidence") != "high":
+        return 0
+    if not parsed.get("customer_name"):
+        return 0
+    items = [i for i in (parsed.get("items") or [])
+             if i.get("matched") and i.get("item_id")]
+    if not items:
+        return 0
+    if not (parsed.get("customer_phone") or parsed.get("address")):
+        return 0
+
+    bot_user = db.execute(
+        select(User).where(
+            User.branch_id == branch_id,
+            User.role == "ADMIN",
+            User.is_active == True,
+        ).order_by(User.created_at.asc()).limit(1)
+    ).scalar()
+    if not bot_user:
+        bot_user = db.execute(
+            select(User).where(
+                User.role == "SUPERVISOR",
+                User.is_active == True,
+            ).order_by(User.created_at.asc()).limit(1)
+        ).scalar()
+    if not bot_user:
+        _log.warning("auto-order: no admin/supervisor for branch %s", branch_id)
+        return None
+
+    delivery = Delivery(
+        branch_id=branch_id,
+        agent_id=bot_user.id,
+        customer_name=parsed["customer_name"][:160],
+        customer_phone=(parsed.get("customer_phone") or None),
+        customer_whatsapp=(parsed.get("customer_whatsapp") or None),
+        address=(parsed.get("address") or None),
+        status="PENDING",
+        note=f"[Auto from WhatsApp group {group_jid} | sender:{sender_name or sender}]",
+    )
+    db.add(delivery)
+    db.flush()
+
+    for it in items:
+        db.add(DeliveryItem(
+            delivery_id=delivery.id,
+            item_id=int(it["item_id"]),
+            quantity=int(it.get("quantity", 1)),
+            line_amount=float(it.get("unit_price", 0)) * int(it.get("quantity", 1)),
+        ))
+    db.commit()
+
+    if message_id:
+        try:
+            db.execute(text(
+                "INSERT INTO whatsapp_outbound_map "
+                "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                "VALUES (:mid, :oid, :body, 'auto_in', :snd, :gjid, :now)"
+            ), {"mid": message_id, "oid": delivery.id, "body": txt[:500],
+                "snd": sender, "gjid": group_jid, "now": _now()})
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return delivery.id
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1286,6 +1445,33 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         return {"status": "ignored"}
 
     _log = logging.getLogger("wa_webhook")
+
+    # ── Step -1: Auto-create order from a fresh group message ─────────
+    # Only when the message is NOT a reply to an existing bot post AND
+    # does not reference an existing order number. Falls through silently
+    # if toggle is off, group isn't mapped, or message doesn't look like
+    # an order.
+    if not quoted_msg_id:
+        _pre_check = re.search(r'order\s*#?\s*(\d+)', reply_text, re.IGNORECASE)
+        if not _pre_check:
+            _incoming_msg_id = data.get("message_id", "").strip()
+            _new_id = await _try_auto_create_order_from_group(
+                db, reply_text, group_jid, sender, sender_name, _incoming_msg_id
+            )
+            if _new_id and _new_id > 0:
+                await _bot_quote_reply(
+                    group_jid, _incoming_msg_id, reply_text,
+                    sender_name or sender, f"✅ Order #{_new_id} created"
+                )
+                return {"status": "ok", "order_id": _new_id, "auto_created": True}
+            elif _new_id == 0:
+                await _bot_quote_reply(
+                    group_jid, _incoming_msg_id, reply_text,
+                    sender_name or sender,
+                    "Couldn't read this as an order, please use the form"
+                )
+                return {"status": "ok", "auto_created": False}
+            # _new_id is None → fall through to existing reply-matching logic
 
     order_id = None
 
