@@ -348,13 +348,34 @@ async function handleInbound(msg) {
         return;
     }
 
+    const senderName = msg.pushName || contactNames.get(sender) || '';
+
+    // Forward fresh group messages to /api/whatsapp-webhook so the Python
+    // app can auto-create orders from well-formed posts. Gated on the Python
+    // side by SELLER_GROUP_BRANCH_MAP + the supervisor toggle.
+    axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+        quoted_message_id:   '',
+        quoted_message_body: '',
+        reply_text:          text,
+        sender_phone:        sender,
+        sender_name:         senderName,
+        groupJid:            jid,
+        message_id:          msgId,
+        audio_b64:           '',
+        audio_mime:          '',
+    }, {
+        timeout: 30000,
+        headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+    }).catch(e => console.log('⚠️  Fresh-message webhook POST failed:', e.message));
+
+    // Keep the existing cache-wa-message path so dashboard-created orders
+    // can still be matched against incoming group posts.
     const info = await extractCustomerInfo(text);
     if (!info.customer_name && !info.customer_phone) {
         console.log(`📭 No customer info found — skipping cache`);
         return;
     }
     console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
-    const senderName = msg.pushName || contactNames.get(sender) || '';
     axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
         message_id:      msgId,
         body:            text,
