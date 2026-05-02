@@ -1705,6 +1705,11 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     Stores (message_id → order_id, source='group') so agent-feedback can always
     quote the ORIGINAL group post when sending updates.
     """
+    logging.getLogger("cache_wa").info(
+        "cache-wa-message: HIT from %s (auth=%s)",
+        request.client.host if request.client else "?",
+        "yes" if request.headers.get("x-webhook-secret") else "no",
+    )
     _verify_webhook_token(request)
     data           = await request.json()
     message_id     = (data.get("message_id") or "").strip()
