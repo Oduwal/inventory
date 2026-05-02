@@ -1461,16 +1461,19 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 db, reply_text, group_jid, sender, sender_name, _incoming_msg_id
             )
             if _new_id and _new_id > 0:
+                # Pass the sender JID (has '@') as quote_sender so the bot
+                # can attach a proper participant — pushName has no '@' and
+                # gets dropped by bot.js, breaking the quote bubble.
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
-                    sender_name or sender, f"✅ Order #{_new_id} created",
+                    sender, f"✅ Order #{_new_id} created",
                     order_id=_new_id,
                 )
                 return {"status": "ok", "order_id": _new_id, "auto_created": True}
             elif _new_id == 0:
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
-                    sender_name or sender,
+                    sender,
                     "Couldn't read this as an order, please use the form",
                     order_id="auto-fail",
                 )
