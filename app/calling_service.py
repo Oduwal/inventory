@@ -130,7 +130,14 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
-                    "endCallFunctionEnabled": True
+                    # Disabled in favour of endCallPhrases below — the function
+                    # version lets the model hang up trigger-happily on any
+                    # 'bye'-like output, cutting the farewell short.
+                    "endCallFunctionEnabled": False,
+                    # Vapi only ends the call when the assistant literally
+                    # speaks one of these phrases. Keeps the AI from hanging
+                    # up mid-conversation.
+                    "endCallPhrases": ["Do have a nice day. Bye."],
                 },
                 "metadata": {
                     "delivery_id": delivery_id,
