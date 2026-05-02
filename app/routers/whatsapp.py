@@ -182,6 +182,27 @@ async def _try_auto_create_order_from_group(
         ))
     db.commit()
 
+    # Trigger the PENDING call the same way delivery_create does
+    # (deliveries.py:582). Without this the auto-orders never get an
+    # outbound AI call even though manual orders do.
+    try:
+        from app.calling_service import trigger_call
+        items_summary = ", ".join(
+            f"{it.get('item_name') or 'item'} x{int(it.get('quantity', 1))}"
+            for it in items
+        ) or "your order"
+        trigger_call(
+            delivery.id,
+            delivery.customer_phone,
+            "PENDING",
+            delivery.customer_name,
+            items_summary,
+            delivery.address or "",
+            whatsapp_number=delivery.customer_whatsapp,
+        )
+    except Exception as e:
+        _log.warning("auto-order: trigger_call failed for delivery #%s: %s", delivery.id, e)
+
     if message_id:
         try:
             db.execute(text(
