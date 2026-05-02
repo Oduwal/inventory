@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTextResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, or_
 from datetime import datetime, timezone
 import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html, functools
 from app.core import *
@@ -421,7 +421,10 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     for variant in phone_variants:
         d = db.execute(
             select(Delivery)
-            .where(Delivery.customer_phone.contains(variant))
+            .where(or_(
+                Delivery.customer_phone.contains(variant),
+                Delivery.customer_whatsapp.contains(variant),
+            ))
             .where(Delivery.status.in_(["PENDING", "OUT_FOR_DELIVERY"]))
             .order_by(Delivery.created_at.desc())
         ).scalars().first()
@@ -1548,7 +1551,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     break
 
             candidates = db.execute(text(
-                "SELECT id, customer_phone, customer_name FROM deliveries "
+                "SELECT id, customer_phone, customer_name, customer_whatsapp FROM deliveries "
                 "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY id DESC LIMIT 200"
             )).fetchall()
 
@@ -1557,9 +1560,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             phone_and_name_match = None
             phone_only_match = None
             for c in candidates:
-                c_id, c_phone, c_name = c[0], c[1], c[2]
+                c_id, c_phone, c_name, c_wa = c[0], c[1], c[2], c[3]
                 db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
-                if not (db_phone and qphone_digits == db_phone):
+                db_wa = (c_wa or '').replace(' ', '').replace('-', '')[-10:]
+                if not (qphone_digits and (qphone_digits == db_phone or qphone_digits == db_wa)):
                     continue
 
                 # Check name match if we extracted one from the quoted body
