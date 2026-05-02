@@ -491,7 +491,7 @@ def supervisor_branch_stats(db: Session, start: datetime | None, end: datetime |
     if end:   cash_q = cash_q.where(CashEntry.created_at < end)
     cash_map: dict = {}
     for row in db.execute(cash_q).all():
-        cash_map.setdefault(row.branch_id, {})[row.kind] = row.total
+        cash_map.setdefault(row.branch_id, {})[row.kind] = float(row.total or 0)
 
     # â”€â”€ Assemble rows â”€â”€
     rows = []
