@@ -82,10 +82,13 @@ async def _try_auto_create_order_from_group(
         None     → skip silently (toggle off, group not mapped, dedup hit,
                    greeting/short message, missing API key, etc.)
     """
-    from app.feature_toggles import is_feature_on
+    from app.feature_toggles import get_feature_value
     from app.order_parser import parse_order_text
 
-    if not is_feature_on(db, "seller_group_auto_order_enabled"):
+    # Default OFF — auto-create stays dormant until a supervisor explicitly
+    # turns it on. Using get_feature_value because is_feature_on defaults
+    # missing keys to True, which would silently enable this feature.
+    if get_feature_value(db, "seller_group_auto_order_enabled", "off") != "on":
         return None
 
     mapping = _seller_group_branch_map()
