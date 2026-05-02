@@ -479,6 +479,40 @@ _WIPE_TABLES = [
 ]
 
 
+@router.get("/admin/wa-debug/{delivery_id}", response_class=JSONResponse)
+def wa_debug(delivery_id: int, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """Diagnostic dump of WhatsApp routing state for a delivery."""
+    delivery = db.execute(
+        text("SELECT id, customer_name, customer_phone, customer_whatsapp, status, created_at "
+             "FROM deliveries WHERE id = :did"),
+        {"did": delivery_id}
+    ).first()
+    outbound = db.execute(
+        text("SELECT message_id, source, group_jid, sender, created_at, "
+             "substr(body, 1, 80) AS body_preview "
+             "FROM whatsapp_outbound_map WHERE order_id = :did ORDER BY created_at DESC"),
+        {"did": delivery_id}
+    ).fetchall()
+    last10 = ((delivery.customer_phone or "").replace(" ", "").replace("-", "")[-10:]
+              if delivery else "")
+    pending = db.execute(
+        text("SELECT message_id, customer_name, customer_phone, group_jid, created_at, "
+             "substr(body, 1, 80) AS body_preview "
+             "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 20")
+    ).fetchall()
+    pending_matches = [
+        dict(p._mapping) for p in pending
+        if last10 and (p.customer_phone or "").replace(" ", "").replace("-", "")[-10:] == last10
+    ]
+    return {
+        "delivery": dict(delivery._mapping) if delivery else None,
+        "phone_last10": last10,
+        "outbound_map_rows": [dict(r._mapping) for r in outbound],
+        "pending_cache_matches": pending_matches,
+        "pending_cache_recent": [dict(p._mapping) for p in pending],
+    }
+
+
 @router.get("/admin/wipe-data", response_class=HTMLResponse)
 def wipe_data_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     set_rls_context(db, user)
