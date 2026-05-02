@@ -25,6 +25,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import NodeCache from 'node-cache';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -399,6 +400,13 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version }          = await fetchLatestBaileysVersion();
 
+    // In-memory message store so getMessage() can return originals for retries.
+    // LID groups need this — without it, Baileys can't recover from "No session
+    // found to decrypt message" failures.
+    const recentMessages = new NodeCache({ stdTTL: 600, useClones: false });
+    const msgRetryCounterCache = new NodeCache({ stdTTL: 60, useClones: false });
+    const placeholderResendCache = new NodeCache({ stdTTL: 60, useClones: false });
+
     sock = makeWASocket({
         version,
         auth: {
@@ -410,6 +418,42 @@ async function connectToWhatsApp() {
         browser:           Browsers.ubuntu('Chrome'),
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
+        // Recovery path for LID-mode group decryption failures. When a retry
+        // exceeds count 1 and enableAutoSessionRecreation is on, Baileys deletes
+        // the broken Signal session and forces a fresh key exchange — fixing
+        // "No session found to decrypt message" without a manual re-pair.
+        enableAutoSessionRecreation: true,
+        enableRecentMessageCache: true,
+        msgRetryCounterCache,
+        placeholderResendCache,
+        maxMsgRetryCount: 5,
+        retryRequestDelayMs: 250,
+        getMessage: async (key) => {
+            const cached = recentMessages.get(`${key.remoteJid}:${key.id}`);
+            return cached || { conversation: '' };
+        },
+    });
+
+    // Cache outgoing/incoming message bodies so getMessage can serve retries.
+    sock.ev.on('messages.upsert', ({ messages }) => {
+        for (const m of messages) {
+            if (m.key?.id && m.message) {
+                recentMessages.set(`${m.key.remoteJid}:${m.key.id}`, m.message);
+            }
+            // Harvest LID↔PN mappings — workaround for issue #2263 where
+            // lid-mapping.update doesn't fire reliably in 7.0.0-rc.9.
+            const p  = m.key?.participant;
+            const pa = m.key?.participantAlt;
+            if (p && pa && sock.signalRepository?.lidMapping) {
+                try {
+                    if (p.endsWith('@lid') && pa.endsWith('@s.whatsapp.net')) {
+                        sock.signalRepository.lidMapping.storeLIDPNMapping(p, pa);
+                    } else if (p.endsWith('@s.whatsapp.net') && pa.endsWith('@lid')) {
+                        sock.signalRepository.lidMapping.storeLIDPNMapping(pa, p);
+                    }
+                } catch (_) {}
+            }
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
