@@ -1632,21 +1632,27 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
     comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
-    # Use friendly name for display, fall back to phone digits
+    # Store as "Name|jid" so the page-render filter (which keeps rows whose
+    # sender contains '@') still includes this row after a reload. The chat
+    # template splits on '|' to show only the friendly name.
     display_sender = sender_name or sender.replace("@s.whatsapp.net", "").replace("@lid", "")
+    if sender_name and sender and "@" in sender:
+        stored_sender = f"{sender_name}|{sender}"
+    else:
+        stored_sender = sender or display_sender
     is_sqlite = str(db.bind.url).startswith("sqlite")
     if is_sqlite:
         db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
             "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now)"
-        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+        ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
             "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()})
         new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
     else:
         new_comment_id = db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
             "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now) RETURNING id"
-        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+        ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
             "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()}).scalar()
     db.commit()
 

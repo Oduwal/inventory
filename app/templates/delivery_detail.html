@@ -563,7 +563,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         </div>
       {% else %}
         <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
-          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
+          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ (c.sender.split('|')[0] if c.sender and '|' in c.sender else c.sender)|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
           {% if c.media_mime and c.media_mime.startswith('audio/') %}
             <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/wa-media/{{ c.id }}" type="{{ c.media_mime }}"></audio>
             {% if c.body and c.body != '[Voice Note]' %}<div style="font-size:11px;color:#8696a0;margin-top:2px;white-space:pre-wrap;">{{ c.body }}</div>{% endif %}

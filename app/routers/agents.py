@@ -597,12 +597,19 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     # (AI Agent auto-replies, agent typed replies, customer inbound) are
     # rendered separately from d.note, so they must be excluded here to
     # avoid bleeding "Reply to customer" messages into the group view.
+    _all_wa_with_clf = db.execute(
+        text("SELECT id, direction, sender, body, media_mime, created_at, classification FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        {"did": d.id}
+    ).fetchall()
     def _is_group_row(r):
         s = (r[2] or "").strip()
         if r[1] == "outbound":
             return s == "Agent"  # group sends use sender="Agent"
-        return "@" in s  # group inbound senders are JIDs like 234...@s.whatsapp.net or @lid
-    wa_comments = [r for r in _all_wa if _is_group_row(r)]
+        # Group inbound senders are JIDs like 234...@s.whatsapp.net or @lid.
+        # Older rows pre-fix stored only the pushName (no '@'); fall back to
+        # the classification column which is only populated for seller-group replies.
+        return "@" in s or bool((r[6] or "").strip())
+    wa_comments = [r for r in _all_wa_with_clf if _is_group_row(r)]
     return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": col, "expense_total": exp,
