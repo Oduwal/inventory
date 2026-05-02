@@ -983,6 +983,15 @@ def ensure_schema() -> None:
                 conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'on')"), {"k": _tk})
             else:
                 conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'on') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
+        # Seed off-by-default toggles separately so set_feature's UPDATE has
+        # a row to modify (otherwise the supervisor dashboard checkbox flips
+        # silently and reverts on refresh).
+        _toggle_off_defaults = ["seller_group_auto_order_enabled"]
+        for _tk in _toggle_off_defaults:
+            if is_sqlite:
+                conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'off')"), {"k": _tk})
+            else:
+                conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'off') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
         # Contact hours — default 8 AM to 8 PM (Nigeria WAT = UTC+1)
         for _hk, _hv in [("contact_start_hour", "8"), ("contact_end_hour", "20")]:
             if is_sqlite:
