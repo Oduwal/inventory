@@ -661,9 +661,19 @@ img{border:12px solid #fff;border-radius:12px;}</style></head>
 <img src="${latestQrUrl}" alt="QR Code"/></body></html>`);
 });
 
-// Health check
+// Health check — used by the Python dashboard to monitor a fleet of bots.
+const _bootedAt = Date.now();
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', waConnected: clientReady });
+    res.json({
+        status: clientReady ? 'ok' : 'degraded',
+        waConnected: clientReady,
+        botPhone: process.env.BOT_PHONE || '',
+        sellerGroups: [...SELLER_GROUPS],
+        warmedGroups: [..._warmedGroups],
+        warmingNow: [..._warmingNow],
+        uptimeSec: Math.floor((Date.now() - _bootedAt) / 1000),
+        version: '2.0.0',
+    });
 });
 
 /**

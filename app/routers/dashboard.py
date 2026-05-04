@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
-import json, csv, io, os, logging
+import json, csv, io, os, logging, html
 from app.core import *
 from app.models import *
 from app.security import *
@@ -477,6 +477,78 @@ _WIPE_TABLES = [
     ("rate_limit_hits", None),
     ("username_history", None),
 ]
+
+
+@router.get("/admin/bot-fleet", response_class=HTMLResponse)
+async def bot_fleet(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """Live status page for every WhatsApp bot in the fleet. Pings each bot's
+    /health endpoint in parallel and renders a simple status grid."""
+    import httpx, asyncio
+    try:
+        group_bot_map = json.loads(os.getenv("GROUP_BOT_MAP", "{}"))
+    except (ValueError, TypeError):
+        group_bot_map = {}
+    fallback_url = os.getenv("WHATSAPP_BOT_URL", "")
+    # Unique bot URLs across the map + the fallback
+    bot_urls = sorted({*(v for v in group_bot_map.values() if v), *( [fallback_url] if fallback_url else [])})
+    # Reverse-map URL → list of group JIDs that route to it
+    url_to_groups: dict[str, list[str]] = {u: [] for u in bot_urls}
+    for jid, url in group_bot_map.items():
+        url_to_groups.setdefault(url, []).append(jid)
+    bot_api_key = os.getenv("BOT_API_KEY", "")
+    headers = {"x-api-key": bot_api_key} if bot_api_key else {}
+
+    async def probe(url: str) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=4) as client:
+                r = await client.get(f"{url.rstrip('/')}/health", headers=headers)
+                return {"url": url, "ok": r.status_code == 200, "code": r.status_code, "data": r.json() if r.status_code == 200 else {}}
+        except Exception as e:
+            return {"url": url, "ok": False, "code": 0, "data": {}, "err": str(e)[:100]}
+
+    results = await asyncio.gather(*(probe(u) for u in bot_urls)) if bot_urls else []
+
+    rows_html = []
+    for r in results:
+        d = r.get("data", {})
+        wa_ok = bool(d.get("waConnected"))
+        status_color = "#22c55e" if r["ok"] and wa_ok else ("#f59e0b" if r["ok"] else "#ef4444")
+        status_text = "ONLINE" if r["ok"] and wa_ok else ("DEGRADED" if r["ok"] else "OFFLINE")
+        seller_groups = d.get("sellerGroups", []) or []
+        warmed = d.get("warmedGroups", []) or []
+        warming = d.get("warmingNow", []) or []
+        routed = url_to_groups.get(r["url"], [])
+        uptime = d.get("uptimeSec", 0)
+        uptime_str = f"{uptime//3600}h {(uptime%3600)//60}m" if uptime else "—"
+        bot_phone = d.get("botPhone", "—")
+        err = r.get("err", "") if not r["ok"] else ""
+        rows_html.append(f"""
+        <div style="background:#1a2432;border-radius:8px;padding:14px 16px;margin-bottom:12px;border-left:4px solid {status_color};">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-weight:600;color:#e9edef;font-size:14px;">{html.escape(r['url'])}</div>
+                <span style="background:{status_color};color:#0b141a;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">{status_text}</span>
+            </div>
+            <div style="font-size:12px;color:#8696a0;line-height:1.7;">
+                <div>Bot phone: <span style="color:#e9edef;">{html.escape(str(bot_phone))}</span></div>
+                <div>Uptime: <span style="color:#e9edef;">{uptime_str}</span></div>
+                <div>Seller groups configured: <span style="color:#e9edef;">{len(seller_groups)}</span> · Warmed: <span style="color:#22c55e;">{len(warmed)}</span> · Warming now: <span style="color:#f59e0b;">{len(warming)}</span></div>
+                <div>GROUP_BOT_MAP routes to this bot: <span style="color:#e9edef;">{len(routed)}</span></div>
+                {f'<div style="color:#ef4444;margin-top:4px;">Error: {html.escape(err)}</div>' if err else ''}
+            </div>
+        </div>
+        """)
+
+    body = "".join(rows_html) if rows_html else '<div style="color:#8696a0;padding:20px;text-align:center;">No bots configured. Set <code>GROUP_BOT_MAP</code> or <code>WHATSAPP_BOT_URL</code> in env.</div>'
+    return HTMLResponse(f"""
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Bot Fleet</title>
+    <meta http-equiv="refresh" content="15">
+    <style>body{{background:#0b141a;color:#e9edef;font-family:-apple-system,sans-serif;padding:20px;max-width:900px;margin:0 auto;}}h1{{font-size:18px;margin:0 0 16px;}}code{{background:#1f2c34;padding:2px 6px;border-radius:4px;}}</style>
+    </head><body>
+    <h1>🤖 Bot Fleet — {len(bot_urls)} bot(s)</h1>
+    <div style="font-size:11px;color:#8696a0;margin-bottom:16px;">Auto-refreshes every 15s. <a href="/admin/bot-fleet" style="color:#53bdeb;">Refresh now</a></div>
+    {body}
+    </body></html>
+    """)
 
 
 @router.get("/admin/wa-debug/{delivery_id}", response_class=JSONResponse)
