@@ -1,3 +1,10 @@
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 from app.core import app
 from app.routers import auth
 from app.routers import dashboard
