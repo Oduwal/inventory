@@ -37,6 +37,7 @@ console.log('🚀 Booting Clawbot (Baileys edition)...');
 const GROUP_JID      = process.env.WA_GROUP_ID    || '';
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
+const WARMED_GROUPS_FILE = path.join(AUTH_DIR, 'warmed-groups.json');
 
 // Set RESET_AUTH=true in Railway env vars to wipe session and re-scan QR.
 // Remove the env var after scanning to avoid resetting on every deploy.
@@ -270,6 +271,53 @@ async function extractCustomerInfo(text) {
 //     Python does O(1) lookup by quoted message_id — works whether the seller quoted
 //     the original post OR a bot update, since both are in whatsapp_outbound_map.
 // ─────────────────────────────────────────────
+// Warm up Signal sessions with every participant of a freshly-onboarded seller
+// group so the FIRST real message decrypts cleanly. Without this, the bot has
+// no 1:1 session with new participants → their first sender-key distribution
+// fails → that first order message is lost. assertSessions is invisible to
+// participants (no DM, no notification — protocol-level key exchange only).
+const _warmedGroups = new Set();
+const _warmingNow   = new Set();
+try {
+    if (fs.existsSync(WARMED_GROUPS_FILE)) {
+        for (const j of JSON.parse(fs.readFileSync(WARMED_GROUPS_FILE, 'utf8'))) {
+            _warmedGroups.add(j);
+        }
+    }
+} catch (_) {}
+
+function persistWarmedGroups() {
+    try {
+        fs.writeFileSync(WARMED_GROUPS_FILE, JSON.stringify([..._warmedGroups]));
+    } catch (e) {
+        console.log('⚠️  Could not persist warmed-groups file:', e.message);
+    }
+}
+
+async function warmUpGroup(jid) {
+    if (_warmedGroups.has(jid) || _warmingNow.has(jid)) return;
+    _warmingNow.add(jid);
+    try {
+        console.log(`🔥 Warming up sessions for new seller group: ${jid}`);
+        const meta = await sock.groupMetadata(jid);
+        const participants = (meta?.participants || []).map(p => p.id).filter(Boolean);
+        if (!participants.length) {
+            console.log(`⚠️  No participants found for ${jid} — skipping warm-up`);
+            return;
+        }
+        // assertSessions establishes 1:1 Signal sessions in batches.
+        // Baileys handles concurrency internally; we just await the call.
+        await sock.assertSessions(participants, true);
+        _warmedGroups.add(jid);
+        persistWarmedGroups();
+        console.log(`✅ Warm-up complete for ${jid} (${participants.length} participants)`);
+    } catch (e) {
+        console.log(`⚠️  Warm-up failed for ${jid}: ${e.message}`);
+    } finally {
+        _warmingNow.delete(jid);
+    }
+}
+
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
 
@@ -285,6 +333,12 @@ async function handleInbound(msg) {
             console.log(`🆕 NEW GROUP DETECTED: ${jid} — add to WA_SELLER_GROUPS env var if this is a seller group`);
         }
         return;
+    }
+
+    // First time we see this seller group, kick off a session warm-up in the
+    // background so subsequent messages decrypt without retry-recovery delays.
+    if (!_warmedGroups.has(jid) && !_warmingNow.has(jid)) {
+        warmUpGroup(jid);  // intentionally not awaited — runs in background
     }
     if (msg.key.fromMe) {
         console.log(`⏭️ Skipping own message (fromMe=true)`);
@@ -492,6 +546,15 @@ async function connectToWhatsApp() {
             clientReady = true;
             latestQrUrl = null;
             console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
+            // Pre-warm sessions for every configured seller group in parallel
+            // so the FIRST message after a fresh deploy / new-group add decrypts
+            // cleanly. Already-warmed groups are skipped via the persisted set.
+            const groupsToWarm = [...SELLER_GROUPS].filter(j => !_warmedGroups.has(j));
+            if (groupsToWarm.length > 0) {
+                console.log(`🔥 Pre-warming ${groupsToWarm.length} seller group(s) on connect...`);
+                Promise.all(groupsToWarm.map(j => warmUpGroup(j)))
+                    .catch(e => console.log('⚠️  Pre-warm batch error:', e.message));
+            }
         }
     });
 
