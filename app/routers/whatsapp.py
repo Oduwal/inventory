@@ -1784,19 +1784,40 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         logging.getLogger("cache_wa").info(
             "cache-wa-message: no delivery matched name='%s' phone='%s' — saving to pending cache", customer_name, customer_phone
         )
-        # Save to pending cache so it can be matched when the delivery IS created
-        _pend_conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else "OR IGNORE"
+        # Save to pending cache so it can be matched when the delivery IS created.
+        # ON CONFLICT goes at the END of the statement on Postgres; SQLite uses
+        # INSERT OR IGNORE up front. (Earlier code mis-built the Postgres form
+        # which caused every pending insert to silently rollback.)
+        if DATABASE_URL.startswith("sqlite"):
+            pend_sql = (
+                "INSERT OR IGNORE INTO wa_pending_cache "
+                "(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
+                "VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now)"
+            )
+        else:
+            pend_sql = (
+                "INSERT INTO wa_pending_cache "
+                "(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
+                "VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now) "
+                "ON CONFLICT (message_id) DO NOTHING"
+            )
         try:
             pend_sender = f"{sender_name}|{sender}" if sender_name else sender
-            db.execute(text(
-                f"INSERT {_pend_conflict} INTO wa_pending_cache "
-                f"(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
-                f"VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now)"
-            ), {"mid": message_id, "body": body, "sender": pend_sender, "gjid": group_jid,
-                "cname": customer_name, "cphone": customer_phone, "_now": _now()})
+            db.execute(text(pend_sql), {
+                "mid": message_id, "body": body, "sender": pend_sender, "gjid": group_jid,
+                "cname": customer_name, "cphone": customer_phone, "_now": _now()
+            })
             db.commit()
-        except Exception:
+            logging.getLogger("cache_wa").info(
+                "cache-wa-message: pending row saved mid=%s name=%r phone=%r",
+                message_id[:20], customer_name, customer_phone
+            )
+        except Exception as e:
             db.rollback()
+            logging.getLogger("cache_wa").error(
+                "cache-wa-message: pending insert FAILED mid=%s err=%s",
+                message_id[:20], e
+            )
         return {"status": "pending"}
 
     # ── Persist the mapping so replies and agent-feedback can find this order ──
