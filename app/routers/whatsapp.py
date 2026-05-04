@@ -1733,18 +1733,27 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
 
     # Fuzzy match against recent PENDING/OUT_FOR_DELIVERY deliveries only
     candidates = db.execute(text(
-        "SELECT id, customer_name, customer_phone FROM deliveries "
+        "SELECT id, customer_name, customer_phone, customer_whatsapp FROM deliveries "
         "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') "
         "ORDER BY created_at DESC LIMIT 200"
     )).fetchall()
 
+    # Normalize the bot-extracted phone to its last 10 digits for comparison.
+    cust_last10 = re.sub(r"\D", "", customer_phone)[-10:] if customer_phone else ""
+
     matched_order_id = None
     for row in candidates:
-        r_id, r_name, r_phone = row[0], row[1], row[2]
-        db_name  = (r_name or "").lower()
-        db_phone = (r_phone or "").replace(" ", "").replace("-", "")
+        r_id, r_name, r_phone, r_wa = row[0], row[1], row[2], row[3]
+        db_name = (r_name or "").lower()
+        # Build the set of last-10-digit phone keys for this delivery.
+        # customer_phone may contain multiple numbers separated by ',' or ';'.
+        db_phone_keys = set()
+        for raw in re.split(r"[,;]", (r_phone or "") + "," + (r_wa or "")):
+            digits = re.sub(r"\D", "", raw)
+            if len(digits) >= 10:
+                db_phone_keys.add(digits[-10:])
 
-        # 🛡️ THE ANTI-STEAL SAFEGUARD: 
+        # 🛡️ THE ANTI-STEAL SAFEGUARD:
         # If this order ALREADY has an original group message linked to it, DO NOT steal it.
         has_group_msg = db.execute(text(
             "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND source = 'group'"
@@ -1754,9 +1763,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
 
         # Match logic: use BOTH phone+name when both are available to avoid
         # conflicts when the same phone number appears on multiple orders.
-        phone_ok = False
-        if customer_phone and db_phone and len(customer_phone) >= 10:
-            phone_ok = (customer_phone[-10:] == db_phone[-10:])
+        phone_ok = bool(cust_last10 and cust_last10 in db_phone_keys)
 
         name_ok = False
         if customer_name and db_name and len(customer_name) > 3:
@@ -1766,12 +1773,10 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             elif customer_name == db_name:
                 name_ok = True
 
-        # Phone match is the strongest signal — always trust it
-        if phone_ok:
-            matched_order_id = r_id
-            break
-        # Name-only match (no phone extracted) — acceptable fallback
-        if name_ok and not customer_phone:
+        # Phone match is the strongest signal — always trust it.
+        # Fall back to name when phone matching fails — Gemini sometimes
+        # mis-extracts phone digits (duplicates, missing digits, etc.).
+        if phone_ok or name_ok:
             matched_order_id = r_id
             break
 

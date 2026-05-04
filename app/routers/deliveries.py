@@ -510,9 +510,15 @@ async def delivery_create(
 
     # ── Check wa_pending_cache for WhatsApp messages that arrived before this order ──
     try:
+        import re as _re
         db_name_lower = (d.customer_name or "").lower()
-        db_phone_clean = (d.customer_phone or "").replace(" ", "").replace("-", "").split(",")[0].strip()
-        db_phone_digits = db_phone_clean[-10:] if db_phone_clean else ""
+        # Build last-10-digit keys for every phone on this delivery (call + whatsapp,
+        # supports comma/semicolon-separated multi-number fields).
+        db_phone_keys: set[str] = set()
+        for raw in _re.split(r"[,;]", (d.customer_phone or "") + "," + (d.customer_whatsapp or "")):
+            digits = _re.sub(r"\D", "", raw)
+            if len(digits) >= 10:
+                db_phone_keys.add(digits[-10:])
 
         pending_rows = db.execute(text(
             "SELECT message_id, body, sender, group_jid, customer_name, customer_phone "
@@ -522,10 +528,9 @@ async def delivery_create(
         for pr in pending_rows:
             p_mid, p_body, p_sender, p_gjid, p_cname, p_cphone = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]
 
-            # Phone check
-            p_phone_digits = (p_cphone or "").replace(" ", "").replace("-", "")[-10:]
-            phone_ok = (db_phone_digits and p_phone_digits and len(p_phone_digits) >= 10
-                        and db_phone_digits == p_phone_digits)
+            # Phone check — last 10 digits against any number on the delivery
+            p_phone_digits = _re.sub(r"\D", "", p_cphone or "")[-10:] if p_cphone else ""
+            phone_ok = bool(p_phone_digits and p_phone_digits in db_phone_keys)
 
             # Name check
             name_ok = False
@@ -536,13 +541,9 @@ async def delivery_create(
                 elif p_cname == db_name_lower:
                     name_ok = True
 
-            # Phone is the strongest signal — always trust it
-            if p_cphone:
-                matched = phone_ok
-            elif p_cname:
-                matched = name_ok
-            else:
-                matched = False
+            # Phone is the strongest signal; fall back to name match when phone
+            # is missing OR when Gemini may have mis-extracted it (digit dupes).
+            matched = phone_ok or name_ok
 
             if matched:
                 _is_sqlite = DATABASE_URL.startswith("sqlite")
