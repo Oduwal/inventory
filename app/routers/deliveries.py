@@ -525,6 +525,11 @@ async def delivery_create(
             "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 50"
         )).fetchall()
 
+        logging.getLogger("cache_wa").info(
+            "Pending scan for new Order #%s: name=%r phone_keys=%s pending_count=%d",
+            d.id, db_name_lower, sorted(db_phone_keys), len(pending_rows)
+        )
+
         for pr in pending_rows:
             p_mid, p_body, p_sender, p_gjid, p_cname, p_cphone = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]
 
@@ -544,6 +549,10 @@ async def delivery_create(
             # Phone is the strongest signal; fall back to name match when phone
             # is missing OR when Gemini may have mis-extracted it (digit dupes).
             matched = phone_ok or name_ok
+            logging.getLogger("cache_wa").info(
+                "Pending row mid=%s p_name=%r p_phone=%r → phone_ok=%s name_ok=%s matched=%s",
+                (p_mid or "")[:20], p_cname, p_cphone, phone_ok, name_ok, matched
+            )
 
             if matched:
                 _is_sqlite = DATABASE_URL.startswith("sqlite")
