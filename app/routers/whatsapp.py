@@ -1721,7 +1721,15 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
 
     if not message_id or (not customer_name and not customer_phone):
+        logging.getLogger("cache_wa").warning(
+            "cache-wa-message: IGNORED — message_id=%r name=%r phone=%r body_preview=%r",
+            message_id, customer_name, customer_phone, body[:60]
+        )
         return {"status": "ignored"}
+    logging.getLogger("cache_wa").info(
+        "cache-wa-message: ACCEPTED message_id=%s name=%r phone=%r group=%s",
+        message_id[:20], customer_name, customer_phone, group_jid[:20]
+    )
 
     # Fuzzy match against recent PENDING/OUT_FOR_DELIVERY deliveries only
     candidates = db.execute(text(
