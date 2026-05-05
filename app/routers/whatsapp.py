@@ -173,12 +173,42 @@ async def _try_auto_create_order_from_group(
     db.add(delivery)
     db.flush()
 
-    for it in items:
+    # Distribute the parsed total across lines proportionally to line quantity
+    # when individual unit_prices are zero (catalog has no fixed prices —
+    # supervisor sets price per order in the message body).
+    line_qtys = [max(1, int(it.get("quantity", 1))) for it in items]
+    line_units = [float(it.get("unit_price", 0) or 0) for it in items]
+    has_unit_prices = any(u > 0 for u in line_units)
+    try:
+        parsed_total = float(parsed.get("total_price") or 0)
+    except (TypeError, ValueError):
+        parsed_total = 0.0
+
+    line_amounts: list[float] = []
+    if has_unit_prices:
+        # Trust per-line unit prices when the parser provided them.
+        line_amounts = [u * q for u, q in zip(line_units, line_qtys)]
+    elif parsed_total > 0 and line_qtys:
+        # Split the order total across lines weighted by quantity.
+        total_qty = sum(line_qtys)
+        running = 0.0
+        for idx, q in enumerate(line_qtys):
+            if idx == len(line_qtys) - 1:
+                # Last line absorbs rounding so the sum matches parsed_total exactly.
+                line_amounts.append(round(parsed_total - running, 2))
+            else:
+                share = round(parsed_total * (q / total_qty), 2)
+                line_amounts.append(share)
+                running += share
+    else:
+        line_amounts = [0.0] * len(items)
+
+    for it, qty, amt in zip(items, line_qtys, line_amounts):
         db.add(DeliveryItem(
             delivery_id=delivery.id,
             item_id=int(it["item_id"]),
-            quantity=int(it.get("quantity", 1)),
-            line_amount=float(it.get("unit_price", 0)) * int(it.get("quantity", 1)),
+            quantity=qty,
+            line_amount=amt,
         ))
     db.commit()
 
