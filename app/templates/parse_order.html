@@ -192,11 +192,13 @@ async function parseOrders() {
   document.getElementById('parse-status').style.display = 'block';
   document.getElementById('orders-wrap').style.display = 'none';
 
-  const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${i.price}`).join('\n');
+  // Catalog prices intentionally NOT sent to Gemini — pricing is set per-order
+  // in the WhatsApp message body, not on the SKU.
+  const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}`).join('\n');
 
   const prompt = `You are an order parser for a Nigerian logistics business. A WhatsApp message may contain MULTIPLE separate customer orders. Extract each order separately.
 
-PRODUCT CATALOG (id|name|category|unit|price):
+PRODUCT CATALOG (id|name|category|unit):
 ${catalog}
 
 WHATSAPP MESSAGE:
@@ -212,7 +214,7 @@ Return ONLY a raw JSON array of orders — no markdown, no explanation:
     "note": "string or null",
     "total_price": 40000.0,
     "items": [
-      {"item_id": 1, "item_name": "catalog name", "quantity": 2, "unit_price": 500.0, "matched": true}
+      {"item_id": 1, "item_name": "catalog name", "quantity": 2, "unit_price": 500.0, "line_total": 1000.0, "matched": true}
     ],
     "unmatched_items": [],
     "confidence": "high"
@@ -225,8 +227,13 @@ CRITICAL RULES:
 3. item_id must be the exact number from the catalog above. If no match, set matched:false and item_id:null.
 4. quantity must be a positive whole number. If no quantity is stated, default to 1.
 5. QUANTITY FORMAT — a number after a pipe "|" or at the end of the line applies as quantity to ALL items listed on that line. Example: "balm and capsule | 2" means balm qty=2 AND capsule qty=2. Example: "item A x3, item B" means A qty=3, B qty=1.
-6. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
-7. unit_price: use catalog price if available. If only total_price is given and multiple items, set unit_price to 0 — the app will divide it.
+6. PRICING — prices come ONLY from the message body. Never invent a price. Never use any catalog price. A product line may list ONE number after the qty/product or TWO numbers separated by a comma or space.
+   - ONE number → that number is the LINE TOTAL for the whole line. Set unit_price = line_total / quantity. Example: "zudes 5, 10000" → quantity=5, line_total=10000, unit_price=2000.
+   - TWO numbers → the FIRST is unit_price, the SECOND is line_total. Example: "zudes 5, 2000, 10000" → quantity=5, unit_price=2000, line_total=10000.
+   - Numbers near labels like "Total order value", "Amount to collect", "Grand total" go in total_price, NOT inside any item line.
+   - If a line has no price, set unit_price=0 and line_total=0.
+   - line_total must equal unit_price * quantity exactly.
+7. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
 8. PHONE NUMBERS: If the message contains two phone numbers for one customer, put the one explicitly labelled "WhatsApp" or "WA" in customer_whatsapp and the other in customer_phone. If only one number is given, put it in customer_phone and leave customer_whatsapp null.
 9. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
@@ -316,25 +323,37 @@ function renderOrders(orders) {
       }
     }
 
-    // Add item rows — distribute total_price if given
+    // Add item rows. Trust Gemini's line_total (it now follows our pricing
+    // convention of "ONE number = line total"). Fall back to unit_price * qty,
+    // then distribute total_price proportionally to quantity if both missing.
     const itemsToAdd = (order.items || []).filter(i => i.matched && i.item_id);
     if (itemsToAdd.length === 0) {
       addItemRow(idx);
     } else {
-      const totalPrice = order.total_price || null;
-      let amounts = [];
-      if (totalPrice && totalPrice > 0) {
-        // Distribute total price proportionally by catalog price ratio
-        // If all catalog prices are 0, split equally
-        const weights = itemsToAdd.map(item => {
-          const cat = ITEMS_BY_ID[item.item_id];
-          const price = cat ? parseFloat(cat.price) : 0;
-          return price > 0 ? price * (item.quantity || 1) : (item.quantity || 1);
+      const lineFromItem = (it) => {
+        const lt = parseFloat(it.line_total);
+        if (!isNaN(lt) && lt > 0) return lt;
+        const up = parseFloat(it.unit_price);
+        const q  = parseInt(it.quantity || 1, 10);
+        if (!isNaN(up) && up > 0) return up * q;
+        return 0;
+      };
+      let amounts = itemsToAdd.map(lineFromItem);
+      const allZero = amounts.every(a => !a);
+      const totalPrice = parseFloat(order.total_price);
+      if (allZero && !isNaN(totalPrice) && totalPrice > 0) {
+        // Last resort: distribute total across lines weighted by quantity.
+        const qtys = itemsToAdd.map(it => parseInt(it.quantity || 1, 10));
+        const totalQty = qtys.reduce((a, b) => a + b, 0);
+        let running = 0;
+        amounts = qtys.map((q, i) => {
+          if (i === qtys.length - 1) return (totalPrice - running).toFixed(2);
+          const share = parseFloat(((q / totalQty) * totalPrice).toFixed(2));
+          running += share;
+          return share.toFixed(2);
         });
-        const totalWeight = weights.reduce((a, b) => a + b, 0);
-        amounts = weights.map(w => totalWeight > 0 ? ((w / totalWeight) * totalPrice).toFixed(2) : (totalPrice / itemsToAdd.length).toFixed(2));
       } else {
-        amounts = itemsToAdd.map(item => (item.quantity * (item.unit_price || 0)).toFixed(2));
+        amounts = amounts.map(a => a.toFixed(2));
       }
       itemsToAdd.forEach((item, i) => addItemRow(idx, item.item_id, item.quantity, amounts[i]));
     }
