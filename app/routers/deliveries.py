@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, Depends, Form, HTTPException, BackgroundTasks, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, bindparam
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
@@ -143,7 +143,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         ).scalars().all()
         if all_other_ids:
             other_ids_tuple = tuple(all_other_ids)
-            wa_rows = db.execute(text(f"""
+            wa_rows = db.execute(text("""
                 SELECT wc.delivery_id
                 FROM wa_comments wc
                 WHERE wc.delivery_id IN :other_ids
@@ -151,7 +151,8 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
                     SELECT MAX(created_at) FROM wa_comments wc2 WHERE wc2.delivery_id = wc.delivery_id
                   )
                   AND wc.direction = 'inbound'
-            """), {"other_ids": other_ids_tuple}).fetchall()
+            """).bindparams(bindparam("other_ids", expanding=True)),
+            {"other_ids": list(other_ids_tuple)}).fetchall()
             hidden_wa_count = len(wa_rows)
             hidden_adj_count = db.scalar(
                 select(func.count(Delivery.id)).where(
@@ -337,6 +338,7 @@ async def delivery_create(
     branch_id: int | None = Form(None),
     customer_name: str = Form(...),
     customer_phone: str = Form(""),
+    customer_whatsapp: str = Form(""),
     address: str = Form(""),
     note: str = Form(""),
     delivery_date: str = Form(""),
@@ -385,9 +387,17 @@ async def delivery_create(
         d_date = datetime.strptime(delivery_date.strip(), "%Y-%m-%d") if delivery_date.strip() else datetime.now(timezone.utc)
     except ValueError:
         d_date = datetime.now(timezone.utc)
+    _clean_phone = sanitize_phone(customer_phone) or ""
+    _clean_wa = sanitize_phone(customer_whatsapp) or ""
+    # Append WhatsApp number to call list if not already present
+    if _clean_wa and _clean_wa not in _clean_phone:
+        _call_numbers = (_clean_phone + ", " + _clean_wa).strip(", ")
+    else:
+        _call_numbers = _clean_phone or None
     d = Delivery(
         branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
-        customer_phone=sanitize_phone(customer_phone) or None,
+        customer_phone=_call_numbers or None,
+        customer_whatsapp=_clean_wa or None,
         address=sanitize_text(address, 300, "Address") or None,
         note=sanitize_text(note, 400, "Note") or None,
         status="PENDING", delivery_date=d_date,
@@ -500,22 +510,32 @@ async def delivery_create(
 
     # ── Check wa_pending_cache for WhatsApp messages that arrived before this order ──
     try:
+        import re as _re
         db_name_lower = (d.customer_name or "").lower()
-        db_phone_clean = (d.customer_phone or "").replace(" ", "").replace("-", "")
-        db_phone_digits = db_phone_clean[-10:] if db_phone_clean else ""
+        # Build last-10-digit keys for every phone on this delivery (call + whatsapp,
+        # supports comma/semicolon-separated multi-number fields).
+        db_phone_keys: set[str] = set()
+        for raw in _re.split(r"[,;]", (d.customer_phone or "") + "," + (d.customer_whatsapp or "")):
+            digits = _re.sub(r"\D", "", raw)
+            if len(digits) >= 10:
+                db_phone_keys.add(digits[-10:])
 
         pending_rows = db.execute(text(
             "SELECT message_id, body, sender, group_jid, customer_name, customer_phone "
             "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 50"
         )).fetchall()
 
+        logging.getLogger("cache_wa").info(
+            "Pending scan for new Order #%s: name=%r phone_keys=%s pending_count=%d",
+            d.id, db_name_lower, sorted(db_phone_keys), len(pending_rows)
+        )
+
         for pr in pending_rows:
             p_mid, p_body, p_sender, p_gjid, p_cname, p_cphone = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5]
 
-            # Phone check
-            p_phone_digits = (p_cphone or "").replace(" ", "").replace("-", "")[-10:]
-            phone_ok = (db_phone_digits and p_phone_digits and len(p_phone_digits) >= 10
-                        and db_phone_digits == p_phone_digits)
+            # Phone check — last 10 digits against any number on the delivery
+            p_phone_digits = _re.sub(r"\D", "", p_cphone or "")[-10:] if p_cphone else ""
+            phone_ok = bool(p_phone_digits and p_phone_digits in db_phone_keys)
 
             # Name check
             name_ok = False
@@ -526,13 +546,13 @@ async def delivery_create(
                 elif p_cname == db_name_lower:
                     name_ok = True
 
-            # Phone is the strongest signal — always trust it
-            if p_cphone:
-                matched = phone_ok
-            elif p_cname:
-                matched = name_ok
-            else:
-                matched = False
+            # Phone is the strongest signal; fall back to name match when phone
+            # is missing OR when Gemini may have mis-extracted it (digit dupes).
+            matched = phone_ok or name_ok
+            logging.getLogger("cache_wa").info(
+                "Pending row mid=%s p_name=%r p_phone=%r → phone_ok=%s name_ok=%s matched=%s",
+                (p_mid or "")[:20], p_cname, p_cphone, phone_ok, name_ok, matched
+            )
 
             if matched:
                 _is_sqlite = DATABASE_URL.startswith("sqlite")
@@ -569,12 +589,15 @@ async def delivery_create(
             if it:
                 call_items.append(f"{it.name} x{qty}")
     items_summary = ", ".join(call_items) if call_items else "your order"
-    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "")
+    trigger_call(d.id, d.customer_phone, "PENDING", d.customer_name, items_summary, d.address or "", whatsapp_number=d.customer_whatsapp)
 
     # Auto-send WhatsApp template to customer when delivery is created
-    if d.customer_phone:
+    if d.customer_phone or d.customer_whatsapp:
         try:
-            submit_task(send_whatsapp_fallback, d.id, d.customer_phone, d.customer_name or "Customer", items_summary)
+            from app.utils import get_whatsapp_phone
+            wa_phone = get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or "")
+            if wa_phone:
+                submit_task(send_whatsapp_fallback, d.id, wa_phone, d.customer_name or "Customer", items_summary)
         except Exception as e:
             logging.getLogger("whatsapp").warning("Failed to queue WA template for delivery #%s: %s", d.id, e)
 

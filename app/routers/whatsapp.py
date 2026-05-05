@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Request, Depends, Form, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse, Response, PlainTextResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, or_
 from datetime import datetime, timezone
-import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html
+import json, os, logging, re, asyncio, httpx, subprocess, tempfile, html, functools
 from app.core import *
 from app.models import *
 from app.security import *
@@ -31,6 +31,191 @@ def _bot_headers() -> dict:
     """Return auth headers for bot API calls. Reads BOT_API_KEY from env."""
     key = os.getenv("BOT_API_KEY", "")
     return {"x-api-key": key} if key else {}
+
+
+@functools.lru_cache(maxsize=1)
+def _seller_group_branch_map() -> dict:
+    """Map of group_jid -> branch_id for auto-creating orders from group messages.
+    Cached for the process lifetime — restart Railway to pick up env changes."""
+    try:
+        return json.loads(os.getenv("SELLER_GROUP_BRANCH_MAP", "{}"))
+    except (ValueError, TypeError):
+        return {}
+
+
+async def _bot_quote_reply(group_jid, quote_msg_id, quote_body, quote_sender, message, order_id=""):
+    """Quote-reply into a group via the bot's /send-group-feedback endpoint.
+    The bot rejects requests with empty orderId, so always pass a non-empty
+    string — the real order_id on success, or a placeholder for failures."""
+    if not group_jid:
+        return
+    bot_url = _get_bot_url(group_jid)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(
+                bot_url + "/send-group-feedback",
+                json={
+                    "orderId": str(order_id) if order_id else "auto",
+                    "message": message,
+                    "quoteMessageId": quote_msg_id or "",
+                    "quoteMessageBody": (quote_body or "")[:500],
+                    "quoteMessageSender": quote_sender or "",
+                    "quoteMessageFromMe": False,
+                    "targetGroupJid": group_jid,
+                    "mentions": [],
+                },
+                headers=_bot_headers(),
+            )
+    except Exception as e:
+        _log.warning("auto-order bot reply failed: %s", e)
+
+
+async def _try_auto_create_order_from_group(
+    db, reply_text, group_jid, sender, sender_name, message_id
+):
+    """Attempt to parse a fresh group message as an order and create the delivery.
+
+    Returns:
+        int > 0  → order_id created; caller should post the success quote-reply
+        0        → tried but the message did not parse cleanly; caller should
+                   post the "couldn't read" quote-reply
+        None     → skip silently (toggle off, group not mapped, dedup hit,
+                   greeting/short message, missing API key, etc.)
+    """
+    from app.feature_toggles import get_feature_value
+    from app.order_parser import parse_order_text
+
+    # Default OFF — auto-create stays dormant until a supervisor explicitly
+    # turns it on. Using get_feature_value because is_feature_on defaults
+    # missing keys to True, which would silently enable this feature.
+    if get_feature_value(db, "seller_group_auto_order_enabled", "off") != "on":
+        return None
+
+    mapping = _seller_group_branch_map()
+    if not group_jid or group_jid not in mapping:
+        return None
+    try:
+        branch_id = int(mapping[group_jid])
+    except (TypeError, ValueError):
+        return None
+
+    branch = db.execute(select(Branch).where(Branch.id == branch_id)).scalar()
+    if not branch:
+        _log.warning("SELLER_GROUP_BRANCH_MAP → missing branch_id=%s", branch_id)
+        return None
+
+    bot_phone = os.getenv("BOT_PHONE", "").lstrip("+")
+    if bot_phone and (sender or "").lstrip("+").startswith(bot_phone):
+        return None
+
+    txt = (reply_text or "").strip()
+    if len(txt) < 20:
+        return None
+    skip_prefixes = (
+        "ok", "yes", "no", "thanks", "thank you", "received",
+        "noted", "good morning", "good afternoon", "good evening",
+        "hi ", "hello", "✅", "👍",
+    )
+    if txt.lower().startswith(skip_prefixes):
+        return None
+
+    if message_id:
+        existed = db.execute(text(
+            "SELECT order_id FROM whatsapp_outbound_map "
+            "WHERE message_id = :mid AND source = 'auto_in'"
+        ), {"mid": message_id}).first()
+        if existed:
+            return None
+
+    parsed = await parse_order_text(txt, db, branch_id)
+    if not parsed:
+        return 0
+
+    if parsed.get("confidence") != "high":
+        return 0
+    if not parsed.get("customer_name"):
+        return 0
+    items = [i for i in (parsed.get("items") or [])
+             if i.get("matched") and i.get("item_id")]
+    if not items:
+        return 0
+    if not (parsed.get("customer_phone") or parsed.get("address")):
+        return 0
+
+    bot_user = db.execute(
+        select(User).where(
+            User.branch_id == branch_id,
+            User.role == "ADMIN",
+            User.is_active == True,
+        ).order_by(User.created_at.asc()).limit(1)
+    ).scalar()
+    if not bot_user:
+        bot_user = db.execute(
+            select(User).where(
+                User.role == "SUPERVISOR",
+                User.is_active == True,
+            ).order_by(User.created_at.asc()).limit(1)
+        ).scalar()
+    if not bot_user:
+        _log.warning("auto-order: no admin/supervisor for branch %s", branch_id)
+        return None
+
+    delivery = Delivery(
+        branch_id=branch_id,
+        agent_id=bot_user.id,
+        customer_name=parsed["customer_name"][:160],
+        customer_phone=(parsed.get("customer_phone") or None),
+        customer_whatsapp=(parsed.get("customer_whatsapp") or None),
+        address=(parsed.get("address") or None),
+        status="PENDING",
+        note=f"[Auto from WhatsApp group {group_jid} | sender:{sender_name or sender}]",
+    )
+    db.add(delivery)
+    db.flush()
+
+    for it in items:
+        db.add(DeliveryItem(
+            delivery_id=delivery.id,
+            item_id=int(it["item_id"]),
+            quantity=int(it.get("quantity", 1)),
+            line_amount=float(it.get("unit_price", 0)) * int(it.get("quantity", 1)),
+        ))
+    db.commit()
+
+    # Trigger the PENDING call the same way delivery_create does
+    # (deliveries.py:582). Without this the auto-orders never get an
+    # outbound AI call even though manual orders do.
+    try:
+        from app.calling_service import trigger_call
+        items_summary = ", ".join(
+            f"{it.get('item_name') or 'item'} x{int(it.get('quantity', 1))}"
+            for it in items
+        ) or "your order"
+        trigger_call(
+            delivery.id,
+            delivery.customer_phone,
+            "PENDING",
+            delivery.customer_name,
+            items_summary,
+            delivery.address or "",
+            whatsapp_number=delivery.customer_whatsapp,
+        )
+    except Exception as e:
+        _log.warning("auto-order: trigger_call failed for delivery #%s: %s", delivery.id, e)
+
+    if message_id:
+        try:
+            db.execute(text(
+                "INSERT INTO whatsapp_outbound_map "
+                "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                "VALUES (:mid, :oid, :body, 'auto_in', :snd, :gjid, :now)"
+            ), {"mid": message_id, "oid": delivery.id, "body": txt[:500],
+                "snd": sender, "gjid": group_jid, "now": _now()})
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return delivery.id
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -116,11 +301,15 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                 delivery_id, ended_reason, call_status, duration
             )
 
-            # Trigger fallback logic if call failed
-            if ended_reason in [
-                "voicemail", "customer-hung-up", "customer-ended-call",
-                "customer-did-not-answer", "failed", "assistant-error", "customer-busy"
-            ]:
+            # Trigger fallback logic if call was not successfully completed
+            # Whitelist the two reasons that mean the customer actually answered — everything else retries
+            _SUCCESS_REASONS = {"customer-ended-call", "assistant-ended-call"}
+            logging.getLogger("webhook").info(
+                "Call ended with reason='%s' for delivery %s — %s",
+                ended_reason, delivery_id,
+                "success (no retry)" if ended_reason in _SUCCESS_REASONS else "retrying backup"
+            )
+            if ended_reason not in _SUCCESS_REASONS:
                 backup_numbers = metadata.get("backup_numbers", [])
 
                 # Check if we have more numbers to try first
@@ -152,7 +341,9 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                         ).all()
                         items_str = ", ".join(f"{r.name} x{r.quantity}" for r in items_query) if items_query else "your order"
 
-                        send_whatsapp_fallback(d.id, d.customer_phone, d.customer_name, items_str)
+                        from app.utils import get_whatsapp_phone
+                        wa_phone = get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or "")
+                        send_whatsapp_fallback(d.id, wa_phone, d.customer_name, items_str)
                         d.note += "\n[System]: All numbers failed. WhatsApp Fallback message triggered."
                         logging.getLogger("webhook").info(f"Fallback WhatsApp message triggered for delivery {d.id} to {d.customer_phone}")
                     except Exception as wa_err:
@@ -214,7 +405,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
             body = f"[Media: {media_type}]"
 
     if not body:
-        return PlainTextResponse("OK", status_code=200)
+        return Response(status_code=204)
 
     # Find the most recent active delivery for this phone number
     # Twilio sends E.164 (+234...), DB may store as 080... or +234...
@@ -230,7 +421,10 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     for variant in phone_variants:
         d = db.execute(
             select(Delivery)
-            .where(Delivery.customer_phone.contains(variant))
+            .where(or_(
+                Delivery.customer_phone.contains(variant),
+                Delivery.customer_whatsapp.contains(variant),
+            ))
             .where(Delivery.status.in_(["PENDING", "OUT_FOR_DELIVERY"]))
             .order_by(Delivery.created_at.desc())
         ).scalars().first()
@@ -239,7 +433,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     if not d:
         _log.info("WhatsApp reply from %s — no matching delivery found", sender)
-        return PlainTextResponse("OK", status_code=200)
+        return Response(status_code=204)
 
     # Fetch items for context
     items_query = db.execute(
@@ -254,16 +448,25 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
     business_phone = os.getenv("BUSINESS_PHONE", "")
 
-    # Use AI to understand and respond
-    loop = asyncio.get_event_loop()
-    ai_result = await loop.run_in_executor(
-        None, _handle_customer_reply, body, d.customer_name, items_str,
-        d.address or "", d.status, existing_note, business_name, business_phone
-    )
+    # If a human agent has already replied on this delivery, the AI must
+    # stay silent — the human is handling the conversation from now on.
+    # We still log/classify the message so the agent can see it, but no
+    # AI text reply is generated and nothing is sent to the customer.
+    human_has_replied = bool(re.search(r"^\[Agent ", existing_note, flags=re.MULTILINE))
 
-    ai_reply = ai_result.get("reply", "")
-    classification = ai_result.get("classification", "OTHER")
-    summary = ai_result.get("summary", body[:100])
+    if human_has_replied:
+        ai_reply = ""
+        classification = "OTHER"
+        summary = body[:100]
+    else:
+        loop = asyncio.get_event_loop()
+        ai_result = await loop.run_in_executor(
+            None, _handle_customer_reply, body, d.customer_name, items_str,
+            d.address or "", d.status, existing_note, business_name, business_phone
+        )
+        ai_reply = ai_result.get("reply", "")
+        classification = ai_result.get("classification", "OTHER")
+        summary = ai_result.get("summary", body[:100])
 
     # Store voice note audio in voice_notes table if present
     if _voice_audio_bytes:
@@ -283,8 +486,12 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
         body = body.replace("[Voice Note]:", f"[Voice Note audio_id={vn_id}]:", 1)
         _log.info("Stored customer voice note id=%s for delivery %s", vn_id, d.id)
 
-    # Log the conversation on delivery notes
-    d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
+    # Log the conversation on delivery notes. When the AI is suppressed
+    # (human has taken over) we only log the customer message — no AI line.
+    if ai_reply:
+        d.note = (existing_note + f"\n[Customer WhatsApp]: {body}\n[AI Reply]: {ai_reply}\n[Classification]: {classification}").strip()
+    else:
+        d.note = (existing_note + f"\n[Customer WhatsApp]: {body}").strip()
 
     # Handle specific classifications
     notify_msg = f"{d.customer_name} via WhatsApp: {summary}"
@@ -299,43 +506,23 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # Save customer message and AI reply to wa_comments for live chat UI
-    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    customer_display = html.escape(d.customer_name or sender)
-    customer_body_escaped = html.escape(body)
-    ai_reply_escaped = html.escape(ai_reply)
-
+    # Save customer message and AI reply to wa_comments (kept for audit/log).
+    # NOTE: not broadcast to SSE — the SSE stream feeds the Seller Group Chat
+    # box, and customer-direct messages belong in the customer chat (rendered
+    # from d.note) not the seller group thread.
     db.execute(text(
         "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
         "VALUES (:did, 'inbound', :sender, :body, :_now)"
     ), {"did": d.id, "sender": d.customer_name or sender, "body": body, "_now": _now()})
-    db.execute(text(
-        "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
-        "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
-    ), {"did": d.id, "body": ai_reply, "_now": _now()})
+    if ai_reply:
+        db.execute(text(
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, created_at) "
+            "VALUES (:did, 'outbound', 'AI Agent', :body, :_now)"
+        ), {"did": d.id, "body": ai_reply, "_now": _now()})
     db.commit()
 
-    # SSE broadcast customer message
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
-        f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{customer_display}</span>'
-        f'<div style="white-space:pre-wrap;">{customer_body_escaped}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
-    # SSE broadcast AI reply
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-end;max-width:80%;background:#005c4b;color:#e9edef;'
-        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#8fdfcb;font-weight:600;display:block;margin-bottom:2px;">AI Agent</span>'
-        f'<div style="white-space:pre-wrap;">{ai_reply_escaped}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
-
-    # Send the AI reply back to the customer via Twilio (within 24hr window since they just messaged)
-    _send_twilio_reply(sender, ai_reply)
+    if ai_reply:
+        _send_twilio_reply(sender, ai_reply)
 
     # Notify the assigned agent or branch admins
     if d.agent_id:
@@ -343,7 +530,7 @@ async def whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     else:
         notify_branch_admins(db, d.branch_id, "💬 WhatsApp Reply", notify_msg, f"/deliveries/{d.id}", "info")
 
-    return PlainTextResponse("OK", status_code=200)
+    return Response(status_code=204)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -371,8 +558,8 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     if not d.customer_phone:
         return JSONResponse({"ok": False, "error": "No customer phone number on this delivery"}, status_code=400)
 
-    from app.utils import format_nigerian_phone
-    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    from app.utils import format_nigerian_phone, get_whatsapp_phone
+    phone = format_nigerian_phone(get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or ""))
     if not phone:
         return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
 
@@ -391,17 +578,10 @@ async def agent_whatsapp_reply(request: Request, db: Session = Depends(get_db)):
     ), {"did": d.id, "sender": f"Agent {agent_name}", "body": message, "_now": _now()})
     db.commit()
 
-    # SSE broadcast so open tabs update immediately
-    now_str = datetime.now(timezone.utc).strftime("%d %b %H:%M")
-    _sse_broadcast(d.id, (
-        f'<div style="align-self:flex-end;max-width:80%;background:#1a3a2a;color:#e9edef;'
-        f'padding:6px 10px;border-radius:8px 0 8px 8px;font-size:13px;line-height:1.4;">'
-        f'<span style="font-size:10px;color:#4ade80;font-weight:600;display:block;margin-bottom:2px;">Agent {html.escape(agent_name)} → Customer</span>'
-        f'<div style="white-space:pre-wrap;">{html.escape(message)}</div>'
-        f'<div style="font-size:9px;color:rgba(255,255,255,.45);text-align:right;margin-top:2px;">{now_str}</div>'
-        f'</div>'
-    ))
-
+    # NOTE: do NOT call _sse_broadcast here. The Seller Group Chat is the
+    # only consumer of the SSE stream, and broadcasting customer-direct
+    # replies into it bleeds the message into the wrong thread. The customer
+    # chat is rendered from d.note and refreshed via location.reload() on send.
     _log.info("Agent %s replied to delivery %s: %s", agent_name, delivery_id, message[:100])
     return JSONResponse({"ok": True})
 
@@ -515,8 +695,8 @@ async def agent_voice_reply(
     media_url = f"{base_url}/api/voice-note/{vn_id}?sig={sig}&exp={exp}"
 
     # Send via Twilio with media
-    from app.utils import format_nigerian_phone
-    phone = format_nigerian_phone(d.customer_phone.split(",")[0].strip())
+    from app.utils import format_nigerian_phone, get_whatsapp_phone
+    phone = format_nigerian_phone(get_whatsapp_phone(d.customer_whatsapp or "", d.customer_phone or ""))
     if not phone:
         return JSONResponse({"ok": False, "error": "Invalid phone number"}, status_code=400)
 
@@ -736,8 +916,10 @@ def _send_twilio_reply(to_number: str, message: str):
 from app import sse_bridge
 
 def _sse_broadcast(delivery_id: int, html_fragment: str):
-    """Push an SSE event to all open browser tabs across all workers."""
-    sse_bridge.broadcast(delivery_id, html_fragment)
+    """Push an SSE event to all open browser tabs across all workers.
+    Newlines are replaced with &#10; so multi-line content doesn't break
+    the SSE data: field (SSE spec forbids bare newlines in a single frame)."""
+    sse_bridge.broadcast(delivery_id, html_fragment.replace("\n", "&#10;"))
 
 @router.get("/api/stream/{delivery_id}")
 async def sse_stream(delivery_id: int, request: Request, db: Session = Depends(get_db)):
@@ -960,12 +1142,37 @@ async def agent_voice_feedback(
     raw_mime = audio.content_type or "audio/ogg"
     audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
-    # Resolve target group from the original seller message (same as text feedback)
+    # Resolve target group — same fallback chain as text feedback
     orig_map = db.execute(text(
         "SELECT group_jid FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
     target_group = orig_map[0] if orig_map else ""
+
+    if not target_group:
+        # Fallback 1: category map
+        try:
+            _cgm = json.loads(os.getenv("CATEGORY_GROUP_MAP", "{}"))
+        except (ValueError, TypeError):
+            _cgm = {}
+        _cat = db.execute(
+            select(Item.category)
+            .join(DeliveryItem, DeliveryItem.item_id == Item.id)
+            .where(DeliveryItem.delivery_id == delivery.id)
+            .limit(1)
+        ).scalar()
+        if _cat and _cat in _cgm:
+            _val = _cgm[_cat]
+            target_group = (_val[0] if isinstance(_val, list) else _val) or ""
+        # Fallback 2: first known group from category map
+        if not target_group and _cgm:
+            _known = []
+            for _v in _cgm.values():
+                if isinstance(_v, list):
+                    _known.extend(_v)
+                else:
+                    _known.append(_v)
+            target_group = _known[0] if _known else ""
 
     if not target_group:
         return JSONResponse({"status": "error", "message": "No seller group linked to this delivery yet."}, status_code=400)
@@ -1268,6 +1475,38 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     _log = logging.getLogger("wa_webhook")
 
+    # ── Step -1: Auto-create order from a fresh group message ─────────
+    # Only when the message is NOT a reply to an existing bot post AND
+    # does not reference an existing order number. Falls through silently
+    # if toggle is off, group isn't mapped, or message doesn't look like
+    # an order.
+    if not quoted_msg_id:
+        _pre_check = re.search(r'order\s*#?\s*(\d+)', reply_text, re.IGNORECASE)
+        if not _pre_check:
+            _incoming_msg_id = data.get("message_id", "").strip()
+            _new_id = await _try_auto_create_order_from_group(
+                db, reply_text, group_jid, sender, sender_name, _incoming_msg_id
+            )
+            if _new_id and _new_id > 0:
+                # Pass the sender JID (has '@') as quote_sender so the bot
+                # can attach a proper participant — pushName has no '@' and
+                # gets dropped by bot.js, breaking the quote bubble.
+                await _bot_quote_reply(
+                    group_jid, _incoming_msg_id, reply_text,
+                    sender, f"✅ Order #{_new_id} created",
+                    order_id=_new_id,
+                )
+                return {"status": "ok", "order_id": _new_id, "auto_created": True}
+            elif _new_id == 0:
+                await _bot_quote_reply(
+                    group_jid, _incoming_msg_id, reply_text,
+                    sender,
+                    "Couldn't read this as an order, please use the form",
+                    order_id="auto-fail",
+                )
+                return {"status": "ok", "auto_created": False}
+            # _new_id is None → fall through to existing reply-matching logic
+
     order_id = None
 
     # ── Step 0: Direct Regex Match (100% Bulletproof) ─────────────────
@@ -1312,7 +1551,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     break
 
             candidates = db.execute(text(
-                "SELECT id, customer_phone, customer_name FROM deliveries "
+                "SELECT id, customer_phone, customer_name, customer_whatsapp FROM deliveries "
                 "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') ORDER BY id DESC LIMIT 200"
             )).fetchall()
 
@@ -1321,9 +1560,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             phone_and_name_match = None
             phone_only_match = None
             for c in candidates:
-                c_id, c_phone, c_name = c[0], c[1], c[2]
+                c_id, c_phone, c_name, c_wa = c[0], c[1], c[2], c[3]
                 db_phone = (c_phone or '').replace(' ', '').replace('-', '')[-10:]
-                if not (db_phone and qphone_digits == db_phone):
+                db_wa = (c_wa or '').replace(' ', '').replace('-', '')[-10:]
+                if not (qphone_digits and (qphone_digits == db_phone or qphone_digits == db_wa)):
                     continue
 
                 # Check name match if we extracted one from the quoted body
@@ -1392,21 +1632,27 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
     comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
 
-    # Use friendly name for display, fall back to phone digits
+    # Store as "Name|jid" so the page-render filter (which keeps rows whose
+    # sender contains '@') still includes this row after a reload. The chat
+    # template splits on '|' to show only the friendly name.
     display_sender = sender_name or sender.replace("@s.whatsapp.net", "").replace("@lid", "")
+    if sender_name and sender and "@" in sender:
+        stored_sender = f"{sender_name}|{sender}"
+    else:
+        stored_sender = sender or display_sender
     is_sqlite = str(db.bind.url).startswith("sqlite")
     if is_sqlite:
         db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
             "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now)"
-        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+        ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
             "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()})
         new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
     else:
         new_comment_id = db.execute(text(
             "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
             "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now) RETURNING id"
-        ), {"did": order_id, "sender": display_sender, "body": comment_body, "clf": classification_json,
+        ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
             "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()}).scalar()
     db.commit()
 
@@ -1459,6 +1705,11 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     Stores (message_id → order_id, source='group') so agent-feedback can always
     quote the ORIGINAL group post when sending updates.
     """
+    logging.getLogger("cache_wa").info(
+        "cache-wa-message: HIT from %s (auth=%s)",
+        request.client.host if request.client else "?",
+        "yes" if request.headers.get("x-webhook-secret") else "no",
+    )
     _verify_webhook_token(request)
     data           = await request.json()
     message_id     = (data.get("message_id") or "").strip()
@@ -1470,22 +1721,39 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
     customer_phone = (data.get("customer_phone") or "").strip().replace(" ", "")
 
     if not message_id or (not customer_name and not customer_phone):
+        logging.getLogger("cache_wa").warning(
+            "cache-wa-message: IGNORED — message_id=%r name=%r phone=%r body_preview=%r",
+            message_id, customer_name, customer_phone, body[:60]
+        )
         return {"status": "ignored"}
+    logging.getLogger("cache_wa").info(
+        "cache-wa-message: ACCEPTED message_id=%s name=%r phone=%r group=%s",
+        message_id[:20], customer_name, customer_phone, group_jid[:20]
+    )
 
     # Fuzzy match against recent PENDING/OUT_FOR_DELIVERY deliveries only
     candidates = db.execute(text(
-        "SELECT id, customer_name, customer_phone FROM deliveries "
+        "SELECT id, customer_name, customer_phone, customer_whatsapp FROM deliveries "
         "WHERE status IN ('PENDING','OUT_FOR_DELIVERY') "
         "ORDER BY created_at DESC LIMIT 200"
     )).fetchall()
 
+    # Normalize the bot-extracted phone to its last 10 digits for comparison.
+    cust_last10 = re.sub(r"\D", "", customer_phone)[-10:] if customer_phone else ""
+
     matched_order_id = None
     for row in candidates:
-        r_id, r_name, r_phone = row[0], row[1], row[2]
-        db_name  = (r_name or "").lower()
-        db_phone = (r_phone or "").replace(" ", "").replace("-", "")
+        r_id, r_name, r_phone, r_wa = row[0], row[1], row[2], row[3]
+        db_name = (r_name or "").lower()
+        # Build the set of last-10-digit phone keys for this delivery.
+        # customer_phone may contain multiple numbers separated by ',' or ';'.
+        db_phone_keys = set()
+        for raw in re.split(r"[,;]", (r_phone or "") + "," + (r_wa or "")):
+            digits = re.sub(r"\D", "", raw)
+            if len(digits) >= 10:
+                db_phone_keys.add(digits[-10:])
 
-        # 🛡️ THE ANTI-STEAL SAFEGUARD: 
+        # 🛡️ THE ANTI-STEAL SAFEGUARD:
         # If this order ALREADY has an original group message linked to it, DO NOT steal it.
         has_group_msg = db.execute(text(
             "SELECT 1 FROM whatsapp_outbound_map WHERE order_id = :oid AND source = 'group'"
@@ -1495,9 +1763,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
 
         # Match logic: use BOTH phone+name when both are available to avoid
         # conflicts when the same phone number appears on multiple orders.
-        phone_ok = False
-        if customer_phone and db_phone and len(customer_phone) >= 10:
-            phone_ok = (customer_phone[-10:] == db_phone[-10:])
+        phone_ok = bool(cust_last10 and cust_last10 in db_phone_keys)
 
         name_ok = False
         if customer_name and db_name and len(customer_name) > 3:
@@ -1507,12 +1773,10 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             elif customer_name == db_name:
                 name_ok = True
 
-        # Phone match is the strongest signal — always trust it
-        if phone_ok:
-            matched_order_id = r_id
-            break
-        # Name-only match (no phone extracted) — acceptable fallback
-        if name_ok and not customer_phone:
+        # Phone match is the strongest signal — always trust it.
+        # Fall back to name when phone matching fails — Gemini sometimes
+        # mis-extracts phone digits (duplicates, missing digits, etc.).
+        if phone_ok or name_ok:
             matched_order_id = r_id
             break
 
@@ -1520,19 +1784,40 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         logging.getLogger("cache_wa").info(
             "cache-wa-message: no delivery matched name='%s' phone='%s' — saving to pending cache", customer_name, customer_phone
         )
-        # Save to pending cache so it can be matched when the delivery IS created
-        _pend_conflict = "ON CONFLICT (message_id) DO NOTHING" if not DATABASE_URL.startswith("sqlite") else "OR IGNORE"
+        # Save to pending cache so it can be matched when the delivery IS created.
+        # ON CONFLICT goes at the END of the statement on Postgres; SQLite uses
+        # INSERT OR IGNORE up front. (Earlier code mis-built the Postgres form
+        # which caused every pending insert to silently rollback.)
+        if DATABASE_URL.startswith("sqlite"):
+            pend_sql = (
+                "INSERT OR IGNORE INTO wa_pending_cache "
+                "(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
+                "VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now)"
+            )
+        else:
+            pend_sql = (
+                "INSERT INTO wa_pending_cache "
+                "(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
+                "VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now) "
+                "ON CONFLICT (message_id) DO NOTHING"
+            )
         try:
             pend_sender = f"{sender_name}|{sender}" if sender_name else sender
-            db.execute(text(
-                f"INSERT {_pend_conflict} INTO wa_pending_cache "
-                f"(message_id, body, sender, group_jid, customer_name, customer_phone, created_at) "
-                f"VALUES (:mid, :body, :sender, :gjid, :cname, :cphone, :_now)"
-            ), {"mid": message_id, "body": body, "sender": pend_sender, "gjid": group_jid,
-                "cname": customer_name, "cphone": customer_phone, "_now": _now()})
+            db.execute(text(pend_sql), {
+                "mid": message_id, "body": body, "sender": pend_sender, "gjid": group_jid,
+                "cname": customer_name, "cphone": customer_phone, "_now": _now()
+            })
             db.commit()
-        except Exception:
+            logging.getLogger("cache_wa").info(
+                "cache-wa-message: pending row saved mid=%s name=%r phone=%r",
+                message_id[:20], customer_name, customer_phone
+            )
+        except Exception as e:
             db.rollback()
+            logging.getLogger("cache_wa").error(
+                "cache-wa-message: pending insert FAILED mid=%s err=%s",
+                message_id[:20], e
+            )
         return {"status": "pending"}
 
     # ── Persist the mapping so replies and agent-feedback can find this order ──

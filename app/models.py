@@ -120,8 +120,9 @@ class Delivery(Base):
     branch_id:      Mapped[int]          = mapped_column(ForeignKey("branches.id"), nullable=False)
     agent_id:       Mapped[int]          = mapped_column(ForeignKey("users.id"), nullable=False)
     customer_name:  Mapped[str]          = mapped_column(String(160), nullable=False)
-    customer_phone: Mapped[str | None]   = mapped_column(String(40), nullable=True)
-    address:        Mapped[str | None]   = mapped_column(String(300), nullable=True)
+    customer_phone:     Mapped[str | None]   = mapped_column(String(80), nullable=True)
+    customer_whatsapp:  Mapped[str | None]   = mapped_column(String(40), nullable=True)
+    address:            Mapped[str | None]   = mapped_column(String(300), nullable=True)
     status:         Mapped[str]          = mapped_column(String(25), default="PENDING", nullable=False)
     
     # =========================================================

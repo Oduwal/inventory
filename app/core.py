@@ -69,6 +69,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Plai
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # [FIX-6] ProxyHeadersMiddleware — makes request.client.host the real client IP
 # when running behind Railway's reverse proxy
@@ -211,17 +212,24 @@ def _send_web_push(user_id: int, title: str, body: str, link: str):
         db.close()
 
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
-    """Create a persistent notification and fire web push in a background thread."""
-    try:
-        db.execute(text(
-            "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
-            "VALUES (:uid, :title, :body, :link, :kind, :now)"
-        ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
-        db.commit()
-        submit_task(_send_web_push, user_id, title, body, link)
-    except Exception as e:
-        db.rollback()
-        logging.getLogger("notifications").warning(f"Notify failed: {e}")
+    """Create a persistent notification and fire web push in a background thread.
+    Uses its own session so it never commits the caller's request transaction."""
+    def _do():
+        from .database import SessionLocal
+        _db = SessionLocal()
+        try:
+            _db.execute(text(
+                "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
+                "VALUES (:uid, :title, :body, :link, :kind, :now)"
+            ), {"uid": user_id, "title": title[:200], "body": body[:500], "link": link[:300], "kind": kind, "now": datetime.now(timezone.utc)})
+            _db.commit()
+            submit_task(_send_web_push, user_id, title, body, link)
+        except Exception as e:
+            _db.rollback()
+            logging.getLogger("notifications").warning(f"Notify failed: {e}")
+        finally:
+            _db.close()
+    submit_task(_do)
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Notify all admins of a branch.
@@ -294,8 +302,43 @@ app.add_middleware(
     secret_key=SESSION_SECRET,
     https_only=HTTPS_ONLY,
     same_site="lax",
-    max_age=43200,  # [SEC] 12-hour session expiry
+    max_age=2592000,  # [SEC] 30 days — actual lifetime is controlled per-login
+                      # via the "Keep me signed in" checkbox. When unticked the
+                      # login route rewrites the cookie as a browser-session
+                      # cookie (no Max-Age) so it dies on browser close.
 )
+
+
+# Strip Max-Age / Expires from the session cookie when the user did NOT
+# tick "Keep me signed in" (session.get("_no_persist") is True). This
+# turns the persistent cookie SessionMiddleware writes into a browser-
+# session cookie that dies on browser close.
+class _SessionPersistencePolicy(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        try:
+            no_persist = request.session.get("_no_persist") is True
+        except Exception:
+            no_persist = False
+        if not no_persist:
+            return response
+        new_cookies = []
+        for key, value in list(response.raw_headers):
+            if key != b"set-cookie":
+                new_cookies.append((key, value))
+                continue
+            cookie_str = value.decode("latin-1")
+            if not cookie_str.lstrip().lower().startswith("session="):
+                new_cookies.append((key, value))
+                continue
+            parts = [p.strip() for p in cookie_str.split(";")]
+            kept = [p for p in parts if not p.lower().startswith("max-age=") and not p.lower().startswith("expires=")]
+            new_cookies.append((key, "; ".join(kept).encode("latin-1")))
+        response.raw_headers = new_cookies
+        return response
+
+
+app.add_middleware(_SessionPersistencePolicy)
 app.add_middleware(SecurityHeadersMiddleware)  # [SEC-8] Security headers
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -370,6 +413,8 @@ def require_branch_access(user: User | None, branch_id: int | None) -> None:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+
+
 def set_rls_context(db: Session, user: "User | None") -> None:
     """Inject current user identity into the PostgreSQL session as transaction-local
     variables.  RLS policies read these via current_setting().  Uses SET LOCAL so
@@ -378,21 +423,17 @@ def set_rls_context(db: Session, user: "User | None") -> None:
     if DATABASE_URL.startswith("sqlite"):
         return
     if user is None:
-        db.execute(text(
-            "SET LOCAL app.current_user_id = '';"
-            " SET LOCAL app.current_user_role = '';"
-            " SET LOCAL app.current_branch_id = '';"
-        ))
+        uid, role, bid = "", "", ""
     else:
-        db.execute(text(
-            "SET LOCAL app.current_user_id = :uid;"
-            " SET LOCAL app.current_user_role = :role;"
-            " SET LOCAL app.current_branch_id = :bid;"
-        ), {
-            "uid": str(user.id),
-            "role": (user.role or "").upper(),
-            "bid": str(user.branch_id) if user.branch_id is not None else "",
-        })
+        uid  = str(user.id)
+        role = (user.role or "").upper()
+        bid  = str(user.branch_id) if user.branch_id is not None else ""
+    db.execute(text(
+        "SET LOCAL app.current_user_id = :uid;"
+        " SET LOCAL app.current_user_role = :role;"
+        " SET LOCAL app.current_branch_id = :bid;"
+    ), {"uid": uid, "role": role, "bid": bid})
+
 
 
 # ── Stock helpers ────────────────────────────────────────────────
@@ -942,6 +983,15 @@ def ensure_schema() -> None:
                 conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'on')"), {"k": _tk})
             else:
                 conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'on') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
+        # Seed off-by-default toggles separately so set_feature's UPDATE has
+        # a row to modify (otherwise the supervisor dashboard checkbox flips
+        # silently and reverts on refresh).
+        _toggle_off_defaults = ["seller_group_auto_order_enabled"]
+        for _tk in _toggle_off_defaults:
+            if is_sqlite:
+                conn.execute(text("INSERT OR IGNORE INTO feature_toggles (key, value) VALUES (:k, 'off')"), {"k": _tk})
+            else:
+                conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, 'off') ON CONFLICT (key) DO NOTHING"), {"k": _tk})
         # Contact hours — default 8 AM to 8 PM (Nigeria WAT = UTC+1)
         for _hk, _hv in [("contact_start_hour", "8"), ("contact_end_hour", "20")]:
             if is_sqlite:
@@ -999,6 +1049,21 @@ def ensure_schema() -> None:
                         )""")
             finally:
                 conn.execute(text("SELECT pg_advisory_unlock(8675309)"))
+
+        # Widen customer_phone and add customer_whatsapp column if missing
+        if not is_sqlite:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE deliveries ALTER COLUMN customer_phone TYPE VARCHAR(80)"
+                ))
+            except Exception:
+                pass
+            try:
+                conn.execute(text(
+                    "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS customer_whatsapp VARCHAR(40)"
+                ))
+            except Exception:
+                pass
 
         conn.commit()
 

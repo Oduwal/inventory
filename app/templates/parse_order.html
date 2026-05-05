@@ -207,6 +207,7 @@ Return ONLY a raw JSON array of orders — no markdown, no explanation:
   {
     "customer_name": "string or null",
     "customer_phone": "string or null",
+    "customer_whatsapp": "string or null",
     "address": "string or null",
     "note": "string or null",
     "total_price": 40000.0,
@@ -226,7 +227,8 @@ CRITICAL RULES:
 5. QUANTITY FORMAT — a number after a pipe "|" or at the end of the line applies as quantity to ALL items listed on that line. Example: "balm and capsule | 2" means balm qty=2 AND capsule qty=2. Example: "item A x3, item B" means A qty=3, B qty=1.
 6. If the customer states a total price (e.g. "total 40000", "pay 15000"), set total_price to that number. Otherwise set total_price to null.
 7. unit_price: use catalog price if available. If only total_price is given and multiple items, set unit_price to 0 — the app will divide it.
-8. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
+8. PHONE NUMBERS: If the message contains two phone numbers for one customer, put the one explicitly labelled "WhatsApp" or "WA" in customer_whatsapp and the other in customer_phone. If only one number is given, put it in customer_phone and leave customer_whatsapp null.
+9. Return ONLY the JSON array starting with [ and ending with ]. Nothing else.`;
 
   try {
     const res = await fetch('/parse-order/api', {
@@ -286,8 +288,9 @@ function renderOrders(orders) {
         ${agentField}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div><label>Customer Name *</label><input type="text" name="customer_name" value="${escHtml(order.customer_name||'')}" required placeholder="Full name" style="margin-top:4px;" /></div>
-          <div><label>Phone</label><input type="text" name="customer_phone" value="${escHtml(order.customer_phone||'')}" placeholder="08012345678" style="margin-top:4px;" /></div>
+          <div><label>Call Number</label><input type="text" name="customer_phone" value="${escHtml(order.customer_phone||'')}" placeholder="08012345678" style="margin-top:4px;" /></div>
         </div>
+        <div style="margin-bottom:10px;"><label>WhatsApp Number</label><input type="text" name="customer_whatsapp" value="${escHtml(order.customer_whatsapp||'')}" placeholder="Leave blank if same as call number" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Delivery Address</label><input type="text" name="address" value="${escHtml(order.address||'')}" placeholder="Street, area, city" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Note</label><input type="text" name="note" value="${escHtml(order.note||'')}" placeholder="Extra instructions" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Delivery Date</label><input type="date" name="delivery_date" value="${TODAY}" style="margin-top:4px;" /></div>

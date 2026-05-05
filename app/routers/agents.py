@@ -589,10 +589,27 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             text("SELECT id, request_id, delivery_item_id, item_name, original_amount, new_amount, remove_item FROM adjustment_request_items WHERE request_id = :rid ORDER BY id"),
             {"rid": pending_adj.id}
         ).fetchall()
-    wa_comments = db.execute(
+    _all_wa = db.execute(
         text("SELECT id, direction, sender, body, media_mime, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
         {"did": d.id}
     ).fetchall()
+    # Seller Group Chat shows only group-thread rows. Customer-direct rows
+    # (AI Agent auto-replies, agent typed replies, customer inbound) are
+    # rendered separately from d.note, so they must be excluded here to
+    # avoid bleeding "Reply to customer" messages into the group view.
+    _all_wa_with_clf = db.execute(
+        text("SELECT id, direction, sender, body, media_mime, created_at, classification FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        {"did": d.id}
+    ).fetchall()
+    def _is_group_row(r):
+        s = (r[2] or "").strip()
+        if r[1] == "outbound":
+            return s == "Agent"  # group sends use sender="Agent"
+        # Group inbound senders are JIDs like 234...@s.whatsapp.net or @lid.
+        # Older rows pre-fix stored only the pushName (no '@'); fall back to
+        # the classification column which is only populated for seller-group replies.
+        return "@" in s or bool((r[6] or "").strip())
+    wa_comments = [r for r in _all_wa_with_clf if _is_group_row(r)]
     return tpl(request, "delivery_detail.html", {
         "request": request, "d": d, "d_items": d_items, "user": user, "error": None,
         "collection_total": col, "expense_total": exp,
@@ -1019,7 +1036,7 @@ async def update_delivery_status(
                     ))
 
             db.commit()
-            trigger_call(d.id, d.customer_phone, "DELIVERED", d.customer_name, _items_summary(), d.address)
+            trigger_call(d.id, d.customer_phone, "DELIVERED", d.customer_name, _items_summary(), d.address, whatsapp_number=d.customer_whatsapp)
         except ValueError as e:
             d_items = db.execute(select(DeliveryItem, Item).join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id == d.id)).all()
             csrf_token2 = get_csrf_token(request)
@@ -1057,7 +1074,7 @@ async def update_delivery_status(
                 f"Delivery #{delivery_id} {status_clean.lower()} — {item_name} assigned stock must be vetted.",
                 f"/vetting", "warning")
     db.commit()
-    trigger_call(d.id, d.customer_phone, status_clean, d.customer_name, _items_summary(), d.address)
+    trigger_call(d.id, d.customer_phone, status_clean, d.customer_name, _items_summary(), d.address, whatsapp_number=d.customer_whatsapp)
     return redirect(f"/deliveries/{delivery_id}")
 
 

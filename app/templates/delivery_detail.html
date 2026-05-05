@@ -27,16 +27,34 @@
     <div class="badge b-blue" style="margin-bottom:14px;">CUSTOMER</div>
     <div style="font-size:20px;font-weight:800;margin-bottom:10px;">{{ d.customer_name }}</div>
     <div style="display:flex;flex-direction:column;gap:6px;">
-      <div style="display:flex;gap:8px;align-items:center;">
-        <span style="color:var(--muted);font-size:12px;min-width:60px;">Phone</span>
-        <span style="font-size:13px;">
-          {% if d.customer_phone %}
-            <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff; text-decoration:underline;">{{ d.customer_phone }}</a>
-          {% else %}
-            —
+      {% if d.customer_phone %}
+        {% for _num in d.customer_phone.split(',') %}
+          {% set _n = _num.strip() %}
+          {% if _n %}
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span style="color:var(--muted);font-size:12px;min-width:60px;">{{ "Call" if loop.first else "Call 2" }}</span>
+            <a href="tel:{{ _n }}" style="color:#7fa8ff;text-decoration:underline;font-size:13px;">{{ _n }}</a>
+          </div>
           {% endif %}
-        </span>
-      </div>
+        {% endfor %}
+      {% else %}
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:var(--muted);font-size:12px;min-width:60px;">Call</span>
+          <span style="font-size:13px;">—</span>
+        </div>
+      {% endif %}
+      {% set _wa_num = d.customer_whatsapp or (d.customer_phone.split(',')[0].strip() if d.customer_phone else '') %}
+      {% if _wa_num %}
+        {% set _wa_raw = _wa_num.strip().replace(' ','').replace('-','').replace('(','').replace(')','') %}
+        {% set _wa_e164 = '234' + _wa_raw[1:] if _wa_raw.startswith('0') else _wa_raw.lstrip('+') %}
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:var(--muted);font-size:12px;min-width:60px;">WhatsApp</span>
+          <span style="display:flex;gap:10px;align-items:center;">
+            <a href="tel:{{ _wa_num.strip() }}" style="color:#7fa8ff;text-decoration:underline;font-size:13px;">{{ _wa_num.strip() }}</a>
+            <a href="https://wa.me/{{ _wa_e164 }}" target="_blank" style="color:#25D366;font-size:12px;text-decoration:underline;">Open WA ↗</a>
+          </span>
+        </div>
+      {% endif %}
       <div style="display:flex;gap:8px;align-items:center;">
         <span style="color:var(--muted);font-size:12px;min-width:60px;">Address</span>
         <span style="font-size:13px;">{{ d.address or "—" }}</span>
@@ -545,7 +563,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         </div>
       {% else %}
         <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
-          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ c.sender|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
+          <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ (c.sender.split('|')[0] if c.sender and '|' in c.sender else c.sender)|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
           {% if c.media_mime and c.media_mime.startswith('audio/') %}
             <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/wa-media/{{ c.id }}" type="{{ c.media_mime }}"></audio>
             {% if c.body and c.body != '[Voice Note]' %}<div style="font-size:11px;color:#8696a0;margin-top:2px;white-space:pre-wrap;">{{ c.body }}</div>{% endif %}

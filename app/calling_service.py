@@ -68,13 +68,13 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
     first_message = f"Hello? Is this {display_name}?"
     
     company_knowledge = (
-        f"COMPANY KNOWLEDGE BASE: "
+        f"COMPANY KNOWLEDGE BASE (only use if the customer asks): "
         f"- Business Name: {business_name}. "
         f"- Operating Hours: {os.getenv('BUSINESS_HOURS', '8:00 AM to 6:00 PM, Monday to Saturday. Closed on Sundays.')} "
         f"- Delivery Zones: {os.getenv('DELIVERY_ZONES', 'We deliver across major cities in Nigeria.')} "
-        f"- Rescheduling: Customers can reschedule a delivery to the next day for free. "
         f"- Payment: We accept bank transfers and cash on delivery. "
-        f"- Support: If they have a major complaint, tell them to message our WhatsApp support line."
+        f"- Support: If they have a major complaint, tell them to message our WhatsApp support line. "
+        f"- Rescheduling: ONLY if the customer explicitly asks to reschedule, you may say they can reschedule to the next day. NEVER offer rescheduling, NEVER suggest it, NEVER bring it up on your own."
     )
 
     spoken_status = status.replace('_', ' ').lower()
@@ -84,14 +84,21 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         f"You are calling to update the customer on their order: {items}. "
         f"Delivery Status: {spoken_status}. Delivery Address: {display_address}. "
         f"{company_knowledge} "
-        f"\n\nCRITICAL CONVERSATION RULES: "
-        f"\n1. NEVER rush the customer. You must act like a real, patient human having a real conversation. "
-        f"\n2. PRONUNCIATION RULE: Do NOT say 'X2' or 'X1'. If the order items say 'Biscuits X2', you must smoothly say 'two Biscuits'. Read the quantities naturally like a human. "
-        f"\n3. When they answer and confirm their name, say: 'Hi, I'm {agent_name} from {business_name}. I am calling because your order is currently {spoken_status}. Will you be available at the address to receive it?' then STOP TALKING and listen. "
-        f"\n4. If they interrupt you, STOP TALKING immediately, listen to them, and acknowledge what they said. "
-        f"\n5. Answer any questions they have confidently using the COMPANY KNOWLEDGE BASE. "
-        f"\n6. HOW TO END THE CALL: When the main topic is resolved, YOU MUST ASK: 'Is there anything else I can help you with today?'. "
-        f"\n7. STRICT GOODBYE RULE: If the customer says 'No', you MUST recite exactly: 'Thank you. Do have a nice day. Bye.' You MUST generate this full spoken sentence FIRST before triggering the hang-up function. NEVER just say 'goodbye'."
+        f"\n\nMANDATORY CALL FLOW — you MUST go through these steps in order. Do NOT skip ahead. Do NOT end the call early. "
+        f"\nSTEP 1 (always your first reply after the greeting): The customer answers your 'Is this {display_name}?' question. Whatever they say (even just 'yes' or 'who is this'), your next reply MUST be the full status-and-availability spiel: 'Hi, I'm {agent_name} from {business_name}. I am calling because your order is currently {spoken_status}. Will you be available at the address to receive it?' Then STOP and listen. "
+        f"\nSTEP 2: Listen for the customer's actual answer to the availability question. If they say yes/available → continue to step 3. If they say no/not available → ask 'When would be a good time for our dispatch team to reach you?' and let the human team follow up — do NOT reschedule yourself. "
+        f"\nSTEP 3: Once availability is resolved, answer any other questions they have using only the COMPANY KNOWLEDGE BASE. If you don't know, say 'Let me have our dispatch team follow up with you on that.' "
+        f"\nSTEP 4: Once everything is resolved, ASK exactly: 'Is there anything else I can help you with today?' Then STOP and listen. "
+        f"\nSTEP 5 — GOODBYE (read this carefully): When the customer's reply to Step 4 is a clear 'No', you MUST output the EXACT three-sentence farewell as ONE single spoken response: \"Thank you. Do have a nice day. Bye.\" "
+        f"  • The farewell is THREE sentences. Speak ALL three. Do NOT shorten it. Do NOT replace it with just 'goodbye' or just 'bye'. Do NOT trigger the hang-up function until you have FINISHED speaking all three sentences. "
+        f"  • If you find yourself about to say only 'Goodbye' or only 'Bye' — STOP. Restart with the full sentence: 'Thank you. Do have a nice day. Bye.' "
+        f"  • Only AFTER the full farewell sentence has been spoken should the call end. "
+        f"\n\nCRITICAL RULES (apply throughout): "
+        f"\n• NEVER end the call before completing Step 2. A simple 'yes' from the customer at the start of the call is them confirming their name — it is NOT permission to end the call. "
+        f"\n• NEVER assume, invent, reschedule, refund, discount, or change addresses unless the customer explicitly asked. "
+        f"\n• NEVER rush. Act like a real, patient human. If they interrupt, stop talking and listen. "
+        f"\n• PRONUNCIATION: read 'Biscuits X2' as 'two Biscuits'. Read quantities naturally. "
+        f"\n• Only the explicit 'No' to the Step 4 question authorises the goodbye in Step 5. Nothing else does."
     )
 
     summary_prompt = (
@@ -112,7 +119,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "firstMessage": first_message,
                     "model": {
                         "provider": "google",
-                        "model": "gemini-2.5-flash-lite",
+                        "model": "gemini-2.5-flash",
                         "messages": [{"role": "system", "content": system_prompt}]
                     },
                     "voice": {
@@ -123,7 +130,14 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
                     "serverUrl": f"{YOUR_RAILWAY_APP_URL}/api/call-webhook",
                     "serverMessages": ["end-of-call-report"],
                     "clientMessages": ["transcript", "hang", "function-call"],
-                    "endCallFunctionEnabled": True
+                    # Disabled in favour of endCallPhrases below — the function
+                    # version lets the model hang up trigger-happily on any
+                    # 'bye'-like output, cutting the farewell short.
+                    "endCallFunctionEnabled": False,
+                    # Vapi only ends the call when the assistant literally
+                    # speaks one of these phrases. Keeps the AI from hanging
+                    # up mid-conversation.
+                    "endCallPhrases": ["Do have a nice day. Bye."],
                 },
                 "metadata": {
                     "delivery_id": delivery_id,
@@ -145,11 +159,14 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
         call_id = data.get("id") or ""
         call_status = "initiated" if resp.status_code in (200, 201) else "failed"
         error_msg = "" if resp.status_code in (200, 201) else str(data.get("message", data))[:300]
-        
+        if call_status == "failed":
+            logger.warning("_do_call: Vapi rejected number %s for delivery #%s — status=%s error=%s", formatted_phone, delivery_id, resp.status_code, error_msg)
+
     except Exception as e:
         call_id = ""
         call_status = "failed"
         error_msg = str(e)[:300]
+        logger.warning("_do_call: exception calling Vapi for delivery #%s: %s", delivery_id, error_msg)
 
     try:
         from .database import SessionLocal
@@ -168,8 +185,18 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
     except Exception as e:
         logger.error(f"Failed to save log: {e}")
 
-def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "") -> None:
-    if not phone or not phone.strip(): return
+    # If Vapi rejected this number immediately (no webhook will fire), try next backup now
+    if call_status == "failed" and backup_numbers:
+        next_number = backup_numbers[0]
+        remaining = backup_numbers[1:]
+        logger.warning("_do_call: trying next backup %s for delivery #%s", next_number, delivery_id)
+        from app.core import submit_task
+        submit_task(_do_call, delivery_id, next_number, remaining, status, customer_name, items, address)
+
+def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name: str, items: str, address: str = "", whatsapp_number: str | None = None) -> None:
+    if not phone or not phone.strip():
+        logger.warning("trigger_call: no phone for delivery #%s — skipping", delivery_id)
+        return
 
     # Check supervisor toggles before placing any call
     try:
@@ -178,22 +205,32 @@ def trigger_call(delivery_id: int, phone: str | None, status: str, customer_name
         _db = SessionLocal()
         try:
             if not is_feature_on(_db, "call_enabled"):
-                logger.info("Calls disabled by supervisor toggle. Skipping delivery #%s", delivery_id)
+                logger.warning("trigger_call: call_enabled=OFF — skipping delivery #%s", delivery_id)
                 return
             if not is_feature_on(_db, f"call_status_{status}"):
-                logger.info("Calls for status %s disabled by supervisor toggle. Skipping delivery #%s", status, delivery_id)
+                logger.warning("trigger_call: call_status_%s=OFF — skipping delivery #%s", status, delivery_id)
                 return
         finally:
             _db.close()
     except Exception as _e:
-        logger.warning("Could not check feature toggles: %s — proceeding with call", _e)
+        logger.warning("trigger_call: could not check feature toggles: %s — proceeding with call", _e)
 
     # Safely split numbers separated by comma, slash, or space
     raw_numbers = [p.strip() for p in phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
-    if not raw_numbers: return
+    if not raw_numbers:
+        logger.warning("trigger_call: phone string '%s' produced no numbers — skipping delivery #%s", phone, delivery_id)
+        return
+
+    # Always append WhatsApp number as final backup if not already present
+    # (handles existing deliveries where customer_phone was saved before this feature)
+    if whatsapp_number and whatsapp_number.strip():
+        wa = whatsapp_number.strip()
+        if not any(wa in n or n in wa for n in raw_numbers):
+            raw_numbers.append(wa)
 
     primary = raw_numbers[0]
     backups = raw_numbers[1:]
 
+    logger.warning("trigger_call: FIRING call for delivery #%s status=%s primary=%s backups=%s", delivery_id, status, primary, backups)
     from app.core import submit_task
     submit_task(_do_call, delivery_id, primary, backups, status, customer_name, items, address)

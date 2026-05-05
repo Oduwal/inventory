@@ -610,19 +610,23 @@ async def merchant_return_create(
     note_text = sanitize_text(note, 400, "Note") or ""
     ref = f"MERCHANT RETURN: {merchant_name}"
     full_note = note_text if note_text else f"Goods returned to merchant: {merchant_name}"
+    # Aggregate quantities per item to handle duplicate item_ids correctly
+    qty_per_item: dict[int, int] = {}
+    for iid, qty in zip(item_ids, quantities):
+        qty_per_item[iid] = qty_per_item.get(iid, 0) + qty
     # Lock all item rows to prevent concurrent stock modifications
-    locked_item_ids = sorted({iid for iid in item_ids})
+    locked_item_ids = sorted(qty_per_item.keys())
     db.execute(select(Item).where(Item.id.in_(locked_item_ids)).order_by(Item.id.asc()).with_for_update())
-    for item_id, qty in zip(item_ids, quantities):
+    for item_id, total_qty in qty_per_item.items():
         item = db.get(Item, item_id)
         if not item or item.branch_id != branch_id:
             return redirect("/merchant-return/new?error=Invalid+item+selected")
         stock = compute_stock(db, item_id, branch_id)
-        if stock < qty:
+        if stock < total_qty:
             return redirect(f"/merchant-return/new?error={quote_plus(f'Insufficient stock for {item.name} (available: {stock})')}")
         db.add(Transaction(
             branch_id=branch_id, item_id=item_id,
-            type="OUT", quantity=qty,
+            type="OUT", quantity=total_qty,
             reference=ref, note=full_note,
         ))
     # Record expense if provided

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
-import json, csv, io, os, logging
+import json, csv, io, os, logging, html
 from app.core import *
 from app.models import *
 from app.security import *
@@ -173,11 +173,13 @@ def home(request: Request, db: Session = Depends(get_db), user: User = Depends(g
 
 
 @router.post("/admin/backfill-collections", response_class=HTMLResponse)
-def backfill_collections(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+def backfill_collections(request: Request, csrf_token: str = Form(""), db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
     """One-time: create COLLECTION entries for DELIVERED orders that have none. Scoped to caller's branch."""
+    verify_csrf_token(request, csrf_token)
     set_rls_context(db, user)
+    branch_id = get_selected_branch_id(request, user)
     delivered = db.execute(
-        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == user.branch_id)
+        select(Delivery).where(Delivery.status == "DELIVERED", Delivery.branch_id == branch_id)
     ).scalars().all()
 
     created, skipped = 0, 0
@@ -443,6 +445,260 @@ async def reset_data_execute(
     """)
 
 
+# ────────────────────────────────────────────────
+#  WIPE TRANSACTIONAL DATA (keep branches + users + items + feature_toggles)
+# ────────────────────────────────────────────────
+_WIPE_TABLES = [
+    # Children first, parents last — same FK-safe order pattern as reset_data
+    ("stock_return_vettings", None),
+    ("adjustment_request_items", None),
+    ("adjustment_requests", None),
+    ("agent_stock_assignments_nullify",
+     "UPDATE agent_stock_assignments SET transaction_out_id=NULL, transaction_in_id=NULL, delivery_id=NULL"),
+    ("agent_stock_assignments", None),
+    ("faulty_stock", None),
+    ("notifications", None),
+    ("push_subscriptions", None),
+    ("cash_entries", None),
+    ("delivery_items", None),
+    ("stock_transfer_items", None),
+    ("stock_transfers_nullify",
+     "UPDATE stock_transfers SET received_by_id=NULL, cancelled_by_id=NULL, delegated_agent_id=NULL, delegated_receiver_id=NULL"),
+    ("stock_transfers", None),
+    ("deliveries", None),
+    ("transactions", None),
+    ("call_logs", None),
+    ("wa_comments", None),
+    ("whatsapp_outbound_map", None),
+    ("wa_pending_cache", None),
+    ("voice_notes", None),
+    ("audit_logs", None),
+    ("login_failures", None),
+    ("rate_limit_hits", None),
+    ("username_history", None),
+]
+
+
+@router.get("/admin/bot-fleet", response_class=HTMLResponse)
+async def bot_fleet(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """Live status page for every WhatsApp bot in the fleet. Pings each bot's
+    /health endpoint in parallel and renders a simple status grid."""
+    import httpx, asyncio
+    try:
+        group_bot_map = json.loads(os.getenv("GROUP_BOT_MAP", "{}"))
+    except (ValueError, TypeError):
+        group_bot_map = {}
+    fallback_url = os.getenv("WHATSAPP_BOT_URL", "")
+    # Unique bot URLs across the map + the fallback
+    bot_urls = sorted({*(v for v in group_bot_map.values() if v), *( [fallback_url] if fallback_url else [])})
+    # Reverse-map URL → list of group JIDs that route to it
+    url_to_groups: dict[str, list[str]] = {u: [] for u in bot_urls}
+    for jid, url in group_bot_map.items():
+        url_to_groups.setdefault(url, []).append(jid)
+    bot_api_key = os.getenv("BOT_API_KEY", "")
+    headers = {"x-api-key": bot_api_key} if bot_api_key else {}
+
+    async def probe(url: str) -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=4) as client:
+                r = await client.get(f"{url.rstrip('/')}/health", headers=headers)
+                return {"url": url, "ok": r.status_code == 200, "code": r.status_code, "data": r.json() if r.status_code == 200 else {}}
+        except Exception as e:
+            return {"url": url, "ok": False, "code": 0, "data": {}, "err": str(e)[:100]}
+
+    results = await asyncio.gather(*(probe(u) for u in bot_urls)) if bot_urls else []
+
+    rows_html = []
+    for r in results:
+        d = r.get("data", {})
+        wa_ok = bool(d.get("waConnected"))
+        status_color = "#22c55e" if r["ok"] and wa_ok else ("#f59e0b" if r["ok"] else "#ef4444")
+        status_text = "ONLINE" if r["ok"] and wa_ok else ("DEGRADED" if r["ok"] else "OFFLINE")
+        seller_groups = d.get("sellerGroups", []) or []
+        warmed = d.get("warmedGroups", []) or []
+        warming = d.get("warmingNow", []) or []
+        routed = url_to_groups.get(r["url"], [])
+        uptime = d.get("uptimeSec", 0)
+        uptime_str = f"{uptime//3600}h {(uptime%3600)//60}m" if uptime else "—"
+        bot_phone = d.get("botPhone", "—")
+        err = r.get("err", "") if not r["ok"] else ""
+        rows_html.append(f"""
+        <div style="background:#1a2432;border-radius:8px;padding:14px 16px;margin-bottom:12px;border-left:4px solid {status_color};">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-weight:600;color:#e9edef;font-size:14px;">{html.escape(r['url'])}</div>
+                <span style="background:{status_color};color:#0b141a;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;">{status_text}</span>
+            </div>
+            <div style="font-size:12px;color:#8696a0;line-height:1.7;">
+                <div>Bot phone: <span style="color:#e9edef;">{html.escape(str(bot_phone))}</span></div>
+                <div>Uptime: <span style="color:#e9edef;">{uptime_str}</span></div>
+                <div>Seller groups configured: <span style="color:#e9edef;">{len(seller_groups)}</span> · Warmed: <span style="color:#22c55e;">{len(warmed)}</span> · Warming now: <span style="color:#f59e0b;">{len(warming)}</span></div>
+                <div>GROUP_BOT_MAP routes to this bot: <span style="color:#e9edef;">{len(routed)}</span></div>
+                {f'<div style="color:#ef4444;margin-top:4px;">Error: {html.escape(err)}</div>' if err else ''}
+            </div>
+        </div>
+        """)
+
+    body = "".join(rows_html) if rows_html else '<div style="color:#8696a0;padding:20px;text-align:center;">No bots configured. Set <code>GROUP_BOT_MAP</code> or <code>WHATSAPP_BOT_URL</code> in env.</div>'
+    return HTMLResponse(f"""
+    <!DOCTYPE html><html><head><meta charset="utf-8"><title>Bot Fleet</title>
+    <meta http-equiv="refresh" content="15">
+    <style>body{{background:#0b141a;color:#e9edef;font-family:-apple-system,sans-serif;padding:20px;max-width:900px;margin:0 auto;}}h1{{font-size:18px;margin:0 0 16px;}}code{{background:#1f2c34;padding:2px 6px;border-radius:4px;}}</style>
+    </head><body>
+    <h1>🤖 Bot Fleet — {len(bot_urls)} bot(s)</h1>
+    <div style="font-size:11px;color:#8696a0;margin-bottom:16px;">Auto-refreshes every 15s. <a href="/admin/bot-fleet" style="color:#53bdeb;">Refresh now</a></div>
+    {body}
+    </body></html>
+    """)
+
+
+@router.get("/admin/wa-debug/{delivery_id}", response_class=JSONResponse)
+def wa_debug(delivery_id: int, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    """Diagnostic dump of WhatsApp routing state for a delivery."""
+    delivery = db.execute(
+        text("SELECT id, customer_name, customer_phone, customer_whatsapp, status, created_at "
+             "FROM deliveries WHERE id = :did"),
+        {"did": delivery_id}
+    ).first()
+    outbound = db.execute(
+        text("SELECT message_id, source, group_jid, sender, created_at, "
+             "substr(body, 1, 80) AS body_preview "
+             "FROM whatsapp_outbound_map WHERE order_id = :did ORDER BY created_at DESC"),
+        {"did": delivery_id}
+    ).fetchall()
+    last10 = ((delivery.customer_phone or "").replace(" ", "").replace("-", "")[-10:]
+              if delivery else "")
+    pending = db.execute(
+        text("SELECT message_id, customer_name, customer_phone, group_jid, created_at, "
+             "substr(body, 1, 80) AS body_preview "
+             "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 20")
+    ).fetchall()
+    pending_matches = [
+        dict(p._mapping) for p in pending
+        if last10 and (p.customer_phone or "").replace(" ", "").replace("-", "")[-10:] == last10
+    ]
+    return {
+        "delivery": dict(delivery._mapping) if delivery else None,
+        "phone_last10": last10,
+        "outbound_map_rows": [dict(r._mapping) for r in outbound],
+        "pending_cache_matches": pending_matches,
+        "pending_cache_recent": [dict(p._mapping) for p in pending],
+    }
+
+
+@router.get("/admin/wipe-data", response_class=HTMLResponse)
+def wipe_data_form(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("SUPERVISOR"))):
+    set_rls_context(db, user)
+    csrf_token = get_csrf_token(request)
+    # Live row counts so the supervisor sees exactly what is about to vanish.
+    counts: dict[str, int] = {}
+    for table, sql in _WIPE_TABLES:
+        if sql is not None:
+            continue  # skip nullify pseudo-entries
+        try:
+            counts[table] = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() or 0
+        except Exception:
+            counts[table] = -1  # table missing → display as "?"
+    rows_html = "".join(
+        f'<tr><td style="padding:6px 12px;color:#8a9bc4;">{t}</td>'
+        f'<td style="padding:6px 12px;text-align:right;font-weight:600;color:{"#f87171" if c > 0 else "#475569"};">'
+        f'{c if c >= 0 else "?"}</td></tr>'
+        for t, c in counts.items()
+    )
+    return HTMLResponse(f"""
+    <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;padding:40px 20px;margin:0;">
+    <div style="max-width:520px;margin:0 auto;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:32px;">
+      <div style="text-align:center;margin-bottom:20px;">
+        <div style="font-size:48px;">🧹</div>
+        <h2 style="color:#f87171;margin:8px 0 4px;">Wipe Transactional Data</h2>
+        <p style="color:#8a9bc4;font-size:13px;margin:0;">Keeps <strong style="color:#e7eefc;">branches</strong>, <strong style="color:#e7eefc;">users</strong>, <strong style="color:#e7eefc;">items</strong>, and feature toggles. Deletes everything else.</p>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:13px;background:rgba(0,0,0,.2);border-radius:8px;overflow:hidden;">
+        <thead><tr style="background:rgba(255,255,255,.04);">
+          <th style="padding:8px 12px;text-align:left;color:#8a9bc4;font-weight:600;">Table</th>
+          <th style="padding:8px 12px;text-align:right;color:#8a9bc4;font-weight:600;">Rows</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+      <p style="color:#f87171;font-size:13px;text-align:center;margin:16px 0;">
+        ⚠ This cannot be undone. Take a database snapshot first.
+      </p>
+      <form method="post" action="/admin/wipe-data">
+        <input type="hidden" name="csrf_token" value="{csrf_token}" />
+        <input type="text" name="confirm" placeholder='Type WIPE EVERYTHING to confirm' autocomplete="off"
+               style="width:100%;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,.4);background:rgba(239,68,68,.08);color:#e7eefc;font-size:14px;margin-bottom:16px;box-sizing:border-box;" />
+        <button type="submit"
+                style="width:100%;padding:12px;background:linear-gradient(135deg,#ef4444,#dc2626);border:none;border-radius:10px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;">
+          🗑 Wipe Transactional Data
+        </button>
+      </form>
+      <a href="/supervisor" style="display:block;margin-top:16px;color:#8a9bc4;font-size:13px;text-decoration:none;text-align:center;">← Cancel</a>
+    </div></body></html>
+    """)
+
+
+@router.post("/admin/wipe-data", response_class=HTMLResponse)
+async def wipe_data_execute(
+    request: Request,
+    confirm: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("SUPERVISOR")),
+):
+    set_rls_context(db, user)
+    verify_csrf_token(request, csrf_token)
+    if confirm.strip() != "WIPE EVERYTHING":
+        return RedirectResponse(
+            "/admin/wipe-data?error=You+must+type+WIPE+EVERYTHING+exactly.",
+            status_code=303,
+        )
+
+    deleted: dict[str, int] = {}
+    # All deletes run inside a single connection-level transaction.
+    # Any exception → automatic rollback, nothing is changed.
+    with db.bind.begin() as conn:
+        for table, sql in _WIPE_TABLES:
+            try:
+                if sql is not None:
+                    conn.execute(text(sql))
+                else:
+                    res = conn.execute(text(f"DELETE FROM {table}"))
+                    deleted[table] = res.rowcount if res.rowcount is not None else 0
+            except Exception as e:
+                # Some tables (call_logs etc.) might not exist on older DBs.
+                # The original reset_data wraps these in try/except too.
+                logging.getLogger("wipe_data").warning("Skipping %s: %s", table, e)
+
+    audit_log(
+        db, user.id, "DATA_WIPE",
+        f"Transactional data wiped — {sum(deleted.values())} rows across {len(deleted)} tables. Kept: branches, users, items, feature_toggles.",
+        ip=request.client.host if request.client else "",
+    )
+
+    rows_html = "".join(
+        f'<tr><td style="padding:6px 12px;color:#8a9bc4;">{t}</td>'
+        f'<td style="padding:6px 12px;text-align:right;font-weight:600;color:#4ade80;">{c}</td></tr>'
+        for t, c in deleted.items()
+    )
+    total = sum(deleted.values())
+    return HTMLResponse(f"""
+    <html><body style="background:#080f1e;color:#e7eefc;font-family:sans-serif;padding:40px 20px;margin:0;">
+    <div style="max-width:520px;margin:0 auto;background:rgba(255,255,255,.04);border:1px solid rgba(34,197,94,.3);border-radius:16px;padding:32px;">
+      <div style="text-align:center;margin-bottom:20px;">
+        <div style="font-size:48px;">✅</div>
+        <h2 style="color:#4ade80;margin:8px 0 4px;">Wipe Complete</h2>
+        <p style="color:#8a9bc4;font-size:13px;margin:0;">Deleted <strong style="color:#e7eefc;">{total}</strong> rows. Branches, users, items, and feature toggles were kept.</p>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:13px;background:rgba(0,0,0,.2);border-radius:8px;overflow:hidden;">
+        <thead><tr style="background:rgba(255,255,255,.04);">
+          <th style="padding:8px 12px;text-align:left;color:#8a9bc4;font-weight:600;">Table</th>
+          <th style="padding:8px 12px;text-align:right;color:#8a9bc4;font-weight:600;">Deleted</th>
+        </tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+      <a href="/supervisor" style="display:block;padding:12px;background:linear-gradient(135deg,#4f7cff,#3b5bdb);border-radius:10px;color:#fff;text-decoration:none;font-weight:700;text-align:center;margin-top:8px;">Go to Dashboard</a>
+    </div></body></html>
+    """)
+
 
 @router.get("/supervisor", response_class=HTMLResponse)
 def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset: str = "", start_date: str = "", end_date: str = "", user: User = Depends(RequireRole("SUPERVISOR"))):
@@ -589,6 +845,7 @@ _ALLOWED_TOGGLES = {
     "call_status_FAILED", "call_status_RETURNED",
     "whatsapp_customer_enabled", "whatsapp_seller_enabled",
     "contact_start_hour", "contact_end_hour",
+    "seller_group_auto_order_enabled",
 }
 
 @router.get("/api/feature-toggles")

@@ -25,6 +25,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import NodeCache from 'node-cache';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,7 @@ console.log('🚀 Booting Clawbot (Baileys edition)...');
 const GROUP_JID      = process.env.WA_GROUP_ID    || '';
 const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
+const WARMED_GROUPS_FILE = path.join(AUTH_DIR, 'warmed-groups.json');
 
 // Set RESET_AUTH=true in Railway env vars to wipe session and re-scan QR.
 // Remove the env var after scanning to avoid resetting on every deploy.
@@ -269,6 +271,53 @@ async function extractCustomerInfo(text) {
 //     Python does O(1) lookup by quoted message_id — works whether the seller quoted
 //     the original post OR a bot update, since both are in whatsapp_outbound_map.
 // ─────────────────────────────────────────────
+// Warm up Signal sessions with every participant of a freshly-onboarded seller
+// group so the FIRST real message decrypts cleanly. Without this, the bot has
+// no 1:1 session with new participants → their first sender-key distribution
+// fails → that first order message is lost. assertSessions is invisible to
+// participants (no DM, no notification — protocol-level key exchange only).
+const _warmedGroups = new Set();
+const _warmingNow   = new Set();
+try {
+    if (fs.existsSync(WARMED_GROUPS_FILE)) {
+        for (const j of JSON.parse(fs.readFileSync(WARMED_GROUPS_FILE, 'utf8'))) {
+            _warmedGroups.add(j);
+        }
+    }
+} catch (_) {}
+
+function persistWarmedGroups() {
+    try {
+        fs.writeFileSync(WARMED_GROUPS_FILE, JSON.stringify([..._warmedGroups]));
+    } catch (e) {
+        console.log('⚠️  Could not persist warmed-groups file:', e.message);
+    }
+}
+
+async function warmUpGroup(jid) {
+    if (_warmedGroups.has(jid) || _warmingNow.has(jid)) return;
+    _warmingNow.add(jid);
+    try {
+        console.log(`🔥 Warming up sessions for new seller group: ${jid}`);
+        const meta = await sock.groupMetadata(jid);
+        const participants = (meta?.participants || []).map(p => p.id).filter(Boolean);
+        if (!participants.length) {
+            console.log(`⚠️  No participants found for ${jid} — skipping warm-up`);
+            return;
+        }
+        // assertSessions establishes 1:1 Signal sessions in batches.
+        // Baileys handles concurrency internally; we just await the call.
+        await sock.assertSessions(participants, true);
+        _warmedGroups.add(jid);
+        persistWarmedGroups();
+        console.log(`✅ Warm-up complete for ${jid} (${participants.length} participants)`);
+    } catch (e) {
+        console.log(`⚠️  Warm-up failed for ${jid}: ${e.message}`);
+    } finally {
+        _warmingNow.delete(jid);
+    }
+}
+
 async function handleInbound(msg) {
     const jid = msg.key.remoteJid || '';
 
@@ -284,6 +333,12 @@ async function handleInbound(msg) {
             console.log(`🆕 NEW GROUP DETECTED: ${jid} — add to WA_SELLER_GROUPS env var if this is a seller group`);
         }
         return;
+    }
+
+    // First time we see this seller group, kick off a session warm-up in the
+    // background so subsequent messages decrypt without retry-recovery delays.
+    if (!_warmedGroups.has(jid) && !_warmingNow.has(jid)) {
+        warmUpGroup(jid);  // intentionally not awaited — runs in background
     }
     if (msg.key.fromMe) {
         console.log(`⏭️ Skipping own message (fromMe=true)`);
@@ -348,13 +403,34 @@ async function handleInbound(msg) {
         return;
     }
 
+    const senderName = msg.pushName || contactNames.get(sender) || '';
+
+    // Forward fresh group messages to /api/whatsapp-webhook so the Python
+    // app can auto-create orders from well-formed posts. Gated on the Python
+    // side by SELLER_GROUP_BRANCH_MAP + the supervisor toggle.
+    axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
+        quoted_message_id:   '',
+        quoted_message_body: '',
+        reply_text:          text,
+        sender_phone:        sender,
+        sender_name:         senderName,
+        groupJid:            jid,
+        message_id:          msgId,
+        audio_b64:           '',
+        audio_mime:          '',
+    }, {
+        timeout: 30000,
+        headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+    }).catch(e => console.log('⚠️  Fresh-message webhook POST failed:', e.message));
+
+    // Keep the existing cache-wa-message path so dashboard-created orders
+    // can still be matched against incoming group posts.
     const info = await extractCustomerInfo(text);
     if (!info.customer_name && !info.customer_phone) {
         console.log(`📭 No customer info found — skipping cache`);
         return;
     }
     console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
-    const senderName = msg.pushName || contactNames.get(sender) || '';
     axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
         message_id:      msgId,
         body:            text,
@@ -378,6 +454,13 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version }          = await fetchLatestBaileysVersion();
 
+    // In-memory message store so getMessage() can return originals for retries.
+    // LID groups need this — without it, Baileys can't recover from "No session
+    // found to decrypt message" failures.
+    const recentMessages = new NodeCache({ stdTTL: 600, useClones: false });
+    const msgRetryCounterCache = new NodeCache({ stdTTL: 60, useClones: false });
+    const placeholderResendCache = new NodeCache({ stdTTL: 60, useClones: false });
+
     sock = makeWASocket({
         version,
         auth: {
@@ -389,6 +472,42 @@ async function connectToWhatsApp() {
         browser:           Browsers.ubuntu('Chrome'),
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
+        // Recovery path for LID-mode group decryption failures. When a retry
+        // exceeds count 1 and enableAutoSessionRecreation is on, Baileys deletes
+        // the broken Signal session and forces a fresh key exchange — fixing
+        // "No session found to decrypt message" without a manual re-pair.
+        enableAutoSessionRecreation: true,
+        enableRecentMessageCache: true,
+        msgRetryCounterCache,
+        placeholderResendCache,
+        maxMsgRetryCount: 5,
+        retryRequestDelayMs: 250,
+        getMessage: async (key) => {
+            const cached = recentMessages.get(`${key.remoteJid}:${key.id}`);
+            return cached || { conversation: '' };
+        },
+    });
+
+    // Cache outgoing/incoming message bodies so getMessage can serve retries.
+    sock.ev.on('messages.upsert', ({ messages }) => {
+        for (const m of messages) {
+            if (m.key?.id && m.message) {
+                recentMessages.set(`${m.key.remoteJid}:${m.key.id}`, m.message);
+            }
+            // Harvest LID↔PN mappings — workaround for issue #2263 where
+            // lid-mapping.update doesn't fire reliably in 7.0.0-rc.9.
+            const p  = m.key?.participant;
+            const pa = m.key?.participantAlt;
+            if (p && pa && sock.signalRepository?.lidMapping) {
+                try {
+                    if (p.endsWith('@lid') && pa.endsWith('@s.whatsapp.net')) {
+                        sock.signalRepository.lidMapping.storeLIDPNMapping(p, pa);
+                    } else if (p.endsWith('@s.whatsapp.net') && pa.endsWith('@lid')) {
+                        sock.signalRepository.lidMapping.storeLIDPNMapping(pa, p);
+                    }
+                } catch (_) {}
+            }
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -427,6 +546,15 @@ async function connectToWhatsApp() {
             clientReady = true;
             latestQrUrl = null;
             console.log('✅ CLAWBOT IS ONLINE AND LOCKED ONTO YOUR GROUP!');
+            // Pre-warm sessions for every configured seller group in parallel
+            // so the FIRST message after a fresh deploy / new-group add decrypts
+            // cleanly. Already-warmed groups are skipped via the persisted set.
+            const groupsToWarm = [...SELLER_GROUPS].filter(j => !_warmedGroups.has(j));
+            if (groupsToWarm.length > 0) {
+                console.log(`🔥 Pre-warming ${groupsToWarm.length} seller group(s) on connect...`);
+                Promise.all(groupsToWarm.map(j => warmUpGroup(j)))
+                    .catch(e => console.log('⚠️  Pre-warm batch error:', e.message));
+            }
         }
     });
 
@@ -533,9 +661,19 @@ img{border:12px solid #fff;border-radius:12px;}</style></head>
 <img src="${latestQrUrl}" alt="QR Code"/></body></html>`);
 });
 
-// Health check
+// Health check — used by the Python dashboard to monitor a fleet of bots.
+const _bootedAt = Date.now();
 app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', waConnected: clientReady });
+    res.json({
+        status: clientReady ? 'ok' : 'degraded',
+        waConnected: clientReady,
+        botPhone: process.env.BOT_PHONE || '',
+        sellerGroups: [...SELLER_GROUPS],
+        warmedGroups: [..._warmedGroups],
+        warmingNow: [..._warmingNow],
+        uptimeSec: Math.floor((Date.now() - _bootedAt) / 1000),
+        version: '2.0.0',
+    });
 });
 
 /**

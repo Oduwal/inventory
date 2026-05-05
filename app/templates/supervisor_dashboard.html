@@ -121,6 +121,21 @@
       </div>
     </div>
 
+    <!-- Auto-create orders from WhatsApp groups -->
+    <div>
+      <div class="feature-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="tog-auto-order" {% if toggles.get('seller_group_auto_order_enabled', False) %}checked{% endif %}
+                 onchange="toggleFeature('seller_group_auto_order_enabled', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <div>
+          <div class="feature-label">🤖 Auto-Create Orders</div>
+          <div class="feature-desc">Parse complete orders posted in mapped seller groups and create deliveries automatically</div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- Contact Hours -->
