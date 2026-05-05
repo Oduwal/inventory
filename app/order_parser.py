@@ -20,10 +20,20 @@ SYSTEM_INSTRUCTION = (
 def _build_prompt(text: str, items_catalog) -> str:
     # Catalog prices are intentionally NOT included in the prompt.
     # Pricing is set per-order in the WhatsApp message body, not on the SKU.
-    catalog = "\n".join(f"{i.id}|{i.name}" for i in items_catalog)
+    # Aliases give Gemini synonyms sellers might use for the same item.
+    catalog = "\n".join(
+        f"{i.id}|{i.name}|{(i.aliases or '').strip()}" for i in items_catalog
+    )
     return (
         "Parse this Nigerian order message into JSON.\n\n"
-        f"Available items (id|name):\n{catalog}\n\n"
+        f"Available items (id|name|aliases):\n{catalog}\n\n"
+        "MATCHING RULE: A product line in the message matches an item if "
+        "either the catalog name OR any comma-separated alias substring "
+        "appears in the seller's product description (case-insensitive). "
+        "If 'aliases' is empty, only the name is used. "
+        "If a single phrase like 'female tea set' matches aliases on TWO "
+        "different items, include BOTH items in the order (qty=1 each unless "
+        "stated). Set matched=true and use the catalog id.\n\n"
         "PRICING CONVENTION — read carefully:\n"
         "- Prices come ONLY from the message body. Never invent a price.\n"
         "- A product line may list ONE number after the qty/product or TWO "

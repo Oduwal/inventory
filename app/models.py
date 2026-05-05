@@ -93,6 +93,7 @@ class Item(Base):
     reorder_level: Mapped[int]        = mapped_column(Integer, default=0, nullable=False)
     cost_price:    Mapped[float]      = mapped_column(Numeric(12, 2), default=0, nullable=False)
     selling_price: Mapped[float]      = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    aliases:       Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at:    Mapped[datetime]   = mapped_column(DateTime, default=_utcnow, nullable=False)
     updated_at:    Mapped[datetime]   = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow, nullable=False

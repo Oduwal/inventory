@@ -266,7 +266,7 @@ def parse_order_form(request: Request, branch_id: int = 0, db: Session = Depends
     items = [it for it, _ in _items_with_stock]
     csrf_token = get_csrf_token(request)
     form_token = generate_form_token(request)
-    items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": it.selling_price or 0, "stock": int(stk)} for it, stk in _items_with_stock]
+    items_json = [{"id": it.id, "name": it.name, "category": it.category or "", "unit": it.unit or "pcs", "price": it.selling_price or 0, "stock": int(stk), "aliases": (it.aliases or "")} for it, stk in _items_with_stock]
     return tpl(request, "parse_order.html", {
         "request": request, "user": user, "active": "parse_order",
         "agents": agents, "items": items,

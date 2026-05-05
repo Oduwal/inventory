@@ -110,6 +110,7 @@ async def item_create(
     reorder_level: int = Form(0),
     cost_price: float = Form(0),
     selling_price: float = Form(0),
+    aliases: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
     user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
@@ -129,6 +130,7 @@ async def item_create(
         reorder_level=int(reorder_level or 0),
         cost_price=float(cost_price or 0),
         selling_price=float(selling_price or 0),
+        aliases=sanitize_text(aliases, 500, "Aliases") or None,
     ))
     db.commit()
     return redirect("/items")
@@ -250,6 +252,7 @@ async def item_edit_save(
     reorder_level: int = Form(0),
     cost_price: float = Form(0),
     selling_price: float = Form(0),
+    aliases: str = Form(""),
     adjust_type: str = Form(""),
     adjust_qty: int = Form(0),
     adjust_note: str = Form(""),
@@ -269,6 +272,7 @@ async def item_edit_save(
     item.reorder_level = int(reorder_level or 0)
     item.cost_price = float(cost_price or 0)
     item.selling_price = float(selling_price or 0)
+    item.aliases = sanitize_text(aliases, 500, "Aliases") or None
     at = (adjust_type or "").strip().upper()
     aq = int(adjust_qty or 0)
     if aq < 0:

@@ -193,13 +193,16 @@ async function parseOrders() {
   document.getElementById('orders-wrap').style.display = 'none';
 
   // Catalog prices intentionally NOT sent to Gemini — pricing is set per-order
-  // in the WhatsApp message body, not on the SKU.
-  const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}`).join('\n');
+  // in the WhatsApp message body, not on the SKU. Aliases are alternate names
+  // sellers might use for the same item (comma-separated).
+  const catalog = ITEMS.map(i => `${i.id}|${i.name}|${i.category}|${i.unit}|${(i.aliases||'').replace(/\|/g,'/')}`).join('\n');
 
   const prompt = `You are an order parser for a Nigerian logistics business. A WhatsApp message may contain MULTIPLE separate customer orders. Extract each order separately.
 
-PRODUCT CATALOG (id|name|category|unit):
+PRODUCT CATALOG (id|name|category|unit|aliases):
 ${catalog}
+
+MATCHING: A product line matches a catalog item if either the name OR any comma-separated alias appears in the seller's product description (case-insensitive). If a single phrase like "female tea set" matches aliases on TWO different items, include BOTH items (qty=1 each unless stated). When aliases is empty, only the name is used.
 
 WHATSAPP MESSAGE:
 ${text}
