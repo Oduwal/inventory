@@ -18,16 +18,31 @@ SYSTEM_INSTRUCTION = (
 
 
 def _build_prompt(text: str, items_catalog) -> str:
-    catalog = "\n".join(
-        f"{i.id}|{i.name}|{float(i.selling_price or 0)}" for i in items_catalog
-    )
+    # Catalog prices are intentionally NOT included in the prompt.
+    # Pricing is set per-order in the WhatsApp message body, not on the SKU.
+    catalog = "\n".join(f"{i.id}|{i.name}" for i in items_catalog)
     return (
         "Parse this Nigerian order message into JSON.\n\n"
-        f"Available items (id|name|unit_price):\n{catalog}\n\n"
+        f"Available items (id|name):\n{catalog}\n\n"
+        "PRICING CONVENTION — read carefully:\n"
+        "- Prices come ONLY from the message body. Never invent a price.\n"
+        "- A product line may list ONE number after the qty/product or TWO "
+        "numbers separated by a comma or space.\n"
+        "- ONE number → that number is the LINE TOTAL for the whole line. "
+        "Compute unit_price = line_total / quantity. "
+        "Example: 'zudes 5, 10000' → quantity=5, line_total=10000, "
+        "unit_price=2000.\n"
+        "- TWO numbers → the FIRST is unit_price, the SECOND is line_total. "
+        "Example: 'zudes 5, 2000, 10000' → quantity=5, unit_price=2000, "
+        "line_total=10000.\n"
+        "- Numbers near labels like 'Total order value', 'Amount to collect', "
+        "'Grand total' belong in total_price, NOT inside any item line.\n"
+        "- If a line has no price at all, leave unit_price=0 and line_total=0.\n\n"
         "Return JSON with: customer_name, customer_phone, customer_whatsapp, "
         "address, note, total_price, items[{item_id,item_name,quantity,"
-        "unit_price,matched}], unmatched_items[], confidence "
-        "(\"high\"|\"medium\"|\"low\").\n\n"
+        "unit_price,line_total,matched}], unmatched_items[], confidence "
+        "(\"high\"|\"medium\"|\"low\"). line_total must equal "
+        "unit_price * quantity exactly.\n\n"
         f"Message:\n\"\"\"{text}\"\"\""
     )
 

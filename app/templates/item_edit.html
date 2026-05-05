@@ -37,14 +37,8 @@
         <label>Reorder Level</label>
         <input name="reorder_level" type="number" min="0" value="{{ item.reorder_level or 0 }}" />
       </div>
-      <div>
-        <label>Cost Price (₦)</label>
-        <input name="cost_price" type="number" step="0.01" min="0" value="{{ item.cost_price or 0 }}" />
-      </div>
-      <div>
-        <label>Selling Price (₦)</label>
-        <input name="selling_price" type="number" step="0.01" min="0" value="{{ item.selling_price or 0 }}" />
-      </div>
+      <input type="hidden" name="cost_price" value="{{ item.cost_price or 0 }}">
+      <input type="hidden" name="selling_price" value="{{ item.selling_price or 0 }}">
     </div>
 
     <!-- Stock adjustment -->

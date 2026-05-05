@@ -106,8 +106,6 @@
           <th>Unit</th>
           <th style="text-align:right;">Total Stock</th>
           <th>Branch Breakdown</th>
-          <th style="text-align:right;">Cost</th>
-          <th style="text-align:right;">Price</th>
         </tr>
       </thead>
       <tbody>
@@ -148,12 +146,10 @@
               {% endfor %}
             </div>
           </td>
-          <td style="text-align:right;color:var(--muted);">₦{{ '%.0f'|format(r.cost_price|float) }}</td>
-          <td style="text-align:right;font-weight:600;">₦{{ '%.0f'|format(r.selling_price|float) }}</td>
         </tr>
         {% endfor %}
         {% else %}
-        <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No items found.</td></tr>
+        <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">No items found.</td></tr>
         {% endif %}
       </tbody>
     </table>
@@ -169,8 +165,6 @@
           <th>Unit</th>
           <th style="text-align:right;">Stock</th>
           <th style="text-align:right;">Reorder</th>
-          <th style="text-align:right;">Cost</th>
-          <th style="text-align:right;">Price</th>
           <th></th>
         </tr>
       </thead>
@@ -207,8 +201,6 @@
             {% endif %}
           </td>
           <td style="text-align:right;color:var(--muted);">{{ item.reorder_level or 0 }}</td>
-          <td style="text-align:right;color:var(--muted);">₦{{ '%.0f'|format(item.cost_price|float) }}</td>
-          <td style="text-align:right;font-weight:600;">₦{{ '%.0f'|format(item.selling_price|float) }}</td>
           <td style="white-space:nowrap;">
             <a class="btnGhost" href="/items/{{ item.id }}" style="padding:6px 12px;font-size:12px;">View</a>
             {% if user and user.role == "ADMIN" %}

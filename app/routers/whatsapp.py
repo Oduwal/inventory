@@ -173,35 +173,49 @@ async def _try_auto_create_order_from_group(
     db.add(delivery)
     db.flush()
 
-    # Distribute the parsed total across lines proportionally to line quantity
-    # when individual unit_prices are zero (catalog has no fixed prices —
-    # supervisor sets price per order in the message body).
+    # Prices come from the message body only — items in the catalog have no
+    # fixed prices. Trust the parser's line_total when present, otherwise
+    # fall back to unit_price × quantity, otherwise distribute the parsed
+    # total across lines proportionally to quantity.
     line_qtys = [max(1, int(it.get("quantity", 1))) for it in items]
-    line_units = [float(it.get("unit_price", 0) or 0) for it in items]
-    has_unit_prices = any(u > 0 for u in line_units)
-    try:
-        parsed_total = float(parsed.get("total_price") or 0)
-    except (TypeError, ValueError):
-        parsed_total = 0.0
 
-    line_amounts: list[float] = []
-    if has_unit_prices:
-        # Trust per-line unit prices when the parser provided them.
-        line_amounts = [u * q for u, q in zip(line_units, line_qtys)]
-    elif parsed_total > 0 and line_qtys:
-        # Split the order total across lines weighted by quantity.
-        total_qty = sum(line_qtys)
-        running = 0.0
-        for idx, q in enumerate(line_qtys):
-            if idx == len(line_qtys) - 1:
-                # Last line absorbs rounding so the sum matches parsed_total exactly.
-                line_amounts.append(round(parsed_total - running, 2))
-            else:
-                share = round(parsed_total * (q / total_qty), 2)
-                line_amounts.append(share)
-                running += share
-    else:
-        line_amounts = [0.0] * len(items)
+    def _line_total(it, qty):
+        lt = it.get("line_total")
+        if lt is not None:
+            try:
+                v = float(lt)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+        try:
+            up = float(it.get("unit_price") or 0)
+            if up > 0:
+                return up * qty
+        except (TypeError, ValueError):
+            pass
+        return 0.0
+
+    line_amounts = [_line_total(it, q) for it, q in zip(items, line_qtys)]
+
+    # If parser left every line at zero but gave us an order total, split it
+    # across lines weighted by quantity.
+    if not any(a > 0 for a in line_amounts):
+        try:
+            parsed_total = float(parsed.get("total_price") or 0)
+        except (TypeError, ValueError):
+            parsed_total = 0.0
+        if parsed_total > 0 and line_qtys:
+            total_qty = sum(line_qtys)
+            running = 0.0
+            line_amounts = []
+            for idx, q in enumerate(line_qtys):
+                if idx == len(line_qtys) - 1:
+                    line_amounts.append(round(parsed_total - running, 2))
+                else:
+                    share = round(parsed_total * (q / total_qty), 2)
+                    line_amounts.append(share)
+                    running += share
 
     for it, qty, amt in zip(items, line_qtys, line_amounts):
         db.add(DeliveryItem(
