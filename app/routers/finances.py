@@ -5,7 +5,19 @@ from sqlalchemy import text, func
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 import json, csv, io, os, logging
+from decimal import Decimal
 from urllib.parse import quote_plus
+
+
+def _to_jsonable(obj):
+    """Recursively convert Decimal → float so JSONResponse can serialize."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
 from app.core import *
 from app.models import *
 from app.security import *
@@ -382,7 +394,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     total_expenses = total_agent_exp + office_total
     remittance = grand_total - expenses_from_collections if is_agent(user) else grand_total - total_expenses
     title = d1.strftime("%A %d %B %Y").upper() if d1 == d2 else f"{d1.isoformat()} TO {d2.isoformat()}"
-    return JSONResponse({
+    return JSONResponse(_to_jsonable({
         "title": title, "delivery_count": len(deliveries), "deliveries": delivery_rows,
         "grand_total": grand_total, "agent_op_summary": agent_op_summary,
         "total_op_cash_given": total_op_cash_given,
@@ -393,7 +405,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         "other_office_expenses": office_total - waybill_total,
         "total_office_expenses": office_total, "total_expenses": total_expenses,
         "remittance": remittance, "is_agent": is_agent(user),
-    })
+    }))
 
 
 @router.get("/reports/txt", response_class=PlainTextResponse)

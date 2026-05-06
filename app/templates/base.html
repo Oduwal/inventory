@@ -713,6 +713,13 @@ function dismissBanner(){banner.style.display='none';sessionStorage.setItem('pwa
 window.addEventListener('appinstalled',()=>{banner.style.display='none';deferredPrompt=null;});
 if(navigator.serviceWorker){navigator.serviceWorker.register("/sw.js",{scope:"/"}).then(reg=>{reg.update();console.log("SW registered, checking for updates");}).catch(e=>console.log("SW error",e));}
 function _urlB64ToUint8(b){const p='='.repeat((4-b.length%4)%4);const s=atob((b+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...s].map(c=>c.charCodeAt(0)));}
+// Force a fresh page render when the user navigates back via the browser's
+// back/forward cache. Without this, list pages restored from bfcache may show
+// the state they had at unload (e.g. an "empty" placeholder if the data hadn't
+// finished loading), not the current server state.
+window.addEventListener('pageshow', function(e) {
+  if (e.persisted) { window.location.reload(); }
+});
 </script>
 <style>
   #notif-panel { background: var(--bg) !important; }
