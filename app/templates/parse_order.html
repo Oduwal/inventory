@@ -298,9 +298,9 @@ function renderOrders(orders) {
         ${agentField}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
           <div><label>Customer Name *</label><input type="text" name="customer_name" value="${escHtml(order.customer_name||'')}" required placeholder="Full name" style="margin-top:4px;" /></div>
-          <div><label>Call Number</label><input type="text" name="customer_phone" value="${escHtml(order.customer_phone||'')}" placeholder="08012345678" style="margin-top:4px;" /></div>
+          <div><label>Call Number</label><input type="tel" inputmode="tel" name="customer_phone" value="${escHtml(order.customer_phone||'')}" placeholder="08012345678" style="margin-top:4px;" /></div>
         </div>
-        <div style="margin-bottom:10px;"><label>WhatsApp Number</label><input type="text" name="customer_whatsapp" value="${escHtml(order.customer_whatsapp||'')}" placeholder="Leave blank if same as call number" style="margin-top:4px;" /></div>
+        <div style="margin-bottom:10px;"><label>WhatsApp Number</label><input type="tel" inputmode="tel" name="customer_whatsapp" value="${escHtml(order.customer_whatsapp||'')}" placeholder="Leave blank if same as call number" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Delivery Address</label><input type="text" name="address" value="${escHtml(order.address||'')}" placeholder="Street, area, city" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Note</label><input type="text" name="note" value="${escHtml(order.note||'')}" placeholder="Extra instructions" style="margin-top:4px;" /></div>
         <div style="margin-bottom:10px;"><label>Delivery Date</label><input type="date" name="delivery_date" value="${TODAY}" style="margin-top:4px;" /></div>

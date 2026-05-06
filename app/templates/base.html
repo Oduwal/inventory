@@ -349,6 +349,79 @@
     .cele-sparkle:nth-child(4){background:#8b5cf6;bottom:20%;right:15%;animation:confettiBurst 1s 0.7s ease both;}
     .cele-sparkle:nth-child(5){background:#ef4444;top:40%;left:8%;animation:confettiBurst 1.2s 0.45s ease both;}
     .cele-sparkle:nth-child(6){background:#14b8a6;top:35%;right:10%;animation:confettiBurst 1.2s 0.55s ease both;}
+
+    /* ──────────────────────────────────────────────────────────────────
+       MOBILE PHASE 1 — purely additive, kicks in only on small screens.
+       Goal: fix the most common phone-breaking patterns without touching
+       any existing rule. Each block is scoped to a media query so desktop
+       layout is unchanged.
+       ────────────────────────────────────────────────────────────────── */
+
+    /* Long unbreakable strings (addresses, phones, JIDs) wrap properly */
+    @media (max-width:600px) {
+      .card, td, .badge, h1, h2, h3, p { word-break: break-word; overflow-wrap: anywhere; }
+    }
+
+    /* KPI grids that hard-code repeat(N,1fr) collapse gracefully on phones */
+    @media (max-width:768px) {
+      [style*="grid-template-columns:repeat(5"],
+      [style*="grid-template-columns:repeat(4"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      }
+    }
+    @media (max-width:420px) {
+      [style*="grid-template-columns:repeat(5"],
+      [style*="grid-template-columns:repeat(4"],
+      [style*="grid-template-columns:repeat(3"] {
+        grid-template-columns: 1fr !important;
+      }
+    }
+
+    /* Tables that overflow horizontally — let users scroll laterally and
+       hint that there's more content. Wrapper-less tables become block-level
+       scrollers themselves. */
+    @media (max-width:600px) {
+      .card > table,
+      .card table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        white-space: nowrap;
+      }
+    }
+
+    /* Modals: never wider than the viewport minus a 16px gutter */
+    @media (max-width:480px) {
+      .modal,
+      .modal-content,
+      [role="dialog"] {
+        max-width: calc(100vw - 32px) !important;
+        margin: 16px auto !important;
+      }
+    }
+
+    /* Notification panel: shrink dynamically on narrow phones */
+    @media (max-width:380px) {
+      #notif-panel { width: calc(100vw - 32px) !important; max-width: none !important; }
+    }
+
+    /* Touch targets: ensure action buttons in tight rows have a sane min
+       tap height (44px is Apple's HIG / Google's Material guideline). */
+    @media (max-width:480px) {
+      .btnPrimary, .btnGhost, button.btnPrimary, button.btnGhost {
+        min-height: 38px;
+      }
+    }
+
+    /* Inputs and dropdowns inside crowded grids: let them shrink to 100% */
+    @media (max-width:480px) {
+      input[type="text"], input[type="tel"], input[type="number"],
+      input[type="email"], input[type="search"], input[type="password"],
+      select, textarea {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+    }
   </style>
 </head>
 <body>

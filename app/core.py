@@ -663,6 +663,7 @@ def ensure_schema() -> None:
         _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_username_history_user ON username_history (user_id)")
         _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS aliases VARCHAR(500) NULL")
+        _ddl(conn, "ALTER TABLE items ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")
         _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP NULL")
         _ddl(conn, "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS branch_id INTEGER NULL")

@@ -62,7 +62,7 @@ async def parse_order_text(text: str, db, branch_id: int) -> dict | None:
     if not api_key:
         return None
     items = db.execute(
-        select(Item).where(Item.branch_id == branch_id).order_by(Item.name.asc())
+        select(Item).where(Item.branch_id == branch_id, Item.is_active == True).order_by(Item.name.asc())
     ).scalars().all()
     if not items:
         return None

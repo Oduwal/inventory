@@ -29,7 +29,7 @@ def stock_subquery(branch_id: int | None = None):
     return stmt.group_by(Transaction.item_id).subquery()
 
 
-def get_items_with_stock(db: Session, branch_id: int | None = None, limit: int = 5000):
+def get_items_with_stock(db: Session, branch_id: int | None = None, limit: int = 5000, include_inactive: bool = False):
     sq = stock_subquery(branch_id)
     stmt = (
         select(Item, func.coalesce(sq.c.stock, 0).label("stock"))
@@ -39,6 +39,8 @@ def get_items_with_stock(db: Session, branch_id: int | None = None, limit: int =
     )
     if branch_id is not None:
         stmt = stmt.where(Item.branch_id == branch_id)
+    if not include_inactive:
+        stmt = stmt.where(Item.is_active == True)
     return db.execute(stmt).all()
 
 

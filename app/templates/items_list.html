@@ -203,8 +203,12 @@
           <td style="text-align:right;color:var(--muted);">{{ item.reorder_level or 0 }}</td>
           <td style="white-space:nowrap;">
             <a class="btnGhost" href="/items/{{ item.id }}" style="padding:6px 12px;font-size:12px;">View</a>
-            {% if user and user.role == "ADMIN" %}
+            {% if user and user.role in ["ADMIN", "SUPERVISOR"] %}
             <a class="btnGhost" href="/items/{{ item.id }}/edit" style="padding:6px 12px;font-size:12px;">Edit</a>
+            <form method="post" action="/items/{{ item.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete {{ item.name|e }}? If this item has past deliveries it will be marked inactive instead of removed.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btnGhost" style="padding:6px 10px;font-size:12px;color:#ef4444;border-color:rgba(239,68,68,.4);">Delete</button>
+            </form>
             {% endif %}
           </td>
         </tr>

@@ -87,6 +87,7 @@ def items_list(request: Request, q: str = "", view: str = "combined", branch_fil
         "request": request, "rows": rows, "q": q, "user": user, "active": "items", "faulty_counts": faulty_counts,
         "view": view, "branches": branches, "branch_filter": branch_filter,
         "has_test_stock": has_test_stock,
+        "csrf_token": get_csrf_token(request),
     })
 
 
@@ -293,6 +294,51 @@ async def item_edit_save(
         ))
     db.commit()
     return redirect(f"/items/{item_id}")
+
+
+@router.post("/items/{item_id}/delete")
+async def item_delete(
+    request: Request,
+    item_id: int,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
+    item: Item = Depends(get_authorized_item),
+):
+    """Delete an item. Hard-deletes if it has no history; otherwise soft-deletes
+    (is_active=False) so historical deliveries / transactions / transfers stay
+    intact. Used to clean up duplicate items."""
+    set_rls_context(db, user)
+    verify_csrf_token(request, csrf_token)
+
+    # Check every FK reference in one go.
+    refs = db.execute(text("""
+        SELECT
+          (SELECT COUNT(*) FROM delivery_items WHERE item_id = :iid) AS deliveries,
+          (SELECT COUNT(*) FROM transactions WHERE item_id = :iid) AS txns,
+          (SELECT COUNT(*) FROM stock_transfer_items WHERE item_id = :iid) AS transfers,
+          (SELECT COUNT(*) FROM agent_stock_assignments WHERE item_id = :iid) AS assignments
+    """), {"iid": item_id}).first()
+    has_history = any(refs) if refs else False
+
+    if has_history:
+        item.is_active = False
+        db.commit()
+        try:
+            audit_log(db, user.id, "ITEM_SOFT_DELETE",
+                      f"Item #{item_id} '{item.name}' marked inactive (had history: deliveries={refs.deliveries}, txns={refs.txns}, transfers={refs.transfers}, assignments={refs.assignments})")
+        except Exception:
+            pass
+        return redirect("/items?msg=Item+marked+inactive+(history+preserved)")
+    else:
+        name = item.name
+        db.delete(item)
+        db.commit()
+        try:
+            audit_log(db, user.id, "ITEM_DELETE", f"Item #{item_id} '{name}' hard-deleted")
+        except Exception:
+            pass
+        return redirect("/items?msg=Item+deleted")
 
 
 # ────────────────────────────────────────────────
