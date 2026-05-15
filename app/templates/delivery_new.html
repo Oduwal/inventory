@@ -72,6 +72,25 @@
         <input name="address" placeholder="Optional" />
       </div>
 
+      <div>
+        <label>Sub-zone</label>
+        {% if sub_zones and sub_zones|length > 0 %}
+        <select name="sub_zone_id">
+          <option value="">— Unassigned —</option>
+          {% for z in sub_zones %}
+          <option value="{{ z.id }}">{{ z.name }} ({{ z.code }})</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input disabled value="No zones defined" style="opacity:.6;cursor:not-allowed;" />
+        {% if user.role == "ADMIN" and user.branch_id %}
+        <small style="color:#888;display:block;margin-top:2px;">
+          <a href="/branches/{{ user.branch_id }}/sub-zones">Create zones</a> to group orders by delivery area.
+        </small>
+        {% endif %}
+        {% endif %}
+      </div>
+
       <div style="grid-column:1/-1;">
         <label>Note</label>
         <input name="note" placeholder="Optional instructions" />

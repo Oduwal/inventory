@@ -122,6 +122,21 @@
             </div>
             {% endif %}
 
+            {% if sub_zones and sub_zones|length > 0 %}
+            <div>
+                <label>Sub-zone</label>
+                <select name="sub_zone_id">
+                    <option value="" {% if not sub_zone_filter %}selected{% endif %}>All</option>
+                    <option value="unassigned" {% if sub_zone_filter == "unassigned" %}selected{% endif %}>— Unassigned —</option>
+                    {% for z in sub_zones %}
+                    <option value="{{ z.id }}" {% if sub_zone_filter == z.id|string %}selected{% endif %}>
+                        {{ z.name }} ({{ z.code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
             <div>
                 <button class="btnPrimary" type="submit">Apply</button>
             </div>
@@ -158,6 +173,7 @@
                     <th>Phone</th>
                     <th>Address</th>
                     <th>Agent</th>
+                    {% if sub_zones and sub_zones|length > 0 %}<th>Zone</th>{% endif %}
                     <th>Items</th>
                     <th>Status</th>
                     <th>Created</th>
@@ -198,6 +214,24 @@
                     <td>{{ d.address or "-" }}</td>
                     <td>{{ agent_names.get(d.agent_id, d.agent_id) if d.agent_id else "—" }}</td>
 
+                    {% if sub_zones and sub_zones|length > 0 %}
+                    <td onclick="event.stopPropagation()">
+                      {% if d.sub_zone_id and sub_zone_names.get(d.sub_zone_id) %}
+                        <span style="font-size:12px;color:#7fa8ff;">{{ sub_zone_names.get(d.sub_zone_id) }}</span>
+                      {% else %}
+                        <form method="post" action="/deliveries/{{ d.id }}/set-zone" style="display:inline;">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <select name="sub_zone_id" onchange="this.form.submit()" style="font-size:11px;padding:2px 4px;">
+                            <option value="">— Set zone —</option>
+                            {% for z in sub_zones %}
+                            <option value="{{ z.id }}">{{ z.name }}</option>
+                            {% endfor %}
+                          </select>
+                        </form>
+                      {% endif %}
+                    </td>
+                    {% endif %}
+
                     <td style="max-width:340px;">
                         {% set s = items_summary.get(d.id, "") %}
                         {% if s %}
@@ -236,7 +270,7 @@
                 </tr>
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="9" class="muted">No deliveries found.</td></tr>
+                <tr><td colspan="{% if sub_zones and sub_zones|length > 0 %}10{% else %}9{% endif %}" class="muted">No deliveries found.</td></tr>
                 {% endif %}
             </tbody>
         </table>

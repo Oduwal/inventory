@@ -40,11 +40,34 @@ class Branch(Base):
     deliveries:    Mapped[list["Delivery"]]     = relationship(back_populates="branch")
     transactions:  Mapped[list["Transaction"]]  = relationship(back_populates="branch")
     cash_entries:  Mapped[list["CashEntry"]]    = relationship(back_populates="branch")
+    sub_zones:     Mapped[list["SubZone"]]      = relationship(back_populates="branch")
     transfers_out: Mapped[list["StockTransfer"]] = relationship(
         back_populates="from_branch", foreign_keys="StockTransfer.from_branch_id"
     )
     transfers_in:  Mapped[list["StockTransfer"]] = relationship(
         back_populates="to_branch", foreign_keys="StockTransfer.to_branch_id"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUB-ZONE (delivery zone under a branch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SubZone(Base):
+    __tablename__ = "sub_zones"
+
+    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    branch_id:  Mapped[int]      = mapped_column(ForeignKey("branches.id"), nullable=False)
+    name:       Mapped[str]      = mapped_column(String(80), nullable=False)
+    code:       Mapped[str]      = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
+
+    branch:     Mapped["Branch"]            = relationship(back_populates="sub_zones")
+    deliveries: Mapped[list["Delivery"]]    = relationship(back_populates="sub_zone")
+
+    __table_args__ = (
+        Index("ux_sub_zones_branch_name", "branch_id", "name", unique=True),
+        Index("ux_sub_zones_branch_code", "branch_id", "code", unique=True),
     )
 
 
@@ -133,11 +156,13 @@ class Delivery(Base):
     note:           Mapped[str | None]   = mapped_column(Text, nullable=True)
     
     delivery_date:  Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sub_zone_id:    Mapped[int | None]   = mapped_column(ForeignKey("sub_zones.id", ondelete="SET NULL"), nullable=True)
     created_at:     Mapped[datetime]     = mapped_column(DateTime, default=_utcnow, nullable=False)
     delivered_at:   Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     branch:       Mapped["Branch"]             = relationship(back_populates="deliveries")
     agent:        Mapped["User"]               = relationship(back_populates="deliveries")
+    sub_zone:     Mapped["SubZone | None"]     = relationship(back_populates="deliveries")
     items:        Mapped[list["DeliveryItem"]] = relationship(
         back_populates="delivery", cascade="all, delete-orphan"
     )

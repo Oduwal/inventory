@@ -1001,6 +1001,18 @@ def ensure_schema() -> None:
             else:
                 conn.execute(text("INSERT INTO feature_toggles (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING"), {"k": _hk, "v": _hv})
 
+        # ── Sub-zones (per-branch delivery zones) ────────────────────────────
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS sub_zones (
+            id """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+            name VARCHAR(80) NOT NULL,
+            code VARCHAR(16) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_sub_zones_branch_name ON sub_zones (branch_id, name)")
+        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_sub_zones_branch_code ON sub_zones (branch_id, code)")
+        _ddl(conn, "ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS sub_zone_id INTEGER NULL REFERENCES sub_zones(id) ON DELETE SET NULL")
+
         # ── PostgreSQL Row Level Security ───────────────────────────────────
         # Policies use SET LOCAL session variables injected by set_rls_context().
         # Empty context (startup / background tasks) triggers the '' bypass clause.
@@ -1014,6 +1026,7 @@ def ensure_schema() -> None:
             try:
                 _rls_branch_tables = [
                     "users", "items", "deliveries", "transactions", "cash_entries",
+                    "sub_zones",
                 ]
                 for _tbl in _rls_branch_tables:
                     _ddl(conn, f"ALTER TABLE {_tbl} ENABLE ROW LEVEL SECURITY")

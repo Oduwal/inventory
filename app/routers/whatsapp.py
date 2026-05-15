@@ -160,6 +160,26 @@ async def _try_auto_create_order_from_group(
         _log.warning("auto-order: no admin/supervisor for branch %s", branch_id)
         return None
 
+    # Sub-zone routing: look up codes for this branch and match against the
+    # message body. Whole-word, case-insensitive — falls back to None (→
+    # Unassigned) if nothing matches or branch has no zones defined.
+    matched_zone_id = None
+    matched_zone_name = None
+    try:
+        from app.order_parser import extract_zone_code
+        zones = db.execute(
+            select(SubZone).where(SubZone.branch_id == branch_id)
+        ).scalars().all()
+        if zones:
+            code_to_zone = {z.code: z for z in zones}
+            matched_code = extract_zone_code(txt, list(code_to_zone.keys()))
+            if matched_code:
+                z = code_to_zone[matched_code]
+                matched_zone_id = z.id
+                matched_zone_name = z.name
+    except Exception as e:
+        _log.warning("auto-order: zone-code lookup failed: %s", e)
+
     delivery = Delivery(
         branch_id=branch_id,
         agent_id=bot_user.id,
@@ -168,6 +188,7 @@ async def _try_auto_create_order_from_group(
         customer_whatsapp=(parsed.get("customer_whatsapp") or None),
         address=(parsed.get("address") or None),
         status="PENDING",
+        sub_zone_id=matched_zone_id,
         note=f"[Auto from WhatsApp group {group_jid} | sender:{sender_name or sender}]",
     )
     db.add(delivery)
@@ -1532,12 +1553,36 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 db, reply_text, group_jid, sender, sender_name, _incoming_msg_id
             )
             if _new_id and _new_id > 0:
+                # Look up the zone we routed the order to (if any) so the
+                # quote-reply can confirm or hint the seller toward a code.
+                _zone_suffix = ""
+                try:
+                    _row = db.execute(text(
+                        "SELECT sz.name, d.branch_id "
+                        "FROM deliveries d "
+                        "LEFT JOIN sub_zones sz ON sz.id = d.sub_zone_id "
+                        "WHERE d.id = :did"
+                    ), {"did": _new_id}).first()
+                    if _row and _row[0]:
+                        _zone_suffix = f" ({_row[0]} zone)"
+                    elif _row:
+                        # No zone matched — list available codes if branch has any
+                        _branch_id = _row[1]
+                        _zones = db.execute(
+                            select(SubZone).where(SubZone.branch_id == _branch_id).order_by(SubZone.name.asc())
+                        ).scalars().all()
+                        if _zones:
+                            _codes_line = "\n".join(f"  {z.code} = {z.name}" for z in _zones)
+                            _zone_suffix = f" — zone not set\nAdd a zone code at the top next time:\n{_codes_line}"
+                except Exception as _ze:
+                    _log.warning("auto-order: zone-suffix lookup failed: %s", _ze)
+
                 # Pass the sender JID (has '@') as quote_sender so the bot
                 # can attach a proper participant — pushName has no '@' and
                 # gets dropped by bot.js, breaking the quote bubble.
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
-                    sender, f"✅ Order #{_new_id} created",
+                    sender, f"✅ Order #{_new_id} created{_zone_suffix}",
                     order_id=_new_id,
                 )
                 return {"status": "ok", "order_id": _new_id, "auto_created": True}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Sub-zones — {{ branch.name }}{% endblock %}
+{% block page_title %}Sub-zones — {{ branch.name }}{% endblock %}
+{% block page_subtitle %}Delivery zones inside this branch. Sellers type the zone <strong>code</strong> at the top of their WhatsApp order so it lands in the right zone.{% endblock %}
+{% set active = "branches" %}
+
+{% block content %}
+{% if error %}
+<div class="card" style="border-left:4px solid #c00;background:#fee;color:#900;">{{ error }}</div>
+{% endif %}
+{% if success %}
+<div class="card" style="border-left:4px solid #090;background:#efe;color:#060;">{{ success }}</div>
+{% endif %}
+
+<div class="card">
+    <div class="badge b-blue">ADD A SUB-ZONE</div>
+    <form method="post" action="/branches/{{ branch.id }}/sub-zones" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+            <label>Name<br>
+                <input type="text" name="name" required maxlength="80" placeholder="e.g. Asaba">
+            </label>
+        </div>
+        <div>
+            <label>Code<br>
+                <input type="text" name="code" required maxlength="8" pattern="[A-Za-z0-9]{2,8}"
+                       style="text-transform:uppercase;font-family:monospace;"
+                       placeholder="e.g. ASB">
+            </label>
+        </div>
+        <button class="btnPrimary" type="submit">+ Add zone</button>
+        <span class="muted" style="font-size:12px;">2–8 letters/digits. Sellers type this in the order message.</span>
+    </form>
+</div>
+
+<div class="card" style="margin-top:14px;">
+    <div class="badge b-blue">ZONES IN {{ branch.name|upper }}</div>
+    <div style="margin-top:12px;overflow:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Code</th>
+                    <th>Created</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if zones and zones|length > 0 %}
+                {% for z in zones %}
+                <tr>
+                    <td><strong>{{ z.name }}</strong></td>
+                    <td><code style="background:#eef;padding:2px 6px;border-radius:4px;">{{ z.code }}</code></td>
+                    <td class="muted">{{ z.created_at.strftime('%Y-%m-%d') if z.created_at else '-' }}</td>
+                    <td>
+                        <form method="post" action="/sub-zones/{{ z.id }}/delete"
+                              onsubmit="return confirm('Delete zone {{ z.name }}? Existing orders in this zone will move to Unassigned.');"
+                              style="display:inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button class="btnGhost" type="submit" style="color:#c00;">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="4" class="muted">No sub-zones yet. Add one above.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

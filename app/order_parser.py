@@ -10,6 +10,21 @@ from app.models import Item
 
 _log = logging.getLogger("order_parser")
 
+
+def extract_zone_code(text: str, zone_codes: list[str]) -> str | None:
+    """Find a known zone code in the message body.
+
+    Matches whole-word, case-insensitive, against the exact codes the caller
+    provides (per-branch sub-zone codes). Returns the matched code uppercased,
+    or None if nothing matched. Empty input → None.
+    """
+    if not text or not zone_codes:
+        return None
+    pattern = r"\b(" + "|".join(re.escape(c) for c in zone_codes if c) + r")\b"
+    m = re.search(pattern, text, re.IGNORECASE)
+    return m.group(1).upper() if m else None
+
+
 SYSTEM_INSTRUCTION = (
     "You are an order parser for a Nigerian logistics business. "
     "You MUST return ONLY a valid JSON object — no markdown, no code "

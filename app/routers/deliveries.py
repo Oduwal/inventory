@@ -23,6 +23,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         return redirect("/my-deliveries")
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
+    sub_zone_filter = request.query_params.get("sub_zone_id", "").strip()
     per_page = 50
     try:
         page = max(1, int(request.query_params.get("page", "1")))
@@ -56,6 +57,11 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
             except ValueError:
                 pass
         branch_id = int(filter_branch) if filter_branch and filter_branch.isdigit() else None
+        # Apply sub-zone filter for supervisor too (only meaningful with a branch selected)
+        if branch_id and sub_zone_filter == "unassigned":
+            filters.append(Delivery.sub_zone_id.is_(None))
+        elif branch_id and sub_zone_filter.isdigit():
+            filters.append(Delivery.sub_zone_id == int(sub_zone_filter))
         agents = []
     else:
         branch_id = get_selected_branch_id(request, user)
@@ -67,6 +73,11 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
             filters.append(Delivery.status == status)
         if agent_id.isdigit():
             filters.append(Delivery.agent_id == int(agent_id))
+        # Sub-zone filter: "unassigned" → NULL, numeric → exact id
+        if sub_zone_filter == "unassigned":
+            filters.append(Delivery.sub_zone_id.is_(None))
+        elif sub_zone_filter.isdigit():
+            filters.append(Delivery.sub_zone_id == int(sub_zone_filter))
         agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())
         agents = db.execute(agents_stmt).scalars().all()
 
@@ -161,6 +172,17 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
                 )
             ) or 0
 
+    # Sub-zones for the current branch — used by the filter dropdown + the
+    # per-row "Assign zone" picker on Unassigned rows.
+    sub_zones = []
+    sub_zone_names: dict[int, str] = {}
+    if branch_id:
+        sub_zones = db.execute(
+            select(SubZone).where(SubZone.branch_id == branch_id).order_by(SubZone.name.asc())
+        ).scalars().all()
+        sub_zone_names = {z.id: z.name for z in sub_zones}
+    csrf_token = get_csrf_token(request)
+
     return tpl(request, "deliveries_list.html", {
         "request": request, "rows": rows, "agents": agents, "status": status,
         "agent_id": agent_id, "items_summary": items_summary,
@@ -172,6 +194,10 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         "wa_attention_ids": wa_attention_ids,
         "page": page, "total_pages": total_pages, "total": total,
         "hidden_wa_count": hidden_wa_count, "hidden_adj_count": hidden_adj_count,
+        "sub_zones": sub_zones,
+        "sub_zone_names": sub_zone_names,
+        "sub_zone_filter": sub_zone_filter,
+        "csrf_token": csrf_token,
     })
 
 
@@ -320,6 +346,12 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db), user: Use
                 "id": r[0], "item_id": r[2], "qty": r[3],
                 "note": r[4] or "", "item_name": r[5],
             })
+    # Sub-zones for the current branch (for the zone dropdown)
+    sub_zones = []
+    if branch_id:
+        sub_zones = db.execute(
+            select(SubZone).where(SubZone.branch_id == branch_id).order_by(SubZone.name.asc())
+        ).scalars().all()
     csrf_token = get_csrf_token(request)
     form_token = generate_form_token(request)
     return tpl(request, "delivery_new.html", {
@@ -328,6 +360,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db), user: Use
         "today": date.today().isoformat(), "csrf_token": csrf_token,
         "form_token": form_token,
         "pending_assignments": pending_assignments,
+        "sub_zones": sub_zones,
     })
 
 
@@ -342,6 +375,7 @@ async def delivery_create(
     address: str = Form(""),
     note: str = Form(""),
     delivery_date: str = Form(""),
+    sub_zone_id: int | None = Form(None),
     item_id: list[int] = Form(...),
     quantity: list[int] = Form(...),
     line_amount: list[float] = Form(default=[]),
@@ -394,6 +428,12 @@ async def delivery_create(
         _call_numbers = (_clean_phone + ", " + _clean_wa).strip(", ")
     else:
         _call_numbers = _clean_phone or None
+    # Validate sub_zone belongs to this branch (silently drop if not)
+    _sub_zone_id = None
+    if sub_zone_id:
+        _sz = db.get(SubZone, int(sub_zone_id))
+        if _sz and _sz.branch_id == branch_id:
+            _sub_zone_id = _sz.id
     d = Delivery(
         branch_id=branch_id, agent_id=target_agent_id, customer_name=cust,
         customer_phone=_call_numbers or None,
@@ -401,6 +441,7 @@ async def delivery_create(
         address=sanitize_text(address, 300, "Address") or None,
         note=sanitize_text(note, 400, "Note") or None,
         status="PENDING", delivery_date=d_date,
+        sub_zone_id=_sub_zone_id,
     )
     db.add(d)
     db.flush()
@@ -602,6 +643,41 @@ async def delivery_create(
             logging.getLogger("whatsapp").warning("Failed to queue WA template for delivery #%s: %s", d.id, e)
 
     return redirect(f"/deliveries/{d.id}")
+
+
+@router.post("/deliveries/{delivery_id}/set-zone")
+def delivery_set_zone(
+    delivery_id: int,
+    request: Request,
+    sub_zone_id: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(RequireRole("ADMIN", "SUPERVISOR")),
+):
+    """Reassign (or clear) a delivery's sub-zone. ADMIN scoped to own branch."""
+    set_rls_context(db, user)
+    verify_csrf_token(request, csrf_token)
+    d = db.get(Delivery, delivery_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if is_admin(user) and d.branch_id != user.branch_id:
+        raise HTTPException(status_code=403, detail="Not in your branch")
+    new_zone_id = None
+    sz_clean = (sub_zone_id or "").strip()
+    if sz_clean and sz_clean.isdigit():
+        z = db.get(SubZone, int(sz_clean))
+        if not z or z.branch_id != d.branch_id:
+            raise HTTPException(status_code=400, detail="Zone does not belong to this branch")
+        new_zone_id = z.id
+    old_zone_id = d.sub_zone_id
+    d.sub_zone_id = new_zone_id
+    db.commit()
+    audit_log(db, user.id, "delivery_set_zone",
+              f"delivery={delivery_id} old={old_zone_id} new={new_zone_id}",
+              request.client.host if request.client else "")
+    # Preserve the user's filter/page state on redirect
+    referer = request.headers.get("referer", "/deliveries")
+    return redirect(referer)
 
 
 

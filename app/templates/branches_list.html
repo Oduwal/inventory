@@ -19,6 +19,7 @@
                     <th>Name</th>
                     <th>Code</th>
                     <th>Address</th>
+                    <th>Sub-zones</th>
                     <th>Open Dashboard</th>
                 </tr>
             </thead>
@@ -30,13 +31,16 @@
                     <td>{{ b.code or "-" }}</td>
                     <td>{{ b.address or "-" }}</td>
                     <td>
+                        <a class="btnGhost" href="/branches/{{ b.id }}/sub-zones">Manage zones</a>
+                    </td>
+                    <td>
                         <a class="btnGhost" href="/?branch_id={{ b.id }}">Open</a>
                     </td>
                 </tr>
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="4" class="muted">No branches found.</td>
+                    <td colspan="5" class="muted">No branches found.</td>
                 </tr>
                 {% endif %}
             </tbody>
