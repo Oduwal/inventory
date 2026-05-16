@@ -35,7 +35,7 @@ console.log('🚀 Booting Clawbot (Baileys edition)...');
 // CONFIG
 // ─────────────────────────────────────────────
 const GROUP_JID      = process.env.WA_GROUP_ID    || '';
-const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://inventory-production-d41e.up.railway.app';
+const PYTHON_APP_URL = process.env.PYTHON_APP_URL || 'https://atomics.up.railway.app';
 const AUTH_DIR       = process.env.WA_AUTH_DIR    || path.join(__dirname, '.wwebjs_auth', 'baileys');
 const WARMED_GROUPS_FILE = path.join(AUTH_DIR, 'warmed-groups.json');
 

@@ -57,7 +57,7 @@ def _do_call(delivery_id: int, phone: str, backup_numbers: list, status: str, cu
     if not formatted_phone: return
 
     business_name = os.getenv("BUSINESS_NAME", "Atomic Logistics")
-    YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://inventory-production-d41e.up.railway.app").rstrip('/')
+    YOUR_RAILWAY_APP_URL = os.getenv("APP_URL", "https://atomics.up.railway.app").rstrip('/')
     display_name = customer_name or "valued customer"
     display_address = address if address and address.strip() else "your saved address"
 
