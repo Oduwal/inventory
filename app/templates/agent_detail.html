@@ -24,7 +24,7 @@
     {% if is_admin_profile %}ADMIN PROFILE{% else %}AGENT PROFILE{% endif %}
   </div>
   <div style="display:flex;align-items:center;gap:20px;margin-bottom:16px;flex-wrap:wrap;">
-    <img src="/users/{{ agent.id }}/avatar?v={{ range(10000)|random }}" alt="Profile"
+    <img src="/users/{{ agent.id }}/avatar" alt="Profile"
          style="width:80px;height:80px;border-radius:50%;object-fit:cover;flex-shrink:0;
                 border:3px solid {% if is_admin_profile %}var(--purple){% else %}var(--accent){% endif %};
                 box-shadow:0 0 20px {% if is_admin_profile %}rgba(139,92,246,.35){% else %}rgba(79,124,255,.35){% endif %};" />

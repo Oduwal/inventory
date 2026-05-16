@@ -23,8 +23,8 @@ if DATABASE_URL.startswith("sqlite"):
 else:
     # PostgreSQL (and other server-backed DBs) benefit from connection pooling.
     # Configurable via env vars so infrastructure can scale without code changes.
-    engine_kwargs["pool_size"] = int(os.getenv("DB_POOL_SIZE", "20"))
-    engine_kwargs["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    engine_kwargs["pool_size"] = int(os.getenv("DB_POOL_SIZE", "5"))
+    engine_kwargs["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "5"))
 
 engine = create_engine(
     DATABASE_URL,

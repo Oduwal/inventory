@@ -31,11 +31,21 @@ def user_avatar(user_id: int, db: Session = Depends(get_db), _auth: User = Depen
     u = db.execute(
         select(User).where(User.id == user_id).options(undefer(User.profile_picture))
     ).scalar()
+    # Restrict to same-branch lookups (supervisors and self always allowed).
+    # Prevents cross-branch enumeration and unnecessary bandwidth from any
+    # logged-in user pulling any user's photo across the org.
+    if u and _auth.id != u.id and not is_supervisor(_auth):
+        if getattr(u, "branch_id", None) != getattr(_auth, "branch_id", None):
+            return Response(
+                content=_DEFAULT_AVATAR_SVG,
+                media_type="image/svg+xml",
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
     if u and u.profile_picture:
         return Response(
             content=u.profile_picture,
             media_type=u.profile_picture_mime or "image/jpeg",
-            headers={"Cache-Control": "private, max-age=3600"},
+            headers={"Cache-Control": "private, max-age=86400"},
         )
     return Response(
         content=_DEFAULT_AVATAR_SVG,
@@ -70,9 +80,12 @@ async def upload_profile_picture(
     u.profile_picture_mime = mime_type
     db.commit()
 
-    # Redirect back to wherever they came from
+    # Redirect back to wherever they came from. Append a one-time avatar
+    # cache-buster so the uploader's browser refreshes the now-stale image
+    # without forcing a refetch on every page load for everyone else.
+    import time as _time
     referer = request.headers.get("referer", "/")
-    return redirect(referer.split("?")[0] + "?success=Profile+picture+updated")
+    return redirect(referer.split("?")[0] + f"?success=Profile+picture+updated&av={int(_time.time())}")
 
 
 @router.post("/agents/{agent_id}/remove-picture")

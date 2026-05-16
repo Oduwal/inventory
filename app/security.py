@@ -515,7 +515,7 @@ def process_profile_image(content: bytes) -> tuple[bytes, str]:
 
     # [SEC] Guard against decompression bombs — a small file on disk can
     # decompress to gigabytes of pixel data in RAM.
-    Image.MAX_IMAGE_PIXELS = 25_000_000  # 25 megapixels max
+    Image.MAX_IMAGE_PIXELS = 5_000_000  # 5 megapixels max — guards against decompression bombs
 
     img = Image.open(_io.BytesIO(content))
     try:
