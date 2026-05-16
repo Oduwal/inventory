@@ -426,6 +426,8 @@ async def reset_data_execute(
             pass
         # Delete all users except the current supervisor
         conn.execute(_text("DELETE FROM users WHERE id != :sid"), {"sid": supervisor_id})
+        # Delete sub_zones before branches (FK dependency)
+        conn.execute(_text("DELETE FROM sub_zones"))
         # Delete all branches
         conn.execute(_text("DELETE FROM branches"))
         # Clear supervisor's branch_id since branches are gone
