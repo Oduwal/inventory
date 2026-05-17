@@ -73,32 +73,24 @@ def _build_prompt(text: str, items_catalog) -> str:
 
 
 async def parse_order_text(text: str, db, branch_id: int) -> dict | None:
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        return None
+    from app.gemini_client import call_gemini_async
     items = db.execute(
         select(Item).where(Item.branch_id == branch_id, Item.is_active == True).order_by(Item.name.asc())
     ).scalars().all()
     if not items:
         return None
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "contents": [{"role": "user", "parts": [{"text": _build_prompt(text, items)}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 32768,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-                    "contents": [{"role": "user", "parts": [{"text": _build_prompt(text, items)}]}],
-                    "generationConfig": {
-                        "temperature": 0.1,
-                        "maxOutputTokens": 32768,
-                        "thinkingConfig": {"thinkingBudget": 0},
-                    },
-                },
-            )
-        data = resp.json()
-        if "error" in data:
+        data = await call_gemini_async(payload, timeout=60)
+        if not data or "error" in data:
             return None
         parts = data["candidates"][0]["content"]["parts"]
         raw = "".join(p["text"] for p in parts if p.get("text") and not p.get("thought"))

@@ -331,41 +331,32 @@ async def parse_order_api(request: Request, db: Session = Depends(get_db), user:
     if not prompt:
         return JSONResponse({"error": "No prompt provided"}, status_code=400)
 
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        return JSONResponse({"error": "GEMINI_API_KEY not set in Railway environment variables."}, status_code=500)
-
+    from app.gemini_client import call_gemini_async
+    payload = {
+        "system_instruction": {
+            "parts": [{"text": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."}]
+        },
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 32768,
+            "thinkingConfig": {"thinkingBudget": 0},
+        }
+    }
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "system_instruction": {
-                        "parts": [{"text": "You are an order parser for a Nigerian logistics business. You MUST return ONLY a valid, complete JSON array — no markdown, no code fences, no explanation, no trailing text. Start your response with [ and end with ]. Never truncate."}]
-                    },
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "temperature": 0.1,
-                        "maxOutputTokens": 32768,
-                        "thinkingConfig": {"thinkingBudget": 0},
-                    }
-                }
-            )
-        raw_text = resp.text
-        data = resp.json()
-        if not isinstance(data, dict):
-            return JSONResponse({"error": f"Unexpected response: {raw_text[:300]}"}, status_code=500)
+        data = await call_gemini_async(payload, timeout=60)
+        if not data:
+            return JSONResponse({"error": "Gemini unavailable on all backends. Check server logs."}, status_code=503)
         if "error" in data:
             err = data["error"]
             error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            return JSONResponse({"error": f"{error_msg} | raw: {raw_text[:200]}"}, status_code=500)
+            return JSONResponse({"error": error_msg}, status_code=500)
         try:
             parts = data["candidates"][0]["content"]["parts"]
             # Skip thinking parts (thought=True), join all real text parts
             text = "".join(p["text"] for p in parts if p.get("text") and not p.get("thought"))
         except (KeyError, IndexError):
-            return JSONResponse({"error": f"Could not read Gemini response | raw: {raw_text[:300]}"}, status_code=500)
+            return JSONResponse({"error": "Could not read Gemini response."}, status_code=500)
         return JSONResponse({"text": text})
     except Exception as e:
         logging.getLogger("parse_order").error("Parse order failed: %s", e)

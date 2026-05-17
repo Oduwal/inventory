@@ -1096,17 +1096,13 @@ async def serve_voice_note(note_id: int, request: Request, db: Session = Depends
 # GEMINI MULTI-TURN CLASSIFICATION (runs in threadpool so it doesn't
 # block the event loop — Gemini HTTP call can take 2-5s)
 # ─────────────────────────────────────────────────────────────────
-_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
-_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-
 def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
     """
     Build a transcript of the last few messages and ask Gemini to classify
     the latest seller reply IN CONTEXT.  Returns a dict matching the schema:
     { "classification": str, "contextual_summary": str, "action_required": bool }
     """
-    if not _GEMINI_KEY:
-        return {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
+    from app.gemini_client import call_gemini_sync
 
     transcript_lines = []
     for m in thread:
@@ -1126,21 +1122,23 @@ def _call_gemini_classify(thread: list[dict], latest_reply: str) -> dict:
         '"action_required": <true|false>}'
     )
 
+    fallback = {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
     try:
-        resp = httpx.post(
-            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
-            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                  "generationConfig": {"temperature": 0.1, "maxOutputTokens": 150}},
+        data = call_gemini_sync(
+            {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+             "generationConfig": {"temperature": 0.1, "maxOutputTokens": 150}},
             timeout=10,
         )
-        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if not data or "error" in data:
+            return fallback
+        text_out = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         # Strip markdown fences if Gemini wraps anyway
         if "```" in text_out:
             text_out = re.sub(r"```[a-z]*\n?", "", text_out).replace("```", "").strip()
         return json.loads(text_out)
     except Exception as e:
         logging.getLogger("gemini").warning("Gemini classify failed: %s", e)
-        return {"classification": "OTHER", "contextual_summary": latest_reply[:100], "action_required": False}
+        return fallback
 
 
 # ─────────────────────────────────────────────────────────────────
