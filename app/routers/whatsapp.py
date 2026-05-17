@@ -1553,11 +1553,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     _log = logging.getLogger("wa_webhook")
 
     # ── Step -1: Auto-create order from a fresh group message ─────────
-    # Only when the message is NOT a reply to an existing bot post AND
-    # does not reference an existing order number. Falls through silently
-    # if toggle is off, group isn't mapped, or message doesn't look like
-    # an order.
-    if not quoted_msg_id:
+    # Normally only when the message is NOT a reply to an existing bot post.
+    # Exception: if the message has order-shaped fields (Name:, Phone:, zone
+    # codes), we treat it as a fresh order even when it quotes something —
+    # sellers often quote a promo blast when submitting a customer order.
+    _looks_like_order = bool(reply_text) and (
+        re.search(r'name\s*[:：]', reply_text, re.IGNORECASE)
+        or re.search(r'phone\s*(?:number)?\s*[:：]', reply_text, re.IGNORECASE)
+        or re.search(r'\baddress\s*[:：]', reply_text, re.IGNORECASE)
+        or re.search(r'^\s*(?:SR|UGB|AR|UL|AGH)\b', reply_text, re.IGNORECASE)
+    )
+    if (not quoted_msg_id) or _looks_like_order:
         _pre_check = re.search(r'order\s*#?\s*(\d+)', reply_text, re.IGNORECASE)
         if not _pre_check:
             _incoming_msg_id = data.get("message_id", "").strip()

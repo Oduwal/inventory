@@ -378,7 +378,17 @@ async function handleInbound(msg) {
     const _pushName = msg.pushName || '';
     console.log(`📨 Group msg from ${sender.split('@')[0]} (pushName: "${_pushName}"): "${(text || '[Voice Note]').slice(0, 80)}"`);
 
-    if (quotedId) {
+    // Treat the message as a fresh order even when it quotes something, if it
+    // contains order-shaped fields. Sellers often quote a promo blast when
+    // submitting a real customer order — the quote is decoration, not a reply.
+    const _looksLikeOrder = !!text && (
+        /name\s*[:：]/i.test(text) ||
+        /phone\s*(number)?\s*[:：]/i.test(text) ||
+        /\baddress\s*[:：]/i.test(text) ||
+        /^\s*(SR|UGB|AR|UL|AGH)\b/i.test(text)
+    );
+
+    if (quotedId && !_looksLikeOrder) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
         const senderName = msg.pushName || contactNames.get(sender) || '';
         axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
@@ -395,6 +405,10 @@ async function handleInbound(msg) {
             headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
         }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
+    }
+
+    if (quotedId && _looksLikeOrder) {
+        console.log(`📨 Quote-decorated fresh order detected — ignoring quote, routing to fresh path`);
     }
 
     // Voice-only messages without a quote — still cache if they have text with customer info
