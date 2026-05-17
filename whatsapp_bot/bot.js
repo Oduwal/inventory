@@ -26,6 +26,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import NodeCache from 'node-cache';
+import { JWT } from 'google-auth-library';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,49 +196,136 @@ function extractQuoted(msg) {
     return { id: ctx.stanzaId || null, body };
 }
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_KEY      = process.env.GEMINI_API_KEY || '';
+const GEMINI_URL      = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GCP_PROJECT_ID  = process.env.GCP_PROJECT_ID || '';
+const VERTEX_LOCATION = process.env.VERTEX_LOCATION || 'us-central1';
+const SA_JSON_RAW     = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || '';
+
+// ── Vertex AI client (cached) ─────────────────────────────────────────────
+// Tries Vertex first when service-account creds are set; falls back to AI
+// Studio on any failure. Mirrors the Python hybrid in app/gemini_client.py.
+let _jwtClient = null;
+let _jwtLoadFailed = false;
+
+function _getJwtClient() {
+    if (_jwtClient || _jwtLoadFailed) return _jwtClient;
+    if (!SA_JSON_RAW || !GCP_PROJECT_ID) { _jwtLoadFailed = true; return null; }
+    try {
+        const info = JSON.parse(SA_JSON_RAW);
+        _jwtClient = new JWT({
+            email: info.client_email,
+            key: info.private_key,
+            scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+        });
+        return _jwtClient;
+    } catch (e) {
+        console.log('⚠️  gemini: failed to load Vertex service-account JSON:', e.message);
+        _jwtLoadFailed = true;
+        return null;
+    }
+}
+
+async function _vertexCallGemini(payload, timeoutMs) {
+    const jwt = _getJwtClient();
+    if (!jwt) return null;
+    let token;
+    try {
+        const t = await jwt.getAccessToken();
+        token = typeof t === 'string' ? t : t.token;
+        if (!token) throw new Error('empty access token');
+    } catch (e) {
+        console.log('⚠️  gemini: vertex token refresh failed:', e.message);
+        return null;
+    }
+    const url = `https://${VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${GCP_PROJECT_ID}/locations/${VERTEX_LOCATION}/publishers/google/models/gemini-2.5-flash:generateContent`;
+    try {
+        const resp = await axios.post(url, payload, {
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            timeout: timeoutMs,
+        });
+        if (resp.data && resp.data.error) {
+            console.log('⚠️  gemini: vertex returned 200+error → AI Studio fallback. err=', resp.data.error);
+            return null;
+        }
+        const usage = resp.data?.usageMetadata || {};
+        console.log(`✅ gemini: vertex OK — prompt=${usage.promptTokenCount} out=${usage.candidatesTokenCount}`);
+        return resp.data;
+    } catch (e) {
+        const code = e.response?.status;
+        const body = e.response?.data ? JSON.stringify(e.response.data).slice(0, 300) : e.message;
+        console.log(`⚠️  gemini: vertex HTTP ${code || '?'} → AI Studio fallback. body=${body}`);
+        return null;
+    }
+}
+
+async function _aiStudioCallGemini(payload, timeoutMs) {
+    if (!GEMINI_KEY) {
+        console.log('⚠️  gemini: AI Studio fallback unavailable (GEMINI_API_KEY not set)');
+        return null;
+    }
+    try {
+        const resp = await axios.post(`${GEMINI_URL}?key=${GEMINI_KEY}`, payload, { timeout: timeoutMs });
+        if (resp.data && resp.data.error) {
+            console.log('⚠️  gemini: AI Studio returned error:', resp.data.error);
+            return resp.data;
+        }
+        const usage = resp.data?.usageMetadata || {};
+        console.log(`✅ gemini: ai_studio OK — prompt=${usage.promptTokenCount} out=${usage.candidatesTokenCount}`);
+        return resp.data;
+    } catch (e) {
+        const code = e.response?.status;
+        console.log(`⚠️  gemini: AI Studio HTTP ${code || '?'} — ${e.message}`);
+        return null;
+    }
+}
+
+async function callGemini(payload, timeoutMs = 10000) {
+    const v = await _vertexCallGemini(payload, timeoutMs);
+    if (v && !v.error) return v;
+    return _aiStudioCallGemini(payload, timeoutMs);
+}
 
 /**
  * Extract customer name and phone from a group message.
- * Primary: Gemini AI (handles any format/language).
- * Fallback: regex — catches Nigerian phone numbers and the line before/after them as name.
- * This ensures matching works even without GEMINI_API_KEY on the bot service.
+ * Primary: Gemini AI (Vertex first, then AI Studio fallback).
+ * Final fallback: regex — catches Nigerian phone numbers and the line
+ * before/after them as name. Keeps matching alive when both Gemini
+ * backends are down or have no creds.
  */
 async function extractCustomerInfo(text) {
-    // ── Gemini path ────────────────────────────────────────────────────────
-    if (GEMINI_KEY) {
-        try {
-            const prompt =
-                `You are reading a delivery order message from a Nigerian logistics WhatsApp group.\n\n` +
-                `Message:\n"${text}"\n\n` +
-                `RULES:\n` +
-                `1. Extract the CUSTOMER name and CUSTOMER phone number.\n` +
-                `2. The customer is the RECIPIENT of the delivery (not the sender/seller/dispatcher).\n` +
-                `3. If the message has labeled fields like "Customer name:", "Name:", "Receiver:" — ALWAYS use that value as the name.\n` +
-                `4. If there are labeled fields (like "Order number:", "Customer name:", "Phone number:") then the first line is the SENDER — do NOT use it as the customer name.\n` +
-                `5. If there are NO labeled fields (just plain text with a name, address, phone), then the first line may be the customer name — use your judgment.\n` +
-                `6. "Phone number:" or "Whatsapp number:" fields contain the customer's phone.\n` +
-                `7. Return digits only for phone (no spaces, dashes, or +).\n\n` +
-                `Reply ONLY with valid JSON, no markdown:\n` +
-                `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
+    // ── Gemini path (Vertex → AI Studio hybrid) ────────────────────────────
+    const prompt =
+        `You are reading a delivery order message from a Nigerian logistics WhatsApp group.\n\n` +
+        `Message:\n"${text}"\n\n` +
+        `RULES:\n` +
+        `1. Extract the CUSTOMER name and CUSTOMER phone number.\n` +
+        `2. The customer is the RECIPIENT of the delivery (not the sender/seller/dispatcher).\n` +
+        `3. If the message has labeled fields like "Customer name:", "Name:", "Receiver:" — ALWAYS use that value as the name.\n` +
+        `4. If there are labeled fields (like "Order number:", "Customer name:", "Phone number:") then the first line is the SENDER — do NOT use it as the customer name.\n` +
+        `5. If there are NO labeled fields (just plain text with a name, address, phone), then the first line may be the customer name — use your judgment.\n` +
+        `6. "Phone number:" or "Whatsapp number:" fields contain the customer's phone.\n` +
+        `7. Return digits only for phone (no spaces, dashes, or +).\n\n` +
+        `Reply ONLY with valid JSON, no markdown:\n` +
+        `{"customer_name": "<name or null>", "customer_phone": "<digits only or null>"}`;
 
-            const resp = await axios.post(
-                `${GEMINI_URL}?key=${GEMINI_KEY}`,
-                { contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                  generationConfig: { temperature: 0, maxOutputTokens: 1064 } },
-                { timeout: 6000 }
-            );
-            const raw   = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
+    try {
+        const data = await callGemini(
+            { contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0, maxOutputTokens: 1064 } },
+            6000
+        );
+        if (data && !data.error) {
+            const raw   = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{}';
             const clean = raw.startsWith('```') ? raw.replace(/```[a-z]*\n?/g, '').trim() : raw;
             const result = JSON.parse(clean);
             if (result.customer_name || result.customer_phone) {
                 console.log(`🤖 Gemini → name:"${result.customer_name}" phone:"${result.customer_phone}"`);
                 return result;
             }
-        } catch (e) {
-            console.log('⚠️  Gemini extract failed:', e.message, '— falling back to regex');
         }
+    } catch (e) {
+        console.log('⚠️  Gemini extract failed:', e.message, '— falling back to regex');
     }
 
     // ── Regex fallback — works without GEMINI_API_KEY ──────────────────────

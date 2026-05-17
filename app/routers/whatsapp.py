@@ -85,31 +85,40 @@ async def _try_auto_create_order_from_group(
     from app.feature_toggles import get_feature_value
     from app.order_parser import parse_order_text
 
+    _log.info("auto-order ENTER: group=%s sender=%s msg_id=%s text_len=%s text_preview=%r",
+              group_jid, sender, message_id, len(reply_text or ""), (reply_text or "")[:120])
+
     # Default OFF — auto-create stays dormant until a supervisor explicitly
     # turns it on. Using get_feature_value because is_feature_on defaults
     # missing keys to True, which would silently enable this feature.
     if get_feature_value(db, "seller_group_auto_order_enabled", "off") != "on":
+        _log.info("auto-order SKIP: feature toggle 'seller_group_auto_order_enabled' is OFF")
         return None
 
     mapping = _seller_group_branch_map()
     if not group_jid or group_jid not in mapping:
+        _log.info("auto-order SKIP: group %s not in SELLER_GROUP_BRANCH_MAP (mapped groups: %s)",
+                  group_jid, list(mapping.keys()))
         return None
     try:
         branch_id = int(mapping[group_jid])
     except (TypeError, ValueError):
+        _log.warning("auto-order SKIP: SELLER_GROUP_BRANCH_MAP[%s]=%r is not an int", group_jid, mapping.get(group_jid))
         return None
 
     branch = db.execute(select(Branch).where(Branch.id == branch_id)).scalar()
     if not branch:
-        _log.warning("SELLER_GROUP_BRANCH_MAP → missing branch_id=%s", branch_id)
+        _log.warning("auto-order SKIP: SELLER_GROUP_BRANCH_MAP → missing branch_id=%s", branch_id)
         return None
 
     bot_phone = os.getenv("BOT_PHONE", "").lstrip("+")
     if bot_phone and (sender or "").lstrip("+").startswith(bot_phone):
+        _log.info("auto-order SKIP: message from bot's own phone (sender=%s)", sender)
         return None
 
     txt = (reply_text or "").strip()
     if len(txt) < 20:
+        _log.info("auto-order SKIP: message too short (len=%s, need ≥20)", len(txt))
         return None
     skip_prefixes = (
         "ok", "yes", "no", "thanks", "thank you", "received",
@@ -117,6 +126,7 @@ async def _try_auto_create_order_from_group(
         "hi ", "hello", "✅", "👍",
     )
     if txt.lower().startswith(skip_prefixes):
+        _log.info("auto-order SKIP: message starts with greeting/ack prefix (text=%r)", txt[:60])
         return None
 
     if message_id:
@@ -125,8 +135,10 @@ async def _try_auto_create_order_from_group(
             "WHERE message_id = :mid AND source = 'auto_in'"
         ), {"mid": message_id}).first()
         if existed:
+            _log.info("auto-order SKIP: message_id %s already processed (order_id=%s)", message_id, existed[0])
             return None
 
+    _log.info("auto-order: calling parser [branch=%s, text_len=%s]", branch_id, len(txt))
     parsed = await parse_order_text(txt, db, branch_id)
     if not parsed:
         _log.warning("auto-order REJECT [branch=%s]: parser returned None/empty. msg=%r",
@@ -1563,8 +1575,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         or re.search(r'\baddress\s*[:：]', reply_text, re.IGNORECASE)
         or re.search(r'^\s*(?:SR|UGB|AR|UL|AGH)\b', reply_text, re.IGNORECASE)
     )
+    _log.info("auto-order DISPATCH: quoted_msg_id=%r looks_like_order=%s — will %s",
+              quoted_msg_id, _looks_like_order,
+              "ENTER auto-order path" if ((not quoted_msg_id) or _looks_like_order) else "SKIP (treating as reply)")
     if (not quoted_msg_id) or _looks_like_order:
         _pre_check = re.search(r'order\s*#?\s*(\d+)', reply_text, re.IGNORECASE)
+        if _pre_check:
+            _log.info("auto-order DISPATCH SKIP: message contains 'Order #%s' — routing to existing-order lookup", _pre_check.group(1))
         if not _pre_check:
             _incoming_msg_id = data.get("message_id", "").strip()
             _new_id = await _try_auto_create_order_from_group(
