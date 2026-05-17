@@ -36,7 +36,7 @@
   <form method="get" action="/items" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
     <div style="flex:1;min-width:200px;">
       <label>Search</label>
-      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search by name or category…" />
+      <input type="text" name="q" id="items-search-sup" value="{{ q or '' }}" placeholder="Search by name or category…" autocomplete="off" />
     </div>
     <div>
       <label>View Mode</label>
@@ -64,7 +64,7 @@
   <form method="get" action="/items" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
     <div style="flex:1;min-width:220px;">
       <label>Search</label>
-      <input type="text" name="q" value="{{ q or '' }}" placeholder="Search by name, SKU or category…" />
+      <input type="text" name="q" id="items-search-admin" value="{{ q or '' }}" placeholder="Search by name, SKU or category…" autocomplete="off" />
     </div>
     <div><label>&nbsp;</label><button class="btnPrimary" type="submit">Search</button></div>
     <div><label>&nbsp;</label><a class="btnGhost" href="/items">Reset</a></div>
@@ -88,9 +88,9 @@
     {% if user and user.role == "SUPERVISOR" and view != "combined" %}
     {# Per-branch: count unique names #}
     {% set unique_names = rows | map(attribute='0') | map(attribute='name') | list | unique | list %}
-    <span style="color:var(--muted);font-size:12px;">{{ unique_names|length }} unique item{% if unique_names|length != 1 %}s{% endif %} ({{ rows|length }} records)</span>
+    <span id="items-count" style="color:var(--muted);font-size:12px;">{{ unique_names|length }} unique item{% if unique_names|length != 1 %}s{% endif %} ({{ rows|length }} records)</span>
     {% else %}
-    <span style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} item{% if rows|length != 1 %}s{% endif %}</span>
+    <span id="items-count" style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} item{% if rows|length != 1 %}s{% endif %}</span>
     {% endif %}
   </div>
 
@@ -111,7 +111,7 @@
       <tbody>
         {% if rows and rows|length > 0 %}
         {% for r in rows %}
-        <tr>
+        <tr class="item-row" data-search="{{ ((r.name or '') ~ ' ' ~ (r.category or ''))|lower }}">
           <td style="font-weight:700;">
             {{ r.name }}
             {% set fqty = faulty_counts.get(r.id, 0) if faulty_counts is defined else 0 %}
@@ -151,6 +151,7 @@
         {% else %}
         <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">No items found.</td></tr>
         {% endif %}
+        <tr id="items-no-match" style="display:none;"><td colspan="5" style="text-align:center;padding:40px;color:var(--muted);">No items match your search.</td></tr>
       </tbody>
     </table>
 
@@ -171,7 +172,7 @@
       <tbody>
         {% if rows and rows|length > 0 %}
         {% for item, stock in rows %}
-        <tr>
+        <tr class="item-row" data-search="{{ ((item.name or '') ~ ' ' ~ (item.category or ''))|lower }}">
           <td>
             <a href="/items/{{ item.id }}" style="font-weight:700;color:var(--text);">{{ item.name }}</a>
             {% set fqty = faulty_counts.get(item.id, 0) if faulty_counts is defined else 0 %}
@@ -220,10 +221,43 @@
           </td>
         </tr>
         {% endif %}
+        <tr id="items-no-match" style="display:none;"><td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">No items match your search.</td></tr>
       </tbody>
     </table>
     {% endif %}
 
   </div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  const input = document.getElementById('items-search-admin') || document.getElementById('items-search-sup');
+  if (!input) return;
+  const rows = Array.from(document.querySelectorAll('tr.item-row'));
+  const noMatch = document.getElementById('items-no-match');
+  const countEl = document.getElementById('items-count');
+  const baseCountText = countEl ? countEl.textContent : '';
+
+  function applyFilter() {
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(r => {
+      const hay = r.dataset.search || '';
+      const show = !q || hay.indexOf(q) !== -1;
+      r.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (noMatch) noMatch.style.display = (q && visible === 0) ? '' : 'none';
+    if (countEl) {
+      countEl.textContent = q
+        ? (visible + ' match' + (visible !== 1 ? 'es' : ''))
+        : baseCountText;
+    }
+  }
+
+  input.addEventListener('input', applyFilter);
+  // Run once on load in case the field is pre-filled from the URL
+  if (input.value.trim()) applyFilter();
+})();
+</script>
 {% endblock %}
