@@ -15,8 +15,15 @@
 
 {% block content %}
 <div class="card">
-    <div class="badge {% if user.role == 'SUPERVISOR' %}b-purple{% else %}b-blue{% endif %}">
-        {% if user.role == "SUPERVISOR" %}ADMINS{% else %}AGENTS{% endif %}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="badge {% if user.role == 'SUPERVISOR' %}b-purple{% else %}b-blue{% endif %}">
+            {% if user.role == "SUPERVISOR" %}ADMINS{% else %}AGENTS{% endif %}
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="agents-search" placeholder="🔍 Search by name, username, phone…" autocomplete="off"
+                   style="padding:7px 12px;font-size:13px;width:280px;max-width:100%;">
+            <span id="agents-count" style="color:var(--muted);font-size:12px;">{{ agents|length if agents else 0 }} total</span>
+        </div>
     </div>
 
     <div style="margin-top:12px;">
@@ -39,7 +46,7 @@
             <tbody>
                 {% if agents and agents|length > 0 %}
                 {% for a in agents %}
-                <tr{% if not a.is_active %} style="opacity:.5;"{% endif %}>
+                <tr class="agent-row" data-search="{{ ((a.username or '') ~ ' ' ~ (a.full_name or '') ~ ' ' ~ (a.phone or '') ~ ' ' ~ (a.branch.name if a.branch else ''))|lower }}"{% if not a.is_active %} style="opacity:.5;"{% endif %}>
                     <td>#{{ a.id }}</td>
                     <td>
                       <img src="/users/{{ a.id }}/avatar" alt=""
@@ -76,8 +83,32 @@
                     </td>
                 </tr>
                 {% endif %}
+                <tr id="agents-no-match" style="display:none;"><td colspan="{% if user.role == 'SUPERVISOR' %}9{% else %}8{% endif %}" class="muted" style="text-align:center;padding:40px;">No matches for your search.</td></tr>
             </tbody>
         </table>
     </div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  const input = document.getElementById('agents-search');
+  if (!input) return;
+  const rows = Array.from(document.querySelectorAll('tr.agent-row'));
+  const noMatch = document.getElementById('agents-no-match');
+  const countEl = document.getElementById('agents-count');
+  const baseCount = countEl ? countEl.textContent : '';
+  function apply() {
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(r => {
+      const show = !q || (r.dataset.search || '').indexOf(q) !== -1;
+      r.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (noMatch) noMatch.style.display = (q && visible === 0) ? '' : 'none';
+    if (countEl) countEl.textContent = q ? (visible + ' match' + (visible !== 1 ? 'es' : '')) : baseCount;
+  }
+  input.addEventListener('input', apply);
+})();
+</script>
 {% endblock %}

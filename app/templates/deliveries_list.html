@@ -161,7 +161,17 @@
 {% endif %}
 
 <div class="card" style="margin-top:14px;">
-    <div class="badge b-purple">DELIVERIES</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="badge b-purple">DELIVERIES</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="deliveries-search" placeholder="🔍 Customer, phone, address, agent…" autocomplete="off"
+                   style="padding:7px 12px;font-size:13px;width:280px;max-width:100%;">
+            <span id="deliveries-count" style="color:var(--muted);font-size:12px;">{{ rows|length if rows else 0 }} on this page</span>
+        </div>
+    </div>
+    {% if total_pages and total_pages > 1 %}
+    <div style="font-size:11px;color:var(--muted);margin-top:6px;">Live search only filters this page. Use the filters above (status/agent/zone) for full-database search.</div>
+    {% endif %}
 
     <div style="margin-top:12px; overflow:auto;">
         <table>
@@ -184,7 +194,7 @@
             <tbody>
                 {% if rows and rows|length > 0 %}
                 {% for d in rows %}
-                <tr id="row-{{ d.id }}" {% if d.status not in ("DELIVERED","FAILED","RETURNED") and user.role == "ADMIN" and agents %}class="assignable-row" style="cursor:pointer;" onclick="toggleRow({{ d.id }}, this)"{% endif %}>
+                <tr id="row-{{ d.id }}" data-search="{{ ((d.customer_name or '') ~ ' ' ~ (d.customer_phone or '') ~ ' ' ~ (d.address or '') ~ ' ' ~ (agent_names.get(d.agent_id, '') if d.agent_id else '') ~ ' ' ~ (sub_zone_names.get(d.sub_zone_id, '') if d.sub_zone_id else ''))|lower }}" {% if d.status not in ("DELIVERED","FAILED","RETURNED") and user.role == "ADMIN" and agents %}class="assignable-row deliv-row" style="cursor:pointer;" onclick="toggleRow({{ d.id }}, this)"{% else %}class="deliv-row"{% endif %}>
                     {% if user.role == "ADMIN" and agents %}
                     <td onclick="event.stopPropagation()">
                       {% if d.status not in ("DELIVERED","FAILED","RETURNED") %}
@@ -339,4 +349,25 @@ function validateBulkAssign() {
 }
 </script>
 {% endif %}
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  const input = document.getElementById('deliveries-search');
+  if (!input) return;
+  const rows = Array.from(document.querySelectorAll('tr.deliv-row'));
+  const countEl = document.getElementById('deliveries-count');
+  const baseCount = countEl ? countEl.textContent : '';
+  function apply() {
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(r => {
+      const show = !q || (r.dataset.search || '').indexOf(q) !== -1;
+      r.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (countEl) countEl.textContent = q ? (visible + ' match' + (visible !== 1 ? 'es' : '') + ' on this page') : baseCount;
+  }
+  input.addEventListener('input', apply);
+})();
+</script>
 {% endblock %}

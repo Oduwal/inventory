@@ -44,9 +44,13 @@
 {% endif %}
 
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
     <span class="badge b-purple">RECENT TRANSACTIONS</span>
-    <span style="color:var(--muted);font-size:12px;">{{ txs|length if txs else 0 }} records</span>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input type="text" id="tx-search" placeholder="🔍 Search item, reference, note, type…" autocomplete="off"
+             style="padding:7px 12px;font-size:13px;width:280px;max-width:100%;">
+      <span id="tx-count" style="color:var(--muted);font-size:12px;">{{ txs|length if txs else 0 }} records</span>
+    </div>
   </div>
   <div style="overflow-x:auto;">
     <table>
@@ -63,7 +67,8 @@
       <tbody>
         {% if txs %}
         {% for t in txs %}
-        <tr>
+        {% set _item_name = item_name_map.get(t.item_id, "Item #" ~ t.item_id) %}
+        <tr class="tx-row" data-search="{{ ((_item_name or '') ~ ' ' ~ (t.reference or '') ~ ' ' ~ (t.note or '') ~ ' ' ~ (t.type or ''))|lower }}">
           <td style="color:var(--muted);white-space:nowrap;">{{ t.created_at }}</td>
           <td>
             {% if t.type == "IN" %}
@@ -83,8 +88,32 @@
           <td colspan="6" style="text-align:center;padding:50px;color:var(--muted);">No transactions yet.</td>
         </tr>
         {% endif %}
+        <tr id="tx-no-match" style="display:none;"><td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">No transactions match your search.</td></tr>
       </tbody>
     </table>
   </div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  const input = document.getElementById('tx-search');
+  if (!input) return;
+  const rows = Array.from(document.querySelectorAll('tr.tx-row'));
+  const noMatch = document.getElementById('tx-no-match');
+  const countEl = document.getElementById('tx-count');
+  const baseCount = countEl ? countEl.textContent : '';
+  function apply() {
+    const q = input.value.trim().toLowerCase();
+    let visible = 0;
+    rows.forEach(r => {
+      const show = !q || (r.dataset.search || '').indexOf(q) !== -1;
+      r.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    if (noMatch) noMatch.style.display = (q && visible === 0) ? '' : 'none';
+    if (countEl) countEl.textContent = q ? (visible + ' match' + (visible !== 1 ? 'es' : '')) : baseCount;
+  }
+  input.addEventListener('input', apply);
+})();
+</script>
 {% endblock %}

@@ -51,9 +51,12 @@
   </div>
 </div>
 
-<!-- Date filter -->
+<!-- Date filter + live search -->
 <div class="card" style="margin-bottom:16px;">
   <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="flex:1;min-width:220px;"><label>Search</label>
+      <input type="text" id="transfers-search" placeholder="🔍 Branch, items, note…" autocomplete="off" oninput="applyFilters()">
+    </div>
     <div><label>From</label><input type="date" id="date_from" oninput="applyFilters()" style="width:auto;"></div>
     <div><label>To</label>  <input type="date" id="date_to"   oninput="applyFilters()" style="width:auto;"></div>
     <div><label>&nbsp;</label>
@@ -105,8 +108,10 @@
       </thead>
       <tbody>
         {% for t in transfers %}
+        {% set _items_text %}{% for line in t.items %}{{ line.item.name }} {% endfor %}{% endset %}
         <tr data-status="{{ t.status }}" data-date="{{ t.created_at.strftime('%Y-%m-%d') }}"
-            data-side="{% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}sender{% else %}receiver{% endif %}">
+            data-side="{% if user.branch_id == t.from_branch_id or (t.delegated_agent_id and t.delegated_agent_id == user.id) %}sender{% else %}receiver{% endif %}"
+            data-search="{{ ((t.from_branch.name or '') ~ ' ' ~ (t.to_branch.name or '') ~ ' ' ~ (_items_text or '') ~ ' ' ~ (t.note or ''))|lower }}">
           <td><a href="/transfers/{{ t.id }}" style="color:var(--accent);font-weight:700;">#{{ t.id }}</a></td>
           <td style="font-weight:600;">{{ t.from_branch.name }}</td>
           <td style="font-weight:600;">{{ t.to_branch.name }}</td>
@@ -146,7 +151,8 @@
         {% endfor %}
         {# Merchant receipt rows #}
         {% for mr in merchant_receipts %}
-        <tr data-status="MERCHANT" data-date="{{ mr.created_at.strftime('%Y-%m-%d') if mr.created_at else '' }}">
+        <tr data-status="MERCHANT" data-date="{{ mr.created_at.strftime('%Y-%m-%d') if mr.created_at else '' }}"
+            data-search="{{ ((mr.merchant_name or '') ~ ' ' ~ (mr.item_names or ''))|lower }}">
           <td><span style="color:var(--muted);font-size:11px;">🏪</span></td>
           <td style="font-weight:600;color:#2dd4bf;">{{ mr.merchant_name }}</td>
           <td style="color:var(--muted);">This branch</td>
@@ -195,6 +201,8 @@ function filterTable(status) {
 function applyFilters() {
   const from = document.getElementById('date_from').value;
   const to   = document.getElementById('date_to').value;
+  const searchEl = document.getElementById('transfers-search');
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
   const rows = document.querySelectorAll('#transfers-table tbody tr');
   let visible = 0;
   rows.forEach(row => {
@@ -213,7 +221,8 @@ function applyFilters() {
     }
     const fromOk = !from || rowDate >= from;
     const toOk   = !to   || rowDate <= to;
-    const show = statusOk && fromOk && toOk;
+    const searchOk = !q || (row.dataset.search || '').indexOf(q) !== -1;
+    const show = statusOk && fromOk && toOk && searchOk;
     row.style.display = show ? '' : 'none';
     if (show) visible++;
   });
@@ -224,6 +233,8 @@ function applyFilters() {
 function clearFilters() {
   document.getElementById('date_from').value = '';
   document.getElementById('date_to').value   = '';
+  const _s = document.getElementById('transfers-search');
+  if (_s) _s.value = '';
   _activeStatus = 'all';
   document.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
   document.querySelector('.filter-card[data-filter="all"]').classList.add('active');
