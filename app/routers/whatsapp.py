@@ -158,10 +158,18 @@ async def _try_auto_create_order_from_group(
         _log.warning("auto-order REJECT [branch=%s]: confidence=%r (need 'high'). msg=%r",
                      branch_id, parsed.get("confidence"), txt[:200])
         return 0
-    if not parsed.get("customer_name"):
-        _log.warning("auto-order REJECT [branch=%s]: missing customer_name. msg=%r",
-                     branch_id, txt[:200])
-        return 0
+    # Customer name is a display label, not an identifier — phone is the
+    # identifier. If the seller forgot the name, fall back to phone/address
+    # so the order still gets created and an agent can fix it on the dashboard.
+    customer_name = (parsed.get("customer_name") or "").strip()
+    if not customer_name:
+        _fallback_id = (parsed.get("customer_phone") or "").strip() or (parsed.get("address") or "").strip()[:40]
+        if _fallback_id:
+            customer_name = f"Unknown ({_fallback_id})"
+            parsed["customer_name"] = customer_name
+            _log.info("auto-order [branch=%s]: customer_name missing, using fallback %r",
+                      branch_id, customer_name)
+
     items = [i for i in (parsed.get("items") or [])
              if i.get("matched") and i.get("item_id")]
     if not items:
@@ -171,6 +179,11 @@ async def _try_auto_create_order_from_group(
         return 0
     if not (parsed.get("customer_phone") or parsed.get("address")):
         _log.warning("auto-order REJECT [branch=%s]: missing both customer_phone and address. msg=%r",
+                     branch_id, txt[:200])
+        return 0
+    # Final safety net: if every other field is missing too, refuse.
+    if not parsed.get("customer_name"):
+        _log.warning("auto-order REJECT [branch=%s]: customer_name AND phone AND address all missing. msg=%r",
                      branch_id, txt[:200])
         return 0
 
