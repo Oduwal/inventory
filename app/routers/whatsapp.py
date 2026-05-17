@@ -129,17 +129,38 @@ async def _try_auto_create_order_from_group(
 
     parsed = await parse_order_text(txt, db, branch_id)
     if not parsed:
+        _log.warning("auto-order REJECT [branch=%s]: parser returned None/empty. msg=%r",
+                     branch_id, txt[:200])
         return 0
 
+    _log.info("auto-order PARSED [branch=%s]: confidence=%s, customer_name=%r, "
+              "customer_phone=%r, address=%r, items=%s, unmatched=%s",
+              branch_id,
+              parsed.get("confidence"),
+              parsed.get("customer_name"),
+              parsed.get("customer_phone"),
+              parsed.get("address"),
+              parsed.get("items"),
+              parsed.get("unmatched_items"))
+
     if parsed.get("confidence") != "high":
+        _log.warning("auto-order REJECT [branch=%s]: confidence=%r (need 'high'). msg=%r",
+                     branch_id, parsed.get("confidence"), txt[:200])
         return 0
     if not parsed.get("customer_name"):
+        _log.warning("auto-order REJECT [branch=%s]: missing customer_name. msg=%r",
+                     branch_id, txt[:200])
         return 0
     items = [i for i in (parsed.get("items") or [])
              if i.get("matched") and i.get("item_id")]
     if not items:
+        _log.warning("auto-order REJECT [branch=%s]: no matched items with item_id. "
+                     "raw_items=%s, unmatched=%s, msg=%r",
+                     branch_id, parsed.get("items"), parsed.get("unmatched_items"), txt[:200])
         return 0
     if not (parsed.get("customer_phone") or parsed.get("address")):
+        _log.warning("auto-order REJECT [branch=%s]: missing both customer_phone and address. msg=%r",
+                     branch_id, txt[:200])
         return 0
 
     bot_user = db.execute(
@@ -173,10 +194,15 @@ async def _try_auto_create_order_from_group(
         if zones:
             code_to_zone = {z.code: z for z in zones}
             matched_code = extract_zone_code(txt, list(code_to_zone.keys()))
+            _log.info("auto-order ZONE [branch=%s]: available_codes=%s, matched_code=%r",
+                      branch_id, list(code_to_zone.keys()), matched_code)
             if matched_code:
                 z = code_to_zone[matched_code]
                 matched_zone_id = z.id
                 matched_zone_name = z.name
+        else:
+            _log.info("auto-order ZONE [branch=%s]: no sub_zones configured → Unassigned",
+                      branch_id)
     except Exception as e:
         _log.warning("auto-order: zone-code lookup failed: %s", e)
 
