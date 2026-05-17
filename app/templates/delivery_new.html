@@ -24,7 +24,7 @@
       <div>
         <label>Assign Agent</label>
         <select name="agent_id" id="agent-select" required onchange="loadAssignments(this.value)">
-          <option value="">— Select agent —</option>
+          <option value="unassigned" selected>📋 Unassigned (send to Orders queue)</option>
           {% for a in agents %}
           <option value="{{ a.id }}">{{ a.username }}{% if a.full_name %} — {{ a.full_name }}{% endif %}</option>
           {% endfor %}

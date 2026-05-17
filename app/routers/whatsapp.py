@@ -163,23 +163,11 @@ async def _try_auto_create_order_from_group(
                      branch_id, txt[:200])
         return 0
 
-    bot_user = db.execute(
-        select(User).where(
-            User.branch_id == branch_id,
-            User.role == "ADMIN",
-            User.is_active == True,
-        ).order_by(User.created_at.asc()).limit(1)
-    ).scalar()
-    if not bot_user:
-        bot_user = db.execute(
-            select(User).where(
-                User.role == "SUPERVISOR",
-                User.is_active == True,
-            ).order_by(User.created_at.asc()).limit(1)
-        ).scalar()
-    if not bot_user:
-        _log.warning("auto-order: no admin/supervisor for branch %s", branch_id)
-        return None
+    # Auto-orders land in the /orders queue, owned by the per-branch
+    # placeholder "Unassigned" user. Dispatch then bulk-assigns them to a
+    # real agent from /orders, which moves them onto /deliveries.
+    from app.unassigned_user import get_or_create_unassigned_user
+    bot_user = get_or_create_unassigned_user(db, branch_id)
 
     # Sub-zone routing: look up codes for this branch and match against the
     # message body. Whole-word, case-insensitive — falls back to None (→

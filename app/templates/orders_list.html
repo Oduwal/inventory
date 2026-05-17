@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Orders Queue{% endblock %}
+{% block page_title %}Orders{% endblock %}
+{% block page_subtitle %}New orders waiting to be assigned to an agent. Assign them to send them out for delivery.{% endblock %}
+{% set active = 'orders' %}
+
+{% block top_right %}
+{% if user.role == "ADMIN" %}
+<a class="btnPrimary" href="/deliveries/new">+ New Order</a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% if agents %}
+<div class="card" style="margin-bottom:16px;border-left:3px solid var(--cyan);">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <span class="badge b-blue">👤 BULK ASSIGN TO AGENT</span>
+    <span id="selected-count" class="muted small">0 orders selected</span>
+  </div>
+  <form method="post" action="/deliveries/bulk-assign" id="bulk-assign-form" onsubmit="return validateBulkAssign()">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="flex:1;min-width:200px;">
+        <label>Select Agent</label>
+        <select name="agent_id" id="bulk-agent" required style="margin-top:4px;">
+          <option value="">— choose agent —</option>
+          {% for a in agents %}
+          <option value="{{ a.id }}">{{ a.full_name or a.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btnGhost" onclick="selectAllPending()" style="font-size:12px;padding:8px 14px;">☑ Select All</button>
+        <button type="button" class="btnGhost" onclick="clearSelection()" style="font-size:12px;padding:8px 14px;">☐ Clear</button>
+        <button type="submit" class="btnPrimary" id="assign-btn" disabled style="opacity:.4;">✓ Assign Selected</button>
+      </div>
+    </div>
+    <div id="bulk-delivery-inputs"></div>
+  </form>
+</div>
+{% endif %}
+
+{% if user.role == "SUPERVISOR" and branches %}
+<div class="card" style="margin-bottom:16px;">
+  <div class="badge b-blue">BRANCH FILTER</div>
+  <form method="get" action="/orders" style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+    <div style="flex:1;min-width:220px;">
+      <label>Branch</label>
+      <select name="branch_id" onchange="this.form.submit()">
+        <option value="">All branches</option>
+        {% for b in branches %}
+        <option value="{{ b.id }}" {% if branch_id and (branch_id|string == b.id|string) %}selected{% endif %}>{{ b.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <span class="badge b-yellow">📋 IN QUEUE</span>
+    <span class="muted small">{{ total }} order{% if total != 1 %}s{% endif %} waiting</span>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          {% if agents %}<th style="width:32px;"></th>{% endif %}
+          <th>ID</th>
+          <th>Customer</th>
+          <th>Phone</th>
+          <th>Address</th>
+          <th>Zone</th>
+          <th>Items</th>
+          <th>Created</th>
+          <th>Open</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if rows and rows|length > 0 %}
+        {% for d in rows %}
+        <tr id="row-{{ d.id }}" {% if agents %}class="assignable-row" style="cursor:pointer;" onclick="toggleRow({{ d.id }}, this)"{% endif %}>
+          {% if agents %}
+          <td onclick="event.stopPropagation()">
+            <input type="checkbox" class="delivery-chk" data-id="{{ d.id }}"
+                   onchange="onCheckChange()"
+                   style="width:16px;height:16px;cursor:pointer;accent-color:var(--cyan);">
+          </td>
+          {% endif %}
+          <td>#{{ d.id }}</td>
+          <td>{{ d.customer_name or "-" }}</td>
+          <td onclick="event.stopPropagation()">
+            {% if d.customer_phone %}
+              <a href="tel:{{ d.customer_phone }}" style="color:#7fa8ff;text-decoration:underline;">{{ d.customer_phone }}</a>
+            {% else %}
+              -
+            {% endif %}
+          </td>
+          <td>{{ d.address or "-" }}</td>
+          <td onclick="event.stopPropagation()">
+            {% if d.sub_zone_id and sub_zone_names.get(d.sub_zone_id) %}
+              <span style="font-size:12px;color:#7fa8ff;">{{ sub_zone_names.get(d.sub_zone_id) }}</span>
+            {% elif sub_zones %}
+              <form method="post" action="/deliveries/{{ d.id }}/set-zone" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <select name="sub_zone_id" onchange="this.form.submit()" style="font-size:11px;padding:2px 4px;">
+                  <option value="">— Set zone —</option>
+                  {% for z in sub_zones %}
+                  <option value="{{ z.id }}">{{ z.name }}</option>
+                  {% endfor %}
+                </select>
+              </form>
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td style="max-width:340px;">
+            {% set s = items_summary.get(d.id, "") %}
+            {% if s %}
+              <details><summary class="muted">View items</summary><div style="margin-top:6px;">{{ s }}</div></details>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td>{{ d.created_at.strftime('%d %b %Y') if d.created_at else "-" }}</td>
+          <td><a class="btnPrimary" href="/deliveries/{{ d.id }}">View</a></td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr><td colspan="9" class="muted">No orders in the queue.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if agents %}
+<script nonce="{{ csp_nonce }}">
+function getChecked() {
+  return Array.from(document.querySelectorAll('.delivery-chk:checked')).map(c => parseInt(c.dataset.id));
+}
+function onCheckChange() {
+  const ids = getChecked();
+  document.getElementById('selected-count').textContent = ids.length + ' order' + (ids.length !== 1 ? 's' : '') + ' selected';
+  const btn = document.getElementById('assign-btn');
+  btn.disabled = ids.length === 0;
+  btn.style.opacity = ids.length === 0 ? '.4' : '1';
+}
+function toggleRow(id, row) {
+  const chk = row.querySelector('.delivery-chk');
+  if (!chk) return;
+  chk.checked = !chk.checked;
+  row.style.background = chk.checked ? 'rgba(0,212,255,.06)' : '';
+  onCheckChange();
+}
+function selectAllPending() {
+  document.querySelectorAll('.delivery-chk').forEach(c => { c.checked = true; });
+  document.querySelectorAll('.assignable-row').forEach(r => { r.style.background = 'rgba(0,212,255,.06)'; });
+  onCheckChange();
+}
+function clearSelection() {
+  document.querySelectorAll('.delivery-chk').forEach(c => { c.checked = false; });
+  document.querySelectorAll('.assignable-row').forEach(r => { r.style.background = ''; });
+  onCheckChange();
+}
+function validateBulkAssign() {
+  const ids = getChecked();
+  const sel = document.getElementById('bulk-agent');
+  if (!sel.value) { alert('Please select an agent first.'); return false; }
+  if (ids.length === 0) { alert('Please select at least one order.'); return false; }
+  const container = document.getElementById('bulk-delivery-inputs');
+  container.innerHTML = '';
+  ids.forEach(id => {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'delivery_ids'; inp.value = id;
+    container.appendChild(inp);
+  });
+  const agentName = sel.options[sel.selectedIndex].text;
+  return confirm(`Assign ${ids.length} order(s) to ${agentName}?`);
+}
+</script>
+{% endif %}
+{% endblock %}

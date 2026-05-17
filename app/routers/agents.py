@@ -649,6 +649,10 @@ async def deliveries_bulk_assign(
     agent = db.get(User, agent_id)
     if not agent or agent.role != "AGENT" or agent.branch_id != branch_id:
         return redirect("/deliveries?error=Invalid+agent")
+    # Cannot bulk-assign back into the queue — placeholder users are not real agents
+    from app.unassigned_user import is_unassigned_user
+    if is_unassigned_user(agent):
+        return redirect("/deliveries?error=Cannot+assign+to+the+queue+placeholder")
     assigned = 0
     for did in delivery_ids:
         d = db.get(Delivery, did)
@@ -699,6 +703,9 @@ async def delivery_assign_agent(
     agent = db.get(User, agent_id)
     if not agent or agent.branch_id != d.branch_id:
         return redirect(f"/deliveries/{delivery_id}?error=Agent+not+found+or+not+in+this+branch")
+    from app.unassigned_user import is_unassigned_user
+    if is_unassigned_user(agent):
+        return redirect(f"/deliveries/{delivery_id}?error=Cannot+assign+to+the+queue+placeholder")
     d.agent_id = agent_id
     notify(db, agent_id, "📦 New Delivery Assigned",
            f"Delivery #{d.id} for {d.customer_name} has been assigned to you.",

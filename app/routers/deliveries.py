@@ -10,6 +10,11 @@ from app.core import *
 from app.models import *
 from app.security import *
 from app.whatsapp_service import send_whatsapp_fallback
+from app.unassigned_user import (
+    UNASSIGNED_USERNAME_PREFIX,
+    get_or_create_unassigned_user,
+    is_unassigned_user,
+)
 
 router = APIRouter()
 
@@ -21,6 +26,7 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
     set_rls_context(db, user)
     if not is_admin(user) and not is_supervisor(user):
         return redirect("/my-deliveries")
+    # Hide queue (placeholder-owned) deliveries from /deliveries — they live on /orders
     status = request.query_params.get("status", "").strip().upper()
     agent_id = request.query_params.get("agent_id", "").strip()
     sub_zone_filter = request.query_params.get("sub_zone_id", "").strip()
@@ -78,9 +84,20 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
             filters.append(Delivery.sub_zone_id.is_(None))
         elif sub_zone_filter.isdigit():
             filters.append(Delivery.sub_zone_id == int(sub_zone_filter))
-        agents_stmt = select(User).where(User.role == "AGENT").where(User.branch_id == branch_id).where(User.is_active == True).order_by(User.username.asc())
+        agents_stmt = (
+            select(User)
+            .where(User.role == "AGENT")
+            .where(User.branch_id == branch_id)
+            .where(User.is_active == True)
+            .where(~User.username.like(f"{UNASSIGNED_USERNAME_PREFIX}%"))
+            .order_by(User.username.asc())
+        )
         agents = db.execute(agents_stmt).scalars().all()
 
+    # Exclude orders still in the /orders queue (owned by a placeholder Unassigned user)
+    _unassigned_uid_subq = select(User.id).where(User.username.like(f"{UNASSIGNED_USERNAME_PREFIX}%"))
+    filters.append(Delivery.agent_id.notin_(_unassigned_uid_subq))
+    kpi_filters.append(Delivery.agent_id.notin_(_unassigned_uid_subq))
     total = db.scalar(select(func.count(Delivery.id)).where(*filters) if filters else select(func.count(Delivery.id))) or 0
     rows = db.execute((select(Delivery).where(*filters) if filters else select(Delivery)).order_by(desc(Delivery.created_at)).offset(offset).limit(per_page)).scalars().all()
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -198,6 +215,83 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
         "sub_zone_names": sub_zone_names,
         "sub_zone_filter": sub_zone_filter,
         "csrf_token": csrf_token,
+    })
+
+
+@router.get("/orders", response_class=HTMLResponse)
+def orders_queue_list(request: Request, db: Session = Depends(get_db), user: User = Depends(RequireRole("ADMIN", "SUPERVISOR"))):
+    """Staging queue: orders created (auto from WhatsApp or manually) but not
+    yet assigned to a real agent. Each row's agent_id points at the per-branch
+    Unassigned placeholder. Bulk-assign moves them to /deliveries."""
+    set_rls_context(db, user)
+
+    # Supervisor: optional branch filter; default = all branches.
+    if is_supervisor(user):
+        filter_branch = request.query_params.get("branch_id", "").strip()
+        branch_id = int(filter_branch) if filter_branch.isdigit() else None
+        branches = db.execute(select(Branch).order_by(Branch.name.asc())).scalars().all()
+    else:
+        branch_id = get_selected_branch_id(request, user)
+        filter_branch = ""
+        branches = []
+
+    filters = [Delivery.status == "PENDING"]
+    if branch_id:
+        filters.append(Delivery.branch_id == branch_id)
+        placeholder_uid = get_or_create_unassigned_user(db, branch_id).id
+        filters.append(Delivery.agent_id == placeholder_uid)
+    else:
+        # Supervisor with no branch filter — match any placeholder user
+        placeholder_subq = select(User.id).where(User.username.like(f"unassigned_b%"))
+        filters.append(Delivery.agent_id.in_(placeholder_subq))
+
+    rows = db.execute(
+        select(Delivery)
+        .where(*filters)
+        # zone-tagged rows first, then unassigned-zone rows; within each group, newest first
+        .order_by(Delivery.sub_zone_id.is_(None).asc(), Delivery.sub_zone_id.asc(), desc(Delivery.created_at))
+    ).scalars().all()
+
+    delivery_ids = [d.id for d in rows]
+    items_summary: dict[int, str] = {}
+    if delivery_ids:
+        lines = db.execute(
+            select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
+            .join(Item, Item.id == DeliveryItem.item_id)
+            .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
+        ).all()
+        grouped: dict[int, list[str]] = {}
+        for did, iname, qty in lines:
+            grouped.setdefault(int(did), []).append(f"{iname} ×{int(qty)}")
+        for did, parts in grouped.items():
+            items_summary[did] = ", ".join(parts)
+
+    # Sub-zones + agents for the current branch (only meaningful when one branch is in view)
+    sub_zones: list = []
+    sub_zone_names: dict[int, str] = {}
+    agents: list = []
+    if branch_id:
+        sub_zones = db.execute(
+            select(SubZone).where(SubZone.branch_id == branch_id).order_by(SubZone.name.asc())
+        ).scalars().all()
+        sub_zone_names = {z.id: z.name for z in sub_zones}
+        agents = db.execute(
+            select(User)
+            .where(User.role == "AGENT")
+            .where(User.branch_id == branch_id)
+            .where(User.is_active == True)
+            .where(~User.username.like(f"{UNASSIGNED_USERNAME_PREFIX}%"))
+            .order_by(User.username.asc())
+        ).scalars().all()
+
+    csrf_token = get_csrf_token(request)
+    return tpl(request, "orders_list.html", {
+        "request": request, "rows": rows, "items_summary": items_summary,
+        "agents": agents, "sub_zones": sub_zones, "sub_zone_names": sub_zone_names,
+        "branches": branches, "selected_branch_id": branch_id, "branch_id": filter_branch,
+        "user": user, "active": "orders", "csrf_token": csrf_token,
+        "total": len(rows),
     })
 
 
@@ -367,7 +461,7 @@ def delivery_new_form(request: Request, db: Session = Depends(get_db), user: Use
 @router.post("/deliveries/new")
 async def delivery_create(
     request: Request,
-    agent_id: int | None = Form(None),
+    agent_id: str | None = Form(None),
     branch_id: int | None = Form(None),
     customer_name: str = Form(...),
     customer_phone: str = Form(""),
@@ -391,24 +485,26 @@ async def delivery_create(
     if not consume_form_token(request, form_token):
         return redirect("/deliveries?error=Duplicate+submission+detected.+Please+try+again.")
     if is_supervisor(user):
-        # Supervisor creates unassigned order for a specific branch
-        # Find the admin of that branch to assign, or leave agent_id as None
+        # Supervisor-created orders land in the /orders queue for the chosen
+        # branch — owned by the per-branch placeholder "Unassigned" user.
         if not branch_id:
             raise HTTPException(status_code=400, detail="Branch required")
-        # Assign to first admin of the branch (they will re-delegate to agents)
-        branch_admin = db.scalar(select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id).where(User.is_active == True))
-        target_agent_id = branch_admin.id if branch_admin else None
-        if not target_agent_id:
-            raise HTTPException(status_code=400, detail="No admin found for selected branch")
+        target_agent_id = get_or_create_unassigned_user(db, branch_id).id
     elif is_admin(user):
-        if agent_id is None:
+        if agent_id is None or (isinstance(agent_id, str) and not agent_id.strip()):
             raise HTTPException(status_code=422, detail="agent_id required for admin")
-        target_agent_id = int(agent_id)
         branch_id = get_current_branch_id(request)
-        # [SEC] Verify target agent belongs to this admin's branch
-        target_agent = db.get(User, target_agent_id)
-        if not target_agent or target_agent.branch_id != branch_id:
-            raise HTTPException(status_code=403, detail="Agent not in your branch")
+        if isinstance(agent_id, str) and agent_id.strip().lower() == "unassigned":
+            target_agent_id = get_or_create_unassigned_user(db, branch_id).id
+        else:
+            try:
+                target_agent_id = int(agent_id)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="agent_id must be 'unassigned' or a user id")
+            # [SEC] Verify target agent belongs to this admin's branch
+            target_agent = db.get(User, target_agent_id)
+            if not target_agent or target_agent.branch_id != branch_id:
+                raise HTTPException(status_code=403, detail="Agent not in your branch")
     else:
         target_agent_id = int(user.id)
         branch_id = get_current_branch_id(request)
@@ -456,7 +552,11 @@ async def delivery_create(
         if asgn_row:
             assigned_item_ids.add(int(asgn_row[0]))
     # Lock all item rows that need OUT transactions (sorted by ID to avoid deadlocks)
-    needs_out = not is_supervisor(user)
+    # Orders parked with the per-branch Unassigned user also defer stock OUT —
+    # it happens at bulk-assign time, the same way supervisor-created orders do.
+    _target_user = db.get(User, target_agent_id)
+    _deferred_stock_out = is_supervisor(user) or is_unassigned_user(_target_user)
+    needs_out = not _deferred_stock_out
     if needs_out:
         out_item_ids = sorted({int(iid) for iid, qty in zip(item_id, quantity)
                                if int(qty or 0) > 0 and int(iid) not in assigned_item_ids})
@@ -481,9 +581,9 @@ async def delivery_create(
         q = int(qty) if qty is not None else 0
         if q > 0:
             db.add(DeliveryItem(delivery_id=d.id, item_id=int(iid), quantity=q, line_amount=amt or 0))
-            # Supervisor-created orders: no OUT transaction — stock only leaves when
-            # the branch admin assigns the delivery to an agent.
-            if is_supervisor(user):
+            # Supervisor-created or Unassigned-queued orders: no OUT transaction —
+            # stock only leaves when the order is bulk-assigned to a real agent.
+            if _deferred_stock_out:
                 continue
             # Create OUT transaction immediately (unless covered by an assignment)
             if int(iid) not in assigned_item_ids:
