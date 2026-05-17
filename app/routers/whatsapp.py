@@ -273,6 +273,70 @@ async def _try_auto_create_order_from_group(
         ))
     db.commit()
 
+    # ── Promote pending wa_pending_cache row → whatsapp_outbound_map ─────
+    # The seller's ORIGINAL post in their feedback group was cached by
+    # /api/cache-wa-message before the order existed. Now that the
+    # delivery is created, find that cached row and link it so future
+    # agent updates route to the seller's feedback group (not this
+    # order-creation group). Mirrors the manual create flow in
+    # deliveries.py:643-714.
+    try:
+        _db_name_lower = (delivery.customer_name or "").lower()
+        _db_phone_keys: set[str] = set()
+        for _raw in re.split(r"[,;]", (delivery.customer_phone or "") + "," + (delivery.customer_whatsapp or "")):
+            _digits = re.sub(r"\D", "", _raw)
+            if len(_digits) >= 10:
+                _db_phone_keys.add(_digits[-10:])
+
+        _pending_rows = db.execute(text(
+            "SELECT message_id, body, sender, group_jid, customer_name, customer_phone "
+            "FROM wa_pending_cache ORDER BY created_at DESC LIMIT 50"
+        )).fetchall()
+
+        _log.info("auto-order pending-scan for #%s: name=%r phone_keys=%s pending_count=%d",
+                  delivery.id, _db_name_lower, sorted(_db_phone_keys), len(_pending_rows))
+
+        for _pr in _pending_rows:
+            _p_mid, _p_body, _p_sender, _p_gjid, _p_cname, _p_cphone = _pr[0], _pr[1], _pr[2], _pr[3], _pr[4], _pr[5]
+
+            _p_phone_digits = re.sub(r"\D", "", _p_cphone or "")[-10:] if _p_cphone else ""
+            _phone_ok = bool(_p_phone_digits and _p_phone_digits in _db_phone_keys)
+
+            _name_ok = False
+            if _p_cname and _db_name_lower and len(_p_cname) > 3:
+                _p_words = [w for w in _p_cname.split() if len(w) > 2]
+                if len(_p_words) >= 2 and all(w in _db_name_lower for w in _p_words):
+                    _name_ok = True
+                elif _p_cname == _db_name_lower:
+                    _name_ok = True
+
+            if _phone_ok or _name_ok:
+                _is_sqlite = DATABASE_URL.startswith("sqlite")
+                if _is_sqlite:
+                    _upsert = (
+                        "INSERT OR REPLACE INTO whatsapp_outbound_map "
+                        "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now)"
+                    )
+                else:
+                    _upsert = (
+                        "INSERT INTO whatsapp_outbound_map "
+                        "(message_id, order_id, body, source, sender, group_jid, created_at) "
+                        "VALUES (:mid, :oid, :body, 'group', :sender, :gjid, :_now) "
+                        "ON CONFLICT (message_id) DO UPDATE SET order_id=EXCLUDED.order_id"
+                    )
+                db.execute(text(_upsert), {
+                    "mid": _p_mid, "oid": delivery.id, "body": _p_body,
+                    "sender": _p_sender, "gjid": _p_gjid, "_now": _now()
+                })
+                db.execute(text("DELETE FROM wa_pending_cache WHERE message_id = :mid"), {"mid": _p_mid})
+                db.commit()
+                _log.info("auto-order linked pending WA message %s (from group %s) → Order #%s",
+                          (_p_mid or "")[:20], (_p_gjid or "")[:24], delivery.id)
+                break
+    except Exception as _e:
+        _log.warning("auto-order pending-scan failed for #%s: %s", delivery.id, _e)
+
     # Trigger the PENDING call the same way delivery_create does
     # (deliveries.py:582). Without this the auto-orders never get an
     # outbound AI call even though manual orders do.
@@ -1850,6 +1914,21 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             message_id, customer_name, customer_phone, body[:60]
         )
         return {"status": "ignored"}
+
+    # Skip caching when the post comes from an order-creation group — those
+    # posts are dispatcher copy-pastes, not real seller origins. They get
+    # auto-created by /api/whatsapp-webhook; routing for agent updates
+    # should be derived from the seller's original feedback-group post in
+    # wa_pending_cache. Without this skip, the order-creation group's own
+    # cache-wa-message would write a whatsapp_outbound_map row pointing
+    # at itself, beating the pending-promotion to the punch.
+    if group_jid and group_jid in _seller_group_branch_map():
+        logging.getLogger("cache_wa").info(
+            "cache-wa-message: SKIP (group %s is an order-creation group) message_id=%s",
+            group_jid[:24], message_id[:20]
+        )
+        return {"status": "skipped_order_group"}
+
     logging.getLogger("cache_wa").info(
         "cache-wa-message: ACCEPTED message_id=%s name=%r phone=%r group=%s",
         message_id[:20], customer_name, customer_phone, group_jid[:20]
