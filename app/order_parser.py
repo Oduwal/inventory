@@ -42,13 +42,19 @@ def _build_prompt(text: str, items_catalog) -> str:
     return (
         "Parse this Nigerian order message into JSON.\n\n"
         f"Available items (id|name|aliases):\n{catalog}\n\n"
-        "MATCHING RULE: A product line in the message matches an item if "
-        "either the catalog name OR any comma-separated alias substring "
-        "appears in the seller's product description (case-insensitive). "
-        "If 'aliases' is empty, only the name is used. "
-        "If a single phrase like 'female tea set' matches aliases on TWO "
-        "different items, include BOTH items in the order (qty=1 each unless "
-        "stated). Set matched=true and use the catalog id.\n\n"
+        "MATCHING RULE: For every product line in the message, pick the catalog "
+        "item that is most clearly the intended product. Allow for typos, missing "
+        "or extra words, abbreviations, plural/singular, verb-form differences, "
+        "and common synonyms. Examples of valid matches:\n"
+        "  - 'Mullin Tea'           → 'Mullein Tea'         (typo)\n"
+        "  - 'A520 earbuds'         → 'A520 TWS Earbuds'    (missing word)\n"
+        "  - 'Vision Enhancing'     → 'Vision Enhance Roller' (verb form)\n"
+        "  - 'fem tea set'          → 'Female Tea Set'      (abbreviation)\n"
+        "Aliases (when present) are additional ways sellers refer to the item — "
+        "treat them as equally valid names. If a single phrase clearly refers to "
+        "two distinct items, include both. Only set matched=false when NO catalog "
+        "item is plausibly the intended product. Set matched=true and use the "
+        "catalog id whenever there is a clear best match.\n\n"
         "PRICING CONVENTION — read carefully:\n"
         "- Prices come ONLY from the message body. Never invent a price.\n"
         "- A product line may list ONE number after the qty/product or TWO "
@@ -70,6 +76,75 @@ def _build_prompt(text: str, items_catalog) -> str:
         "unit_price * quantity exactly.\n\n"
         f"Message:\n\"\"\"{text}\"\"\""
     )
+
+
+def _fuzzy_match_item(query: str, items_catalog, *, threshold: float = 0.72) -> dict | None:
+    """Find the best catalog item for a free-text product name.
+
+    Walks the catalog comparing the query (lower-cased, alnum-only) against
+    each item's name and aliases using difflib.SequenceMatcher. Returns the
+    item with the highest ratio above `threshold`, or None if nothing
+    crosses the bar.
+
+    Threshold 0.72 is a balance: catches 'Mullin Tea' → 'Mullein Tea' (0.85),
+    'A520 earbuds' → 'A520 TWS Earbuds' (0.74), but rejects unrelated items
+    (typically <0.5). Lower the threshold to be more aggressive, raise it
+    to be more strict.
+    """
+    import difflib
+    if not query:
+        return None
+    norm = lambda s: re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).strip()
+    q = norm(query)
+    if not q:
+        return None
+    best = None
+    best_ratio = 0.0
+    for it in items_catalog:
+        candidates = [it.name]
+        if it.aliases:
+            candidates.extend(a.strip() for a in it.aliases.split(",") if a.strip())
+        for c in candidates:
+            cn = norm(c)
+            if not cn:
+                continue
+            r = difflib.SequenceMatcher(None, q, cn).ratio()
+            if r > best_ratio:
+                best_ratio = r
+                best = it
+    if best_ratio >= threshold:
+        return {"item": best, "score": best_ratio}
+    return None
+
+
+def _apply_fuzzy_fallback(parsed: dict, items_catalog) -> dict:
+    """For each unmatched item in the parsed result, try a fuzzy lookup
+    against the catalog. Successful matches get promoted into items[]."""
+    unmatched = parsed.get("unmatched_items") or []
+    if not unmatched:
+        return parsed
+    items_out = list(parsed.get("items") or [])
+    still_unmatched = []
+    for u in unmatched:
+        name = u.get("item_name") if isinstance(u, dict) else str(u)
+        if not name:
+            still_unmatched.append(u)
+            continue
+        match = _fuzzy_match_item(name, items_catalog)
+        if match:
+            it = match["item"]
+            _log.info("fuzzy-match: %r → %s (id=%s, score=%.2f)", name, it.name, it.id, match["score"])
+            promoted = dict(u) if isinstance(u, dict) else {"item_name": name}
+            promoted["item_id"] = it.id
+            promoted["item_name"] = it.name
+            promoted["matched"] = True
+            promoted.setdefault("quantity", 1)
+            items_out.append(promoted)
+        else:
+            still_unmatched.append(u)
+    parsed["items"] = items_out
+    parsed["unmatched_items"] = still_unmatched
+    return parsed
 
 
 async def parse_order_text(text: str, db, branch_id: int) -> dict | None:
@@ -95,7 +170,9 @@ async def parse_order_text(text: str, db, branch_id: int) -> dict | None:
         parts = data["candidates"][0]["content"]["parts"]
         raw = "".join(p["text"] for p in parts if p.get("text") and not p.get("thought"))
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-        return json.loads(raw)
+        parsed = json.loads(raw)
+        # Fuzzy safety net for anything Gemini left in unmatched_items
+        return _apply_fuzzy_fallback(parsed, items)
     except Exception as e:
         _log.warning("parse_order_text failed: %s", e)
         return None
