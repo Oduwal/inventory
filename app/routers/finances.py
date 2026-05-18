@@ -442,11 +442,21 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
                 continue
             items_by_delivery.setdefault(int(did), []).append((str(iname), q, la))
     _ce_br = CashEntry.branch_id == branch_id if not is_supervisor(user) else True
-    agent_exp_map = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
-    agent_coll_exp_txt = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
-    op_cash_map = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).group_by(CashEntry.agent_id)).all()}
-    office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br)) or 0)
-    waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
+    # When an agent runs the report, scope every cash query to their own
+    # agent_id — otherwise they'd see other agents' op-cash / expenses in the
+    # "Operating Cash & Expenses" section. The /reports/preview endpoint
+    # already does this via _agent_ce_filter (line 286-294); mirror it here.
+    _ce_agent = (CashEntry.agent_id == target_agent_id) if target_agent_id is not None else True
+    agent_exp_map = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind.in_(["EXPENSE","COLLECTION_EXPENSE"])).where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(_ce_agent).group_by(CashEntry.agent_id).order_by(CashEntry.agent_id.asc())).all()}
+    agent_coll_exp_txt = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "COLLECTION_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(_ce_agent).group_by(CashEntry.agent_id)).all()}
+    op_cash_map = {int(aid): float(t or 0) for aid, t in db.execute(select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(_ce_agent).group_by(CashEntry.agent_id)).all()}
+    # Office expenses are branch-wide (not per-agent), so always 0 for agents.
+    if is_agent(user):
+        office_total = 0.0
+        waybill_total = 0.0
+    else:
+        office_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br)) or 0)
+        waybill_total = float(db.scalar(select(func.coalesce(func.sum(CashEntry.amount), 0)).where(CashEntry.kind == "OFFICE_EXPENSE").where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt).where(_ce_br).where(func.lower(func.coalesce(CashEntry.note, "")).like("%waybill%"))) or 0)
     other_office_total = office_total - waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname: dict[int, str] = {}
@@ -482,7 +492,8 @@ def reports_txt(request: Request, start_date: str | None = None, end_date: str |
         lines += ["Operating Cash & Expenses:"] + (agent_section_lines or ["  None"])
         if total_op_cash_given > 0:
             lines += [f"  Total operating cash given : {_ngn(total_op_cash_given)}", f"  Total expenses             : {_ngn(total_agent_expenses)}", f"  Total balance to return    : {_ngn(total_op_cash_balance)}"]
-        lines += ["", "Office expenses:", f"  Waybills              : {_ngn(waybill_total)}", f"  Other office expenses : {_ngn(other_office_total)}", f"  Total office expenses : {_ngn(office_total)}", ""]
+        # Office expenses are branch-wide, not part of an agent's report.
+        lines += [""]
         remittance = grand_total - expenses_from_collections
         lines += ["Amount to be remitted (collections only):"]
         lines.append(f"  {_ngn(grand_total)} - {_ngn(expenses_from_collections)} (uncovered expenses) = {_ngn(remittance)}" if expenses_from_collections > 0 else f"  {_ngn(grand_total)}")
