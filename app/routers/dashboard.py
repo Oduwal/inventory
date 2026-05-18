@@ -75,7 +75,7 @@ def home(request: Request, db: Session = Depends(get_db), user: User = Depends(g
         if item.branch_id == branch_id:
             s = stock or 0
             total_stock += int(s)
-            inventory_value += s * (item.cost_price or 0)
+            inventory_value += float(s) * float(item.cost_price or 0)
             cat = item.category or "Uncategorized"
             cat_map[cat] = cat_map.get(cat, 0) + s
             cat_items.setdefault(cat, []).append({"name": item.name, "stock": int(s), "unit": item.unit or "pcs", "reorder_level": int(item.reorder_level or 0)})
@@ -773,7 +773,7 @@ def supervisor_dashboard(request: Request, db: Session = Depends(get_db), preset
     all_top_rows_raw = []
     for item, stock in get_items_with_stock(db):
         s = int(stock or 0)
-        all_inventory_value += s * (item.cost_price or 0)
+        all_inventory_value += float(s) * float(item.cost_price or 0)
         all_total_stock += s
         cat = item.category or "Uncategorized"
         all_cat_map[cat] = all_cat_map.get(cat, 0) + s

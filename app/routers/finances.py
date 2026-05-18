@@ -275,7 +275,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity, DeliveryItem.line_amount, Item.selling_price)
             .join(Item, Item.id == DeliveryItem.item_id).where(DeliveryItem.delivery_id.in_(delivery_ids))
         ).all():
-            q = qty or 0; la = line_amt or 0; sp = selling_price or 0
+            q = int(qty or 0); la = float(line_amt or 0); sp = float(selling_price or 0)
             # Skip items removed by adjustment (line_amount == 0 means customer refused/returned)
             if la == 0 and q > 0:
                 continue
@@ -294,7 +294,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         _agent_ce_filter = True  # supervisor: no agent filter
     # agent_exp_map: AGENT expenses EXCLUDING waybill-tagged ones (those go to waybill section)
     # agent_exp_map: includes both EXPENSE (from op cash) and COLLECTION_EXPENSE (from collection)
-    agent_exp_map = {int(aid): t for aid, t in db.execute(
+    agent_exp_map = {int(aid): float(t or 0) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind.in_(["EXPENSE", "COLLECTION_EXPENSE"]))
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
@@ -304,7 +304,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         .group_by(CashEntry.agent_id)
     ).all()}
     # Separate collection-funded expenses per agent for report breakdown
-    agent_coll_exp_map = {int(aid): t for aid, t in db.execute(
+    agent_coll_exp_map = {int(aid): float(t or 0) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "COLLECTION_EXPENSE")
         .where(CashEntry.created_at >= start_dt).where(CashEntry.created_at <= end_dt)
@@ -312,7 +312,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         .where(_agent_ce_filter if not is_supervisor(user) else True)
         .group_by(CashEntry.agent_id)
     ).all()}
-    op_cash_map = {int(aid): t for aid, t in db.execute(
+    op_cash_map = {int(aid): float(t or 0) for aid, t in db.execute(
         select(CashEntry.agent_id, func.coalesce(func.sum(CashEntry.amount), 0))
         .where(CashEntry.kind == "OPERATING_CASH").where(CashEntry.created_at >= start_dt)
         .where(CashEntry.created_at <= end_dt).where(_ce_branch)
@@ -334,7 +334,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
     elif target_agent_id:
         _wb_stmt = _wb_stmt.where(CashEntry.agent_id == target_agent_id)
     waybill_entries_raw = db.execute(_wb_stmt).all()
-    waybill_entries = [{"amount": r[0], "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
+    waybill_entries = [{"amount": float(r[0] or 0), "note": str(r[1] or ""), "date": r[2].strftime("%d %b %Y") if r[2] else ""} for r in waybill_entries_raw]
     waybill_total = sum(e["amount"] for e in waybill_entries)
     # office_total = non-waybill OFFICE_EXPENSE + waybill_total
     _off_stmt = (
@@ -348,7 +348,7 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         _off_stmt = _off_stmt.where(CashEntry.agent_id == user.id)
     elif target_agent_id:
         _off_stmt = _off_stmt.where(CashEntry.agent_id == target_agent_id)
-    office_non_waybill = db.scalar(_off_stmt) or 0
+    office_non_waybill = float(db.scalar(_off_stmt) or 0)
     office_total = office_non_waybill + waybill_total
     all_agent_ids = list(set(list(agent_exp_map.keys()) + list(op_cash_map.keys())))
     uname = {}
@@ -356,14 +356,14 @@ def reports_preview(request: Request, start_date: str | None = None, end_date: s
         users_map = {int(u.id): u for u in db.execute(select(User).where(User.id.in_(all_agent_ids))).scalars().all()}
         uname = {uid: (u.full_name or u.username) for uid, u in users_map.items()}
     delivery_rows = []
-    grand_total = 0
+    grand_total = 0.0
     for idx, d in enumerate(deliveries, 1):
         d_items = items_by_delivery.get(int(d.id), [])
         total = sum(i["amount"] for i in d_items)
         grand_total += total
         delivery_rows.append({"idx": idx, "customer": d.customer_name, "date": (d.delivery_date or d.created_at).strftime("%d %b %Y"), "items": d_items, "total": total})
     agent_op_summary = []
-    total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0
+    total_op_cash_given = total_op_cash_balance_returned = expenses_from_collections = 0.0
     for aid in sorted(set(list(agent_exp_map.keys()) + list(op_cash_map.keys()))):
         exp       = agent_exp_map.get(aid, 0)
         coll_exp  = agent_coll_exp_map.get(aid, 0)
@@ -1213,7 +1213,7 @@ def merchant_remittance_data(
         cat = r.category
         did = r.delivery_id
         qty = int(r.qty or 0)
-        amt = r.collection or 0
+        amt = float(r.collection or 0)
 
         if cat not in categories:
             categories[cat] = {"category": cat, "rows": [], "subtotal_qty": 0, "subtotal_collection": 0}
@@ -1284,7 +1284,7 @@ def merchant_remittance_csv(
             categories_order.append(key)
         delivery_map[key]["items"].append(f"{r.item_name} x{int(r.qty or 0)}")
         delivery_map[key]["qty"] += int(r.qty or 0)
-        delivery_map[key]["collection"] += r.collection or 0
+        delivery_map[key]["collection"] += float(r.collection or 0)
 
     output = io.StringIO()
     w = csv.writer(output)
