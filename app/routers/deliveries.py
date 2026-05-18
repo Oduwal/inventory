@@ -109,6 +109,11 @@ def deliveries_admin_list(request: Request, db: Session = Depends(get_db), user:
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            # Hide vetting phantoms: rows with line_amount=0 are placeholders
+            # inserted when an adjustment reduces qty (e.g. 2 → 1 leaves a
+            # qty=1, line_amount=0 phantom for stock-return tracking). They
+            # double-up the items popup, so exclude them from the summary.
+            .where(DeliveryItem.line_amount != 0)
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
@@ -259,6 +264,11 @@ def orders_queue_list(request: Request, db: Session = Depends(get_db), user: Use
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            # Hide vetting phantoms: rows with line_amount=0 are placeholders
+            # inserted when an adjustment reduces qty (e.g. 2 → 1 leaves a
+            # qty=1, line_amount=0 phantom for stock-return tracking). They
+            # double-up the items popup, so exclude them from the summary.
+            .where(DeliveryItem.line_amount != 0)
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}

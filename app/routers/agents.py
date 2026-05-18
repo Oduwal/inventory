@@ -521,6 +521,9 @@ def my_deliveries(request: Request, db: Session = Depends(get_db), user: User = 
             select(DeliveryItem.delivery_id, Item.name, DeliveryItem.quantity)
             .join(Item, Item.id == DeliveryItem.item_id)
             .where(DeliveryItem.delivery_id.in_(delivery_ids))
+            # Hide vetting phantoms (line_amount=0 placeholders inserted on
+            # adjustment-approve that double up the popup).
+            .where(DeliveryItem.line_amount != 0)
             .order_by(DeliveryItem.delivery_id.asc(), Item.name.asc())
         ).all()
         grouped: dict[int, list[str]] = {}
