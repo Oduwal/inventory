@@ -402,6 +402,23 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         _log.warning("Invalid Vapi webhook secret from %s", request.client.host if request.client else "?")
         return JSONResponse({"error": "Invalid webhook secret"}, status_code=403)
 
+    # Idempotency — OPTIONAL for Vapi (they don't send our header). If a key
+    # is present we replay; otherwise the handler runs normally. This lets
+    # any external retriers (Vapi included) opt in by sending the header
+    # without breaking the existing flow.
+    from app.idempotency import require_idempotency_key, lookup_or_replay, store_response
+    _idem_key = require_idempotency_key(request, optional=True)
+    _idem_path = "/api/call-webhook"
+    if _idem_key:
+        _cached = lookup_or_replay(db, _idem_path, _idem_key)
+        if _cached is not None:
+            return _cached
+
+    def _save(body, status_code: int = 200):
+        if _idem_key:
+            store_response(db, _idem_path, _idem_key, status_code, body)
+        return body
+
     try:
         payload = await request.json()
         _log = logging.getLogger("webhook")
@@ -412,7 +429,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         _log.info("Vapi message type: '%s'", msg_type)
 
         if msg_type != "end-of-call-report":
-            return JSONResponse({"status": "ignored"})
+            return JSONResponse(_save({"status": "ignored"}))
 
         call_data = message.get("call", {})
         metadata = call_data.get("metadata", {})
@@ -420,7 +437,7 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
         call_id = call_data.get("id", "")
 
         if not delivery_id:
-            return JSONResponse({"error": "No delivery_id in metadata"}, status_code=400)
+            return JSONResponse(_save({"error": "No delivery_id in metadata"}, status_code=400), status_code=400)
 
         # Log full structure to find where Vapi puts summary/endedReason
         _log.info("Vapi call_data keys=%s", list(call_data.keys()) if call_data else "NONE")
@@ -524,9 +541,10 @@ async def call_webhook(request: Request, db: Session = Depends(get_db)):
                        f"The AI spoke to {d.customer_name}. Update: {summary}",
                        f"/deliveries/{d.id}", "warning")
 
-        return JSONResponse({"status": "success"})
+        return JSONResponse(_save({"status": "success"}))
     except Exception as e:
         logging.getLogger("webhook").error(f"Webhook error: %s", e, exc_info=True)
+        # NOTE: don't cache 500s — let retries hit the handler again to recover.
         return JSONResponse({"error": "Internal webhook processing error."}, status_code=500)
 
 
@@ -1605,6 +1623,22 @@ async def send_agent_feedback(
 @router.post("/api/whatsapp-webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     _verify_webhook_token(request)
+    # Idempotency — required for this endpoint. The bot sends a UUID per
+    # logical event and reuses it on retries; we replay the cached response
+    # rather than re-running the handler (which would create duplicate orders).
+    from app.idempotency import require_idempotency_key, lookup_or_replay, store_response
+    _idem_key = require_idempotency_key(request)
+    _idem_path = "/api/whatsapp-webhook"
+    _cached = lookup_or_replay(db, _idem_path, _idem_key)
+    if _cached is not None:
+        return _cached
+
+    def _save(body, status_code: int = 200):
+        """Cache this response under the idempotency key and return it.
+        Wrap every non-cached return in this so retries are deduped."""
+        store_response(db, _idem_path, _idem_key, status_code, body)
+        return body
+
     data                = await request.json()
     quoted_msg_id       = data.get("quoted_message_id", "").strip()
     quoted_msg_body     = data.get("quoted_message_body", "").strip()
@@ -1636,7 +1670,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         pass
 
     if not reply_text and not inbound_audio_bytes:
-        return {"status": "ignored"}
+        return _save({"status": "ignored"})
 
     _log = logging.getLogger("wa_webhook")
 
@@ -1696,7 +1730,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     sender, f"✅ Order #{_new_id} created{_zone_suffix}",
                     order_id=_new_id,
                 )
-                return {"status": "ok", "order_id": _new_id, "auto_created": True}
+                return _save({"status": "ok", "order_id": _new_id, "auto_created": True})
             elif _new_id == 0:
                 await _bot_quote_reply(
                     group_jid, _incoming_msg_id, reply_text,
@@ -1704,7 +1738,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                     "Couldn't read this as an order, please use the form",
                     order_id="auto-fail",
                 )
-                return {"status": "ok", "auto_created": False}
+                return _save({"status": "ok", "auto_created": False})
             # _new_id is None → fall through to existing reply-matching logic
 
     order_id = None
@@ -1806,11 +1840,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     if not order_id:
         _log.warning("Could not match reply to any delivery — quoted_id=%s", quoted_msg_id)
-        return {"status": "unmatched"}
+        return _save({"status": "unmatched"})
 
     delivery = db.execute(select(Delivery).where(Delivery.id == order_id)).scalar_one_or_none()
     if not delivery:
-        return {"status": "not_found"}
+        return _save({"status": "not_found"})
 
     # Fetch last 8 messages for multi-turn Gemini context
     thread_rows = db.execute(text(
@@ -1890,7 +1924,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if aid != delivery.agent_id:
             notify(db, aid, notif_title, notif_msg, notif_link, "info")
 
-    return {"status": "received", "order_id": order_id, "classification": label}
+    return _save({"status": "received", "order_id": order_id, "classification": label})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1911,6 +1945,18 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         "yes" if request.headers.get("x-webhook-secret") else "no",
     )
     _verify_webhook_token(request)
+    # Idempotency — required, same shape as /api/whatsapp-webhook.
+    from app.idempotency import require_idempotency_key, lookup_or_replay, store_response
+    _idem_key = require_idempotency_key(request)
+    _idem_path = "/api/cache-wa-message"
+    _cached = lookup_or_replay(db, _idem_path, _idem_key)
+    if _cached is not None:
+        return _cached
+
+    def _save(body, status_code: int = 200):
+        store_response(db, _idem_path, _idem_key, status_code, body)
+        return body
+
     data           = await request.json()
     message_id     = (data.get("message_id") or "").strip()
     body           = (data.get("body") or "").strip()
@@ -1925,7 +1971,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             "cache-wa-message: IGNORED — message_id=%r name=%r phone=%r body_preview=%r",
             message_id, customer_name, customer_phone, body[:60]
         )
-        return {"status": "ignored"}
+        return _save({"status": "ignored"})
 
     # Skip caching when the post comes from an order-creation group — those
     # posts are dispatcher copy-pastes, not real seller origins. They get
@@ -1939,7 +1985,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
             "cache-wa-message: SKIP (group %s is an order-creation group) message_id=%s",
             group_jid[:24], message_id[:20]
         )
-        return {"status": "skipped_order_group"}
+        return _save({"status": "skipped_order_group"})
 
     logging.getLogger("cache_wa").info(
         "cache-wa-message: ACCEPTED message_id=%s name=%r phone=%r group=%s",
@@ -2033,7 +2079,7 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
                 "cache-wa-message: pending insert FAILED mid=%s err=%s",
                 message_id[:20], e
             )
-        return {"status": "pending"}
+        return _save({"status": "pending"})
 
     # ── Persist the mapping so replies and agent-feedback can find this order ──
     is_sqlite = DATABASE_URL.startswith("sqlite")
@@ -2068,4 +2114,4 @@ async def cache_wa_message(request: Request, db: Session = Depends(get_db)):
         logging.getLogger("cache_wa").error("cache-wa-message: failed to save mapping: %s", e)
         db.rollback()
 
-    return {"status": "matched", "order_id": matched_order_id}
+    return _save({"status": "matched", "order_id": matched_order_id})

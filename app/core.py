@@ -940,6 +940,21 @@ def ensure_schema() -> None:
             created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
         )""")
 
+        # Idempotency keys: cache responses for state-changing /api/* POSTs so
+        # clients (the bot, Vapi, etc.) can safely retry without creating
+        # duplicate state. Keyed by (endpoint_path, idempotency_key). Stores
+        # the JSON response body so retries return the exact same response.
+        _ddl(conn, """CREATE TABLE IF NOT EXISTS idempotency_keys (
+            id              """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,
+            endpoint_path   VARCHAR(200) NOT NULL,
+            idempotency_key VARCHAR(100) NOT NULL,
+            status_code     INTEGER NOT NULL,
+            response_body   TEXT NOT NULL DEFAULT '',
+            created_at      TIMESTAMP DEFAULT """ + ("CURRENT_TIMESTAMP" if is_sqlite else "NOW()") + """
+        )""")
+        _ddl(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_idem_endpoint_key ON idempotency_keys (endpoint_path, idempotency_key)")
+        _ddl(conn, "CREATE INDEX IF NOT EXISTS ix_idem_created_at ON idempotency_keys (created_at)")
+
         # Voice notes storage for customer feedback chat (Delivery.note is text-only)
         _ddl(conn, """CREATE TABLE IF NOT EXISTS voice_notes (
             id          """ + ("INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY") + """,

@@ -479,6 +479,13 @@ async function handleInbound(msg) {
     if (quotedId && !_looksLikeOrder) {
         console.log(`🔁 Reply quoting ${quotedId.slice(0, 20)}... — forwarding to Python`);
         const senderName = msg.pushName || contactNames.get(sender) || '';
+        // Idempotency-Key = WhatsApp message id. Same message on retries
+        // produces the same key, so Python replays the cached response
+        // instead of re-creating side effects.
+        const _idemHeaders = {
+            'Idempotency-Key': `wa-${msgId}`,
+            ...(WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {}),
+        };
         axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
             quoted_message_id:   quotedId,
             quoted_message_body: quotedBody || '',
@@ -490,7 +497,7 @@ async function handleInbound(msg) {
             audio_mime:          audioMime,
         }, {
             timeout: 30000,
-            headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+            headers: _idemHeaders,
         }).catch(e => console.log('⚠️  Webhook POST failed:', e.message));
         return;
     }
@@ -510,6 +517,10 @@ async function handleInbound(msg) {
     // Forward fresh group messages to /api/whatsapp-webhook so the Python
     // app can auto-create orders from well-formed posts. Gated on the Python
     // side by SELLER_GROUP_BRANCH_MAP + the supervisor toggle.
+    const _idemHeadersFresh = {
+        'Idempotency-Key': `wa-${msgId}`,
+        ...(WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {}),
+    };
     axios.post(`${PYTHON_APP_URL}/api/whatsapp-webhook`, {
         quoted_message_id:   '',
         quoted_message_body: '',
@@ -522,7 +533,7 @@ async function handleInbound(msg) {
         audio_mime:          '',
     }, {
         timeout: 30000,
-        headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+        headers: _idemHeadersFresh,
     }).catch(e => console.log('⚠️  Fresh-message webhook POST failed:', e.message));
 
     // Keep the existing cache-wa-message path so dashboard-created orders
@@ -533,6 +544,10 @@ async function handleInbound(msg) {
         return;
     }
     console.log(`🤖 Gemini extracted → name:"${info.customer_name}" phone:"${info.customer_phone}" — sending to Python`);
+    const _idemHeadersCache = {
+        'Idempotency-Key': `wa-${msgId}`,
+        ...(WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {}),
+    };
     axios.post(`${PYTHON_APP_URL}/api/cache-wa-message`, {
         message_id:      msgId,
         body:            text,
@@ -543,7 +558,7 @@ async function handleInbound(msg) {
         groupJid:        jid,
     }, {
         timeout: 8000,
-        headers: WEBHOOK_SECRET ? { 'x-webhook-secret': WEBHOOK_SECRET } : {},
+        headers: _idemHeadersCache,
     }).then(() => console.log(`✅ Cached order → Python (group: ${jid.slice(0,20)}...)`)).catch(e => console.log('⚠️  Cache POST failed:', e.message));
 }
 
