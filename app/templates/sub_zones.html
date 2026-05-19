@@ -50,7 +50,7 @@
                 {% for z in zones %}
                 <tr>
                     <td><strong>{{ z.name }}</strong></td>
-                    <td><code style="background:#eef;padding:2px 6px;border-radius:4px;">{{ z.code }}</code></td>
+                    <td><code style="background:#3b5bdb;color:#fff;padding:2px 8px;border-radius:6px;font-weight:600;">{{ z.code }}</code></td>
                     <td class="muted">{{ z.created_at.strftime('%Y-%m-%d') if z.created_at else '-' }}</td>
                     <td>
                         <form method="post" action="/sub-zones/{{ z.id }}/delete"

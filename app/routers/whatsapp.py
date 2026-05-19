@@ -1481,28 +1481,50 @@ async def send_agent_feedback(
 
     # Only mention people explicitly picked by the agent from the live group picker.
     # Auto-mentioning from DB is unreliable — JIDs change when WhatsApp is reconnected.
-    # mention_phone is a list: each entry is either a full JID (from the picker)
-    # or a raw Nigerian phone number typed manually.
+    # mention_phone is a list: each entry is either:
+    #   - "<jid>|<display_name>" from the picker (preferred — uses friendly name),
+    #   - a bare JID, or
+    #   - a raw Nigerian phone number typed manually.
     for _mp in (mention_phone or []):
         _mp = (_mp or "").strip()
         if not _mp:
             continue
-        if "@" in _mp:
+        # Split off the optional display name suffix
+        if "|" in _mp:
+            _jid_part, _name_part = _mp.split("|", 1)
+            _jid_part = _jid_part.strip()
+            _name_part = _name_part.strip()
+        else:
+            _jid_part = _mp
+            _name_part = ""
+        if "@" in _jid_part:
             # Already a JID from the picker
-            if _mp not in mention_jids:
-                mention_jids.append(_mp)
-                digits = _mp.replace("@s.whatsapp.net", "").replace("@lid", "")
-                mention_tags.append(f"@{digits}")
+            if _jid_part not in mention_jids:
+                mention_jids.append(_jid_part)
+                digits = _jid_part.replace("@s.whatsapp.net", "").replace("@lid", "")
+                # WhatsApp's parser requires '@<digits>' in the body text for
+                # the mention notification to fire AND match the JID in the
+                # mentions[] array. Append the friendly name in parens so
+                # recipients who don't have the contact saved still see WHO
+                # was tagged. Recipients who have the contact saved will see
+                # WhatsApp auto-replace '@digits' with their saved name.
+                if _name_part:
+                    mention_tags.append(f"@{digits} ({_name_part})")
+                else:
+                    mention_tags.append(f"@{digits}")
         else:
             # Raw phone number typed manually
             from app.utils import format_nigerian_phone
-            clean = format_nigerian_phone(_mp)
+            clean = format_nigerian_phone(_jid_part)
             if clean:
                 digits = clean.lstrip("+")
                 jid = f"{digits}@s.whatsapp.net"
                 if jid not in mention_jids:
                     mention_jids.append(jid)
-                    mention_tags.append(f"@{digits}")
+                    if _name_part:
+                        mention_tags.append(f"@{digits} ({_name_part})")
+                    else:
+                        mention_tags.append(f"@{digits}")
 
     if mention_tags:
         message += "\n\n" + " ".join(mention_tags)
@@ -1870,13 +1892,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # the quoted preview that the template renders as the grey header box.
     # The AI classification is still stored separately in `classification`.
     comment_body = reply_text or "[Voice Note]"
-    # Truncate the quoted preview — the template will only show the first
-    # ~80 chars anyway (WhatsApp-style). Strip any line-breaks for a clean
-    # one-line preview.
+    # Quoted preview — store enough text for a 3-line WhatsApp-style preview.
+    # We keep line-breaks so the line-clamp CSS actually has lines to clamp;
+    # the template's `-webkit-line-clamp:3` truncates at render time.
     quoted_preview = ""
     if quoted_msg_body:
-        _q = " ".join((quoted_msg_body or "").split())
-        quoted_preview = _q[:160]
+        quoted_preview = (quoted_msg_body or "")[:400]
 
     # Store as "Name|jid" so the page-render filter (which keeps rows whose
     # sender contains '@') still includes this row after a reload. The chat
@@ -1917,14 +1938,16 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             f'<audio controls preload="none" style="max-width:100%;height:36px;">'
             f'<source src="/api/wa-media/{new_comment_id}" type="{html.escape(audio_mime_in or "audio/ogg")}"></audio>'
         )
-    # WhatsApp-style quoted preview: short grey block above the seller's text
+    # WhatsApp-style quoted preview: grey block (up to 3 lines) above the
+    # seller's text. CSS line-clamp handles truncation at render time.
     quoted_html = ""
     if quoted_preview:
-        _qp_short = quoted_preview if len(quoted_preview) <= 80 else (quoted_preview[:78].rstrip() + "…")
         quoted_html = (
-            f'<div style="border-left:3px solid #53bdeb;padding:3px 8px;margin-bottom:4px;'
+            f'<div style="border-left:3px solid #53bdeb;padding:4px 8px;margin-bottom:4px;'
             f'background:rgba(83,189,235,.08);border-radius:4px;font-size:11px;color:#a0aec0;'
-            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{html.escape(_qp_short)}</div>'
+            f'line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;'
+            f'overflow:hidden;white-space:pre-wrap;word-break:break-word;">'
+            f'{html.escape(quoted_preview.strip())}</div>'
         )
     fragment = (
         f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'

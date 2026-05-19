@@ -102,7 +102,7 @@
           <td>{{ d.address or "-" }}</td>
           <td onclick="event.stopPropagation()">
             {% if d.sub_zone_id and sub_zone_names.get(d.sub_zone_id) %}
-              <span style="font-size:12px;color:#7fa8ff;">{{ sub_zone_names.get(d.sub_zone_id) }}</span>
+              <span style="font-size:12px;font-weight:600;color:#fff;background:#3b5bdb;padding:2px 8px;border-radius:10px;white-space:nowrap;">{{ sub_zone_names.get(d.sub_zone_id) }}</span>
             {% elif sub_zones %}
               <form method="post" action="/deliveries/{{ d.id }}/set-zone" style="display:inline;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

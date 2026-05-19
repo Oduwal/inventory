@@ -565,9 +565,7 @@ document.getElementById('collect-modal').addEventListener('mousedown', e => {
         <div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">
           <span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">{{ (c.sender.split('|')[0] if c.sender and '|' in c.sender else c.sender)|replace('@s.whatsapp.net','')|replace('@lid','') if c.sender else 'Seller' }}</span>
           {% if c.quoted_body %}
-            {% set _qp = c.quoted_body|trim %}
-            {% set _qp_short = _qp[:78] ~ '…' if _qp|length > 80 else _qp %}
-            <div style="border-left:3px solid #53bdeb;padding:3px 8px;margin-bottom:4px;background:rgba(83,189,235,.08);border-radius:4px;font-size:11px;color:#a0aec0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ _qp_short }}</div>
+            <div style="border-left:3px solid #53bdeb;padding:4px 8px;margin-bottom:4px;background:rgba(83,189,235,.08);border-radius:4px;font-size:11px;color:#a0aec0;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap;word-break:break-word;">{{ c.quoted_body|trim }}</div>
           {% endif %}
           {% if c.media_mime and c.media_mime.startswith('audio/') %}
             <audio controls preload="none" style="max-width:100%;height:36px;"><source src="/api/wa-media/{{ c.id }}" type="{{ c.media_mime }}"></audio>
@@ -871,8 +869,10 @@ async function sendWaUpdate(deliveryId, issueType) {
     formData.append("issue_type", issueType);
     formData.append("custom_message", customText);
     formData.append("group_name", "");
-    // FastAPI accepts multiple values for the same form key as a list[str]
-    picks.forEach(p => formData.append("mention_phone", p.jid));
+    // FastAPI accepts multiple values for the same form key as a list[str].
+    // Encode as "jid|name" so the backend can render the friendly name in the
+    // visible message text (WhatsApp shows raw digits otherwise).
+    picks.forEach(p => formData.append("mention_phone", `${p.jid}|${p.name || ''}`));
 
     // Send in background — only surface errors
     fetch('/api/agent-feedback', { method: 'POST', body: formData })
