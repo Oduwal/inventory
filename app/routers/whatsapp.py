@@ -922,19 +922,17 @@ async def agent_voice_reply(
 # VOICE NOTE TRANSCRIPTION (Gemini)
 # ─────────────────────────────────────────────────────────────────
 def _transcribe_audio_bytes(audio_bytes: bytes, media_type: str) -> str:
-    """Transcribe raw audio bytes via Gemini. Reusable for both Twilio and Baileys audio."""
-    if not _GEMINI_KEY:
-        _log.warning("No GEMINI_API_KEY — cannot transcribe voice note")
-        return ""
+    """Transcribe raw audio bytes via Gemini (Vertex → AI Studio hybrid).
+    Reusable for both Twilio and Baileys audio."""
+    from app.gemini_client import call_gemini_sync
     import base64
     audio_b64 = base64.b64encode(audio_bytes).decode()
     mime_map = {"audio/ogg": "audio/ogg", "audio/mpeg": "audio/mpeg", "audio/amr": "audio/amr",
                 "audio/aac": "audio/aac", "audio/mp4": "audio/mp4", "audio/ogg; codecs=opus": "audio/ogg"}
     mime_type = mime_map.get(media_type, media_type.split(";")[0].strip())
     try:
-        resp = httpx.post(
-            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
-            json={
+        data = call_gemini_sync(
+            {
                 "contents": [{
                     "role": "user",
                     "parts": [
@@ -946,20 +944,17 @@ def _transcribe_audio_bytes(audio_bytes: bytes, media_type: str) -> str:
             },
             timeout=20,
         )
-        text_out = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return text_out
+        if not data or "error" in data:
+            return ""
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as e:
         _log.error("Gemini voice transcription failed: %s", e)
         return ""
 
 
 def _transcribe_voice_note(media_url: str, media_type: str) -> tuple:
-    """Download audio from Twilio and transcribe via Gemini.
+    """Download audio from Twilio and transcribe via Gemini (hybrid).
     Returns (transcription_text, audio_bytes, mime_type)."""
-    if not _GEMINI_KEY:
-        _log.warning("No GEMINI_API_KEY — cannot transcribe voice note")
-        return ("", b"", "")
-
     from app.whatsapp_service import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
     try:
         audio_resp = httpx.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15, follow_redirects=True)
@@ -987,12 +982,7 @@ def _handle_customer_reply(
     business_name: str, business_phone: str
 ) -> dict:
     """Use Gemini to understand a customer's WhatsApp reply and generate a response."""
-    if not _GEMINI_KEY:
-        return {
-            "reply": f"Thank you for your message. Our team will get back to you shortly. For urgent enquiries, please call {business_phone or 'our office'}.",
-            "classification": "OTHER",
-            "summary": customer_msg[:100],
-        }
+    from app.gemini_client import call_gemini_sync
 
     spoken_status = status.replace("_", " ").lower()
     phone_line = f"Our contact number is {business_phone}." if business_phone else ""
@@ -1046,20 +1036,16 @@ def _handle_customer_reply(
         classification = "OTHER"
 
     try:
-        resp = httpx.post(
-            f"{_GEMINI_URL}?key={_GEMINI_KEY}",
-            json={
+        data = call_gemini_sync(
+            {
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048},
             },
             timeout=20,
         )
-
-        if resp.status_code != 200:
-            _log.error("Gemini reply API error: %s", resp.text[:500])
-            raise ValueError(f"Gemini API returned {resp.status_code}")
-
-        reply_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        if not data or "error" in data:
+            raise ValueError(f"Gemini call failed: {data.get('error') if data else 'no response'}")
+        reply_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
         # Clean up any JSON or markdown artifacts Gemini might add
         reply_text = re.sub(r'^```.*\n?', '', reply_text)
         reply_text = reply_text.strip('`"')
@@ -1325,12 +1311,22 @@ async def agent_voice_feedback(
     raw_mime = audio.content_type or "audio/ogg"
     audio_bytes, audio_mime = _convert_to_ogg_opus(audio_bytes, raw_mime)
 
-    # Resolve target group — same fallback chain as text feedback
+    # Resolve target group + quote info — same approach as text feedback so
+    # the voice note appears as a quote-reply to the seller's original post.
     orig_map = db.execute(text(
-        "SELECT group_jid FROM whatsapp_outbound_map "
+        "SELECT message_id, body, sender, group_jid FROM whatsapp_outbound_map "
         "WHERE order_id = :oid AND source = 'group' ORDER BY created_at ASC LIMIT 1"
     ), {"oid": delivery.id}).first()
-    target_group = orig_map[0] if orig_map else ""
+    if orig_map:
+        quote_id = orig_map[0]
+        quote_body = orig_map[1]
+        _raw_sender = orig_map[2] or ""
+        # Stored format is "Name|jid" or plain jid
+        quote_sender = _raw_sender.split("|", 1)[1] if "|" in _raw_sender else _raw_sender
+        target_group = orig_map[3] or ""
+    else:
+        quote_id = quote_body = quote_sender = ""
+        target_group = ""
 
     if not target_group:
         # Fallback 1: category map
@@ -1371,6 +1367,12 @@ async def agent_voice_feedback(
                     "orderId": str(delivery.id),
                     "audioBase64": base64.b64encode(audio_bytes).decode(),
                     "targetGroupJid": target_group,
+                    # Quote the seller's ORIGINAL group post so the voice
+                    # note threads under it, same as text feedback does.
+                    "quoteMessageId": quote_id or "",
+                    "quoteMessageBody": (quote_body or "")[:500],
+                    "quoteMessageSender": quote_sender or "",
+                    "quoteMessageFromMe": False,
                 },
                 headers=_bot_headers(),
                 timeout=30,

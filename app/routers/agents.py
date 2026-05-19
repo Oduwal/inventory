@@ -1029,6 +1029,10 @@ async def update_delivery_status(
             d.delivered_at = datetime.now(timezone.utc)
             audit_log(db, user.id, "DELIVERY_DELIVERED", f"delivery_id={d.id}",
                       ip=request.client.host if request.client else "")
+            # Notify branch admins so the dispatch desk sees completion in real time.
+            notify_branch_admins(db, d.branch_id, "✅ Delivery Completed",
+                   f"Delivery #{d.id} ({d.customer_name}) was marked delivered by {user.username}.",
+                   f"/deliveries/{d.id}", "success")
 
             # Auto-close any linked assignment — stock was used for this delivery
             db.execute(text(
@@ -1071,19 +1075,38 @@ async def update_delivery_status(
             })
         return redirect(f"/deliveries/{delivery_id}")
     d.status = status_clean
-    # Notify agent of status change
-    if status_clean == "OUT_FOR_DELIVERY" and d.agent_id:
-        notify(db, d.agent_id, "🚚 Delivery Dispatched",
-               f"Delivery #{d.id} to {d.customer_name} is now out for delivery.",
+    # Status-change notifications. Agent is notified (useful when an admin
+    # changes status on the agent's behalf) AND branch admins are notified
+    # (so the dispatch desk sees every transition in real time).
+    if status_clean == "OUT_FOR_DELIVERY":
+        if d.agent_id:
+            notify(db, d.agent_id, "🚚 Delivery Dispatched",
+                   f"Delivery #{d.id} to {d.customer_name} is now out for delivery.",
+                   f"/deliveries/{d.id}", "info")
+        notify_branch_admins(db, d.branch_id, "🚚 Out for Delivery",
+               f"Delivery #{d.id} ({d.customer_name}) is now out for delivery.",
                f"/deliveries/{d.id}", "info")
-    elif status_clean == "FAILED" and d.agent_id:
-        notify(db, d.agent_id, "✕ Delivery Marked Failed",
-               f"Delivery #{d.id} to {d.customer_name} has been marked as failed.",
+    elif status_clean == "FAILED":
+        if d.agent_id:
+            notify(db, d.agent_id, "✕ Delivery Marked Failed",
+                   f"Delivery #{d.id} to {d.customer_name} has been marked as failed.",
+                   f"/deliveries/{d.id}", "danger")
+        notify_branch_admins(db, d.branch_id, "✕ Delivery Failed",
+               f"Delivery #{d.id} ({d.customer_name}) was marked failed by {user.username}.",
                f"/deliveries/{d.id}", "danger")
-    elif status_clean == "RETURNED" and d.agent_id:
-        notify(db, d.agent_id, "↩ Delivery Marked Returned",
-               f"Delivery #{d.id} to {d.customer_name} has been marked as returned.",
+    elif status_clean == "RETURNED":
+        if d.agent_id:
+            notify(db, d.agent_id, "↩ Delivery Marked Returned",
+                   f"Delivery #{d.id} to {d.customer_name} has been marked as returned.",
+                   f"/deliveries/{d.id}", "warning")
+        notify_branch_admins(db, d.branch_id, "↩ Delivery Returned",
+               f"Delivery #{d.id} ({d.customer_name}) was marked returned by {user.username}.",
                f"/deliveries/{d.id}", "warning")
+    elif status_clean == "PENDING":
+        # A status reverted to PENDING (e.g. admin reopens after a failed delivery)
+        notify_branch_admins(db, d.branch_id, "↺ Reverted to Pending",
+               f"Delivery #{d.id} ({d.customer_name}) was reset to PENDING by {user.username}.",
+               f"/deliveries/{d.id}", "info")
     # If delivery fails/returns and has a linked assignment — notify admin to vet stock return
     if status_clean in ("FAILED", "RETURNED"):
         linked = db.execute(text(

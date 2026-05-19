@@ -213,11 +213,19 @@ def _send_web_push(user_id: int, title: str, body: str, link: str):
 
 def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Create a persistent notification and fire web push in a background thread.
-    Uses its own session so it never commits the caller's request transaction."""
+    Uses its own session so it never commits the caller's request transaction.
+
+    The notifications table has an RLS user_isolation policy. Background sessions
+    don't inherit the caller's RLS context, so we must set app.current_user_id
+    to the recipient's id within this transaction — otherwise the policy
+    silently rejects the INSERT and the notification never reaches the user.
+    """
     def _do():
         from .database import SessionLocal
         _db = SessionLocal()
         try:
+            if not DATABASE_URL.startswith("sqlite"):
+                _db.execute(text("SET LOCAL app.current_user_id = :uid"), {"uid": str(user_id)})
             _db.execute(text(
                 "INSERT INTO notifications (user_id, title, body, link, kind, created_at) "
                 "VALUES (:uid, :title, :body, :link, :kind, :now)"
@@ -226,22 +234,37 @@ def notify(db, user_id: int, title: str, body: str = "", link: str = "", kind: s
             submit_task(_send_web_push, user_id, title, body, link)
         except Exception as e:
             _db.rollback()
-            logging.getLogger("notifications").warning(f"Notify failed: {e}")
+            logging.getLogger("notifications").warning(f"Notify failed for user_id=%s: %s", user_id, e)
         finally:
             _db.close()
     submit_task(_do)
 
 def notify_branch_admins(db, branch_id: int, title: str, body: str = "", link: str = "", kind: str = "info"):
     """Notify all admins of a branch.
-    Runs in a background task with its own session (no RLS context) so it can
-    read users from any branch regardless of the calling request's RLS context."""
+
+    Runs in a background task with its own session. RLS on the users table
+    requires a branch context; we set one explicitly here so the SELECT
+    returns the branch's admins. (Without this the policy silently returns
+    zero rows and notifications never fire.)
+    """
     def _do():
         _db = SessionLocal()
         try:
+            if not DATABASE_URL.startswith("sqlite"):
+                # Impersonate the target branch so the branch_isolation policy
+                # permits this read. SET LOCAL resets on commit/rollback.
+                _db.execute(text(
+                    "SET LOCAL app.current_branch_id = :bid;"
+                    " SET LOCAL app.current_user_role = 'ADMIN';"
+                ), {"bid": str(branch_id)})
             admins = _db.execute(
                 select(User).where(User.role == "ADMIN").where(User.branch_id == branch_id)
                 .where(User.is_active == True)
             ).scalars().all()
+            logging.getLogger("notifications").info(
+                "notify_branch_admins: branch_id=%s found %d admin(s) → %r",
+                branch_id, len(admins), title[:60]
+            )
             for admin in admins:
                 notify(_db, admin.id, title, body, link, kind)
         except Exception as e:
