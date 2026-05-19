@@ -935,6 +935,11 @@ def ensure_schema() -> None:
         # Media columns for voice notes (and future image support)
         _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_data BYTEA NULL")
         _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS media_mime VARCHAR(50) NULL")
+        # WhatsApp-style quoted preview: when a seller replies to a previous
+        # bot or order post, store ONLY the seller's text in `body`. The
+        # original quoted text (truncated for display) goes here so the
+        # template can render the familiar grey "quote header" above the bubble.
+        _ddl(conn, "ALTER TABLE wa_comments ADD COLUMN IF NOT EXISTS quoted_body TEXT DEFAULT NULL")
 
         # Durable mapping of every bot-sent WhatsApp message_id → delivery order_id.
         # This table survives bot restarts; Python does O(1) lookup to route replies.

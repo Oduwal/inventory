@@ -606,7 +606,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
             {"rid": pending_adj.id}
         ).fetchall()
     _all_wa = db.execute(
-        text("SELECT id, direction, sender, body, media_mime, created_at FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        text("SELECT id, direction, sender, body, media_mime, created_at, quoted_body FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
         {"did": d.id}
     ).fetchall()
     # Seller Group Chat shows only group-thread rows. Customer-direct rows
@@ -614,7 +614,7 @@ def delivery_detail(request: Request, delivery_id: int, db: Session = Depends(ge
     # rendered separately from d.note, so they must be excluded here to
     # avoid bleeding "Reply to customer" messages into the group view.
     _all_wa_with_clf = db.execute(
-        text("SELECT id, direction, sender, body, media_mime, created_at, classification FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
+        text("SELECT id, direction, sender, body, media_mime, created_at, classification, quoted_body FROM wa_comments WHERE delivery_id=:did ORDER BY created_at ASC"),
         {"did": d.id}
     ).fetchall()
     def _is_group_row(r):

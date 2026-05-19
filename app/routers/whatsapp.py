@@ -1421,7 +1421,7 @@ async def send_agent_feedback(
     issue_type: str = Form(...),
     custom_message: str = Form(""),
     group_name: str = Form(""),
-    mention_phone: str = Form(""),
+    mention_phone: list[str] = Form(default=[]),
     db: Session = Depends(get_db),
     user: User = Depends(get_active_user),
 ):
@@ -1481,17 +1481,22 @@ async def send_agent_feedback(
 
     # Only mention people explicitly picked by the agent from the live group picker.
     # Auto-mentioning from DB is unreliable — JIDs change when WhatsApp is reconnected.
-    if mention_phone:
-        if "@" in mention_phone:
+    # mention_phone is a list: each entry is either a full JID (from the picker)
+    # or a raw Nigerian phone number typed manually.
+    for _mp in (mention_phone or []):
+        _mp = (_mp or "").strip()
+        if not _mp:
+            continue
+        if "@" in _mp:
             # Already a JID from the picker
-            if mention_phone not in mention_jids:
-                mention_jids.append(mention_phone)
-                digits = mention_phone.replace("@s.whatsapp.net", "").replace("@lid", "")
+            if _mp not in mention_jids:
+                mention_jids.append(_mp)
+                digits = _mp.replace("@s.whatsapp.net", "").replace("@lid", "")
                 mention_tags.append(f"@{digits}")
         else:
             # Raw phone number typed manually
             from app.utils import format_nigerian_phone
-            clean = format_nigerian_phone(mention_phone)
+            clean = format_nigerian_phone(_mp)
             if clean:
                 digits = clean.lstrip("+")
                 jid = f"{digits}@s.whatsapp.net"
@@ -1860,13 +1865,18 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     ai   = await loop.run_in_executor(None, _call_gemini_classify, thread, reply_text)
     classification_json = json.dumps(ai)
 
-    # Render comment body: show AI summary prominently, raw text below
-    label   = ai.get("classification", "OTHER")
-    summary = ai.get("contextual_summary", reply_text[:100])
-    
-    # Add the quoted message so the agent knows what the seller is replying to
-    quote_context = f"\n\nReplying to:\n> {quoted_msg_body}" if quoted_msg_body else ""
-    comment_body = f"[{label}] {summary}{quote_context}\n\nSeller said: \"{reply_text}\""
+    # Render comment body WhatsApp-style: `body` is just the seller's text
+    # (so the bubble shows exactly what they said), and `quoted_body` carries
+    # the quoted preview that the template renders as the grey header box.
+    # The AI classification is still stored separately in `classification`.
+    comment_body = reply_text or "[Voice Note]"
+    # Truncate the quoted preview — the template will only show the first
+    # ~80 chars anyway (WhatsApp-style). Strip any line-breaks for a clean
+    # one-line preview.
+    quoted_preview = ""
+    if quoted_msg_body:
+        _q = " ".join((quoted_msg_body or "").split())
+        quoted_preview = _q[:160]
 
     # Store as "Name|jid" so the page-render filter (which keeps rows whose
     # sender contains '@') still includes this row after a reload. The chat
@@ -1879,18 +1889,22 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     is_sqlite = str(db.bind.url).startswith("sqlite")
     if is_sqlite:
         db.execute(text(
-            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
-            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now)"
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, quoted_body, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :quoted, :_now)"
         ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
-            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()})
+            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None,
+            "quoted": quoted_preview or None, "_now": _now()})
         new_comment_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
     else:
         new_comment_id = db.execute(text(
-            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, created_at) "
-            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :_now) RETURNING id"
+            "INSERT INTO wa_comments (delivery_id, direction, sender, body, classification, media_data, media_mime, quoted_body, created_at) "
+            "VALUES (:did, 'inbound', :sender, :body, :clf, :media_data, :media_mime, :quoted, :_now) RETURNING id"
         ), {"did": order_id, "sender": stored_sender, "body": comment_body, "clf": classification_json,
-            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None, "_now": _now()}).scalar()
+            "media_data": inbound_audio_bytes or None, "media_mime": audio_mime_in if inbound_audio_bytes else None,
+            "quoted": quoted_preview or None, "_now": _now()}).scalar()
     db.commit()
+    # `label` is referenced by the SSE fragment below + the caller's return value.
+    label = ai.get("classification", "OTHER")
 
     # SSE — push fragment to any open delivery detail tabs
     now_str  = datetime.now(timezone.utc).strftime("%d %b %H:%M")
@@ -1903,11 +1917,21 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             f'<audio controls preload="none" style="max-width:100%;height:36px;">'
             f'<source src="/api/wa-media/{new_comment_id}" type="{html.escape(audio_mime_in or "audio/ogg")}"></audio>'
         )
+    # WhatsApp-style quoted preview: short grey block above the seller's text
+    quoted_html = ""
+    if quoted_preview:
+        _qp_short = quoted_preview if len(quoted_preview) <= 80 else (quoted_preview[:78].rstrip() + "…")
+        quoted_html = (
+            f'<div style="border-left:3px solid #53bdeb;padding:3px 8px;margin-bottom:4px;'
+            f'background:rgba(83,189,235,.08);border-radius:4px;font-size:11px;color:#a0aec0;'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{html.escape(_qp_short)}</div>'
+        )
     fragment = (
         f'<div style="align-self:flex-start;max-width:80%;background:#1f2c34;color:#e9edef;'
         f'padding:6px 10px;border-radius:0 8px 8px 8px;font-size:13px;line-height:1.4;">'
         f'<span style="font-size:10px;color:#53bdeb;font-weight:600;display:block;margin-bottom:2px;">'
         f'{_sse_sender}{action_badge}</span>'
+        f'{quoted_html}'
         f'{audio_html}'
         f'<div style="white-space:pre-wrap;">{_sse_body}</div>'
         f'<div style="font-size:9px;color:rgba(255,255,255,.35);margin-top:2px;">{now_str}</div>'
